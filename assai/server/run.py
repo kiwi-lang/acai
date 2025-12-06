@@ -2,6 +2,7 @@ import os
 import pkgutil
 import importlib
 import traceback
+from typing import Optional
 # import importlib_resources
 
 
@@ -39,6 +40,20 @@ def discover_plugins(module):
 #     print(json.dumps(json.load(file), indent=2))
 
 
+
+
+@dataclass
+class Layout:
+    @dataclass
+    class LayoutItem:
+        name: str
+        href: str
+        
+    title: str
+    href: Optional[str]
+    items: list[LayoutItem]
+
+
 class ASSAI:
     def __init__(self):
         print(STATIC_FOLDER)
@@ -51,6 +66,19 @@ class ASSAI:
         for k, module in models.items():
             if hasattr(module, 'route'):
                 module.route(self)
+
+        @self.app.route("/layout")
+        def layout() -> Layout:
+            return {
+                title: 'Tasks',
+                items: [
+                    { name: 'Recipes', href: '/recipes' },
+                    { name: 'Meal Plan', href: '/planning' },
+                    { name: 'Ingredients', href: '/ingredients' },
+                    { name: 'Compare Recipes', href: '/compare' },
+                ]
+            },
+
 
 
 def main():

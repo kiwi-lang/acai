@@ -3,7 +3,7 @@ from pathlib import Path
 
 from setuptools import setup
 
-with open("assai/core/__init__.py") as file:
+with open("assai/server/__init__.py") as file:
     for line in file.readlines():
         if "version" in line:
             version = line.split("=")[1].strip().replace('"', "")
@@ -31,8 +31,10 @@ if __name__ == "__main__":
             "Operating System :: OS Independent",
         ],
         packages=[
-            "assai.core",
-            "assai.plugins.example",
+            "assai.server",
+            "assai.models",
+            "assai.cli",
+            "assai.models.text2image",
         ],
         setup_requires=["setuptools"],
         install_requires=["importlib_resources"],

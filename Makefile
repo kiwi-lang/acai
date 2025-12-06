@@ -17,13 +17,13 @@ update-doc: build-doc serve-doc
 
 virtual-env:
 	virtualenv .venv
-	(. .venv/bin/activate && pip install -e recipes)
+	(. .venv/bin/activate && pip install -e .)
 
 install:
-	(. .venv/bin/activate && pip install -e recipes)
+	(. .venv/bin/activate && pip install -e .)
 
 back-dev:
 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) flask --debug --app assai.server.run:main run --port 5001)
 
 front-dev:
-	(cd recipes/recipes/ui && npm i && npm run dev)
+	(cd assai/ui && npm i && npm run dev)
