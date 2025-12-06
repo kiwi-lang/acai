@@ -9,6 +9,9 @@ export interface Message {
     imageUrl?: string;
     audioUrl?: string;
     retryPrompt?: string; // Store the prompt for retry functionality
+    actionId?: number; // Action ID for linking logs to this message
+    logs?: Array<{ type: 'stdout' | 'stderr'; line: string; timestamp: Date }>; // Logs for this action
+    isGenerating?: boolean; // Whether generation is in progress
 }
 
 export interface Conversation {

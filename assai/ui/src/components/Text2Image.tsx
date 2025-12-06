@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import {
     Box,
     VStack,
@@ -7,6 +7,7 @@ import {
     Text,
     Button,
     Input,
+    IconButton,
 } from '@chakra-ui/react';
 import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
@@ -22,15 +23,10 @@ const SettingsIcon = () => (
     </svg>
 );
 
-const ChevronDownIcon = () => (
+const XIcon = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polyline points="6 9 12 15 18 9" />
-    </svg>
-);
-
-const ChevronUpIcon = () => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polyline points="18 15 12 9 6 15" />
+        <line x1="18" y1="6" x2="6" y2="18" />
+        <line x1="6" y1="6" x2="18" y2="18" />
     </svg>
 );
 
@@ -42,6 +38,8 @@ const Text2Image = () => {
     const [generationProgress, setGenerationProgress] = useState<number>(0);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const currentPromptRef = useRef<string>('');
+    const actionIdCounterRef = useRef<number>(0);
+    const actionIdToMessageIdRef = useRef<Map<number, string>>(new Map());
 
     // Generation parameters with defaults matching backend
     const [generationParams, setGenerationParams] = useState<ImageGenerationParams>({
@@ -53,13 +51,79 @@ const Text2Image = () => {
         seed: 0,
     });
 
+    // Memoize handlers to prevent duplicate listeners
+    const handleStdout = useCallback((data: { id: number; line: string }) => {
+        const messageId = actionIdToMessageIdRef.current.get(data.id);
+        if (messageId) {
+            setMessages(prev => prev.map(msg => {
+                if (msg.id === messageId) {
+                    return {
+                        ...msg,
+                        logs: [
+                            ...(msg.logs || []),
+                            { type: 'stdout' as const, line: data.line, timestamp: new Date() }
+                        ]
+                    };
+                }
+                return msg;
+            }));
+        }
+    }, []);
+
+    const handleStderr = useCallback((data: { id: number; line: string }) => {
+        const messageId = actionIdToMessageIdRef.current.get(data.id);
+        if (messageId) {
+            setMessages(prev => prev.map(msg => {
+                if (msg.id === messageId) {
+                    return {
+                        ...msg,
+                        logs: [
+                            ...(msg.logs || []),
+                            { type: 'stderr' as const, line: data.line, timestamp: new Date() }
+                        ]
+                    };
+                }
+                return msg;
+            }));
+        }
+    }, []);
+
     useEffect(() => {
         document.title = 'Text to Image - ASSAI';
 
         // Connect to WebSocket
         websocketService.connect();
 
-        // Set up WebSocket listeners
+        // Set up log listeners - socket.io will queue events if not connected yet
+        // Remove existing listeners first to prevent duplicates
+        const setupLogListeners = () => {
+            const socket = websocketService.getSocket();
+            if (socket) {
+                // Remove any existing listeners first to prevent duplicates
+                socket.off('stdout', handleStdout);
+                socket.off('stderr', handleStderr);
+                // Add listeners
+                socket.on('stdout', handleStdout);
+                socket.on('stderr', handleStderr);
+                return true;
+            }
+            return false;
+        };
+
+        // Try to set up listeners immediately
+        setupLogListeners();
+
+        // Also set up on connect in case socket wasn't ready
+        const socket = websocketService.getSocket();
+        let connectHandler: (() => void) | null = null;
+        if (socket) {
+            connectHandler = () => {
+                setupLogListeners();
+            };
+            socket.on('connect', connectHandler);
+        }
+
+        // Set up WebSocket listeners for legacy events (if still used)
         const unsubscribeModelLoading = websocketService.on('model_loading', (msg: WebSocketMessage) => {
             setStatusMessage(msg.data.message || 'Loading model...');
         });
@@ -120,6 +184,14 @@ const Text2Image = () => {
 
         // Cleanup on unmount
         return () => {
+            const cleanupSocket = websocketService.getSocket();
+            if (cleanupSocket) {
+                cleanupSocket.off('stdout', handleStdout);
+                cleanupSocket.off('stderr', handleStderr);
+                if (connectHandler) {
+                    cleanupSocket.off('connect', connectHandler);
+                }
+            }
             unsubscribeModelLoading();
             unsubscribeModelLoaded();
             unsubscribeGenerationStarted();
@@ -127,7 +199,7 @@ const Text2Image = () => {
             unsubscribeGenerationComplete();
             unsubscribeError();
         };
-    }, []);
+    }, [handleStdout, handleStderr]);
 
     useEffect(() => {
         // Scroll to bottom when new messages arrive
@@ -139,41 +211,71 @@ const Text2Image = () => {
             return;
         }
 
+        // Generate unique action ID for this request
+        const actionId = ++actionIdCounterRef.current;
+        const messageId = Date.now().toString();
+
         currentPromptRef.current = content.trim();
 
         // Add user message
         const userMessage: Message = {
-            id: Date.now().toString(),
+            id: messageId,
             role: 'user',
             content: content.trim(),
             timestamp: new Date(),
             type: 'text',
         };
-
         setMessages(prev => [...prev, userMessage]);
+
+        // Create placeholder message for logs/image
+        const assistantMessageId = (Date.now() + 1).toString();
+        const assistantMessage: Message = {
+            id: assistantMessageId,
+            role: 'assistant',
+            content: `Generating image for: "${content.trim()}"`,
+            timestamp: new Date(),
+            type: 'image',
+            actionId,
+            logs: [],
+            isGenerating: true,
+        };
+        setMessages(prev => [...prev, assistantMessage]);
+
+        // Map action ID to message ID for log routing
+        actionIdToMessageIdRef.current.set(actionId, assistantMessageId);
+
         setIsLoading(true);
         setStatusMessage('Initializing...');
         setGenerationProgress(0);
 
         try {
-            // Get session ID from WebSocket service (for future WebSocket support)
+            // Get session ID from WebSocket service
             const sessionId = websocketService.getSessionId();
 
-            // Generate image from prompt with current generation parameters
-            const imageDataUris = await assaiAPI.generateImage(content.trim(), generationParams, undefined, sessionId || undefined);
+            // Generate image from prompt with current generation parameters and action_id
+            const imageDataUris = await assaiAPI.generateImage(
+                content.trim(),
+                generationParams,
+                undefined,
+                sessionId || undefined,
+                actionId
+            );
 
-            // Handle HTTP response directly (backend currently doesn't send WebSocket messages)
+            // Handle HTTP response - replace logs with image
             if (imageDataUris && imageDataUris.length > 0) {
                 const imageUrl = imageDataUris[0];
-                const assistantMessage: Message = {
-                    id: (Date.now() + 1).toString(),
-                    role: 'assistant',
-                    content: `Generated image for: "${content.trim()}"`,
-                    timestamp: new Date(),
-                    type: 'image',
-                    imageUrl,
-                };
-                setMessages(prev => [...prev, assistantMessage]);
+                setMessages(prev => prev.map(msg => {
+                    if (msg.id === assistantMessageId) {
+                        return {
+                            ...msg,
+                            imageUrl,
+                            logs: undefined, // Remove logs when image is ready
+                            isGenerating: false,
+                            content: `Generated image for: "${content.trim()}"`,
+                        };
+                    }
+                    return msg;
+                }));
             } else {
                 throw new Error('No image data received from server');
             }
@@ -181,6 +283,11 @@ const Text2Image = () => {
             setIsLoading(false);
             setStatusMessage('');
             setGenerationProgress(0);
+
+            // Clean up action ID mapping after a delay
+            setTimeout(() => {
+                actionIdToMessageIdRef.current.delete(actionId);
+            }, 5000);
         } catch (error) {
             console.error('Failed to generate image:', error);
             const errorMessage = error instanceof Error ? error.message : 'Failed to generate image';
@@ -189,17 +296,23 @@ const Text2Image = () => {
             setGenerationProgress(0);
             setIsLoading(false);
 
-            // Add error message with retry prompt stored
-            const errorMsg: Message = {
-                id: (Date.now() + 1).toString(),
-                role: 'assistant',
-                content: `Sorry, I encountered an error: ${errorMessage}. Please try again.`,
-                timestamp: new Date(),
-                type: 'text',
-                retryPrompt: content.trim(), // Store the prompt for retry
-            };
+            // Update the placeholder message with error
+            setMessages(prev => prev.map(msg => {
+                if (msg.id === assistantMessageId) {
+                    return {
+                        ...msg,
+                        content: `Sorry, I encountered an error: ${errorMessage}. Please try again.`,
+                        type: 'text',
+                        retryPrompt: content.trim(),
+                        logs: undefined,
+                        isGenerating: false,
+                    };
+                }
+                return msg;
+            }));
 
-            setMessages(prev => [...prev, errorMsg]);
+            // Clean up action ID mapping
+            actionIdToMessageIdRef.current.delete(actionId);
         }
     };
 
@@ -293,250 +406,304 @@ const Text2Image = () => {
             display="flex"
             flexDirection="column"
             h="100vh"
-            minH="100vh"
             w="100%"
             bg="white"
             _dark={{ bg: 'gray.900' }}
             overflow="hidden"
         >
-            {/* Messages Area */}
+            {/* Chat Area - Conversation + Input + Settings */}
             <Box
+                display="flex"
+                flexDirection="row"
                 flex={1}
-                overflowY="auto"
-                w="100%"
                 minH={0}
+                overflow="hidden"
             >
-                {messages.length === 0 ? (
-                    <EmptyState />
-                ) : (
-                    <VStack gap={0} w="100%">
-                        {messages.map((message) => (
-                            <ChatMessage
-                                key={message.id}
-                                message={message}
-                                onRetry={handleRetry}
-                            />
-                        ))}
-
-                        {isLoading && (
-                            <Box
-                                w="100%"
-                                bg="gray.50"
-                                _dark={{ bg: 'gray.800' }}
-                                py={6}
-                                px={4}
-                            >
-                                <Box maxW="48rem" mx="auto">
-                                    <VStack align="flex-start" gap={3}>
-                                        <HStack gap={4}>
-                                            <Box
-                                                w="32px"
-                                                h="32px"
-                                                bg="purple.500"
-                                                borderRadius="sm"
-                                                display="flex"
-                                                alignItems="center"
-                                                justifyContent="center"
-                                                color="white"
-                                                fontWeight="bold"
-                                                fontSize="sm"
-                                            >
-                                                🎨
-                                            </Box>
-                                            <VStack align="flex-start" gap={1} flex={1}>
-                                                <Text fontSize="sm" color="gray.600" fontWeight="medium">
-                                                    {statusMessage || 'Generating your image...'}
-                                                </Text>
-                                                {generationProgress > 0 && (
-                                                    <Box w="100%" pt={1}>
-                                                        <Box
-                                                            w="100%"
-                                                            h="8px"
-                                                            bg="gray.200"
-                                                            _dark={{ bg: 'gray.700' }}
-                                                            borderRadius="full"
-                                                            overflow="hidden"
-                                                        >
-                                                            <Box
-                                                                h="100%"
-                                                                bg="purple.500"
-                                                                w={`${generationProgress}%`}
-                                                                transition="width 0.3s ease"
-                                                            />
-                                                        </Box>
-                                                        <Text fontSize="xs" color="gray.500" mt={1}>
-                                                            {Math.round(generationProgress)}%
-                                                        </Text>
-                                                    </Box>
-                                                )}
-                                                {generationProgress === 0 && (
-                                                    <Spinner size="sm" color="purple.500" />
-                                                )}
-                                            </VStack>
-                                        </HStack>
-                                    </VStack>
-                                </Box>
-                            </Box>
-                        )}
-
-                        <div ref={messagesEndRef} />
-                    </VStack>
-                )}
-            </Box>
-
-            {/* Settings Panel */}
-            <Box
-                borderTop="1px solid"
-                borderColor="gray.200"
-                bg="gray.50"
-                _dark={{ borderColor: 'gray.700', bg: 'gray.800' }}
-            >
-                <HStack
-                    px={4}
-                    py={2}
-                    justify="space-between"
-                    cursor="pointer"
-                    onClick={() => setShowSettings(!showSettings)}
-                    _hover={{ bg: 'gray.100', _dark: { bg: 'gray.700' } }}
+                {/* Conversation + Input Column */}
+                <Box
+                    display="flex"
+                    flexDirection="column"
+                    flex={1}
+                    minW={0}
+                    overflow="hidden"
                 >
-                    <HStack gap={2}>
-                        <SettingsIcon />
-                        <Text fontSize="sm" fontWeight="medium">
-                            Generation Settings
-                        </Text>
-                    </HStack>
-                    {showSettings ? <ChevronUpIcon /> : <ChevronDownIcon />}
-                </HStack>
-
-                {showSettings && (
-                    <Box px={4} py={4}>
-                        <VStack gap={4} align="stretch">
-                            {/* Width and Height */}
-                            <HStack gap={4}>
-                                <VStack align="flex-start" gap={1} flex={1}>
-                                    <Text fontSize="sm" fontWeight="medium">Width</Text>
-                                    <Input
-                                        type="number"
-                                        value={generationParams.width}
-                                        onChange={(e) => {
-                                            const value = parseInt(e.target.value) || 256;
-                                            setGenerationParams(prev => ({ ...prev, width: value }));
-                                        }}
-                                        min={64}
-                                        max={2048}
-                                        step={64}
-                                        size="sm"
+                    {/* Messages Area */}
+                    <Box
+                        flex={1}
+                        overflowY="auto"
+                        w="100%"
+                        minH={0}
+                    >
+                        {messages.length === 0 ? (
+                            <EmptyState />
+                        ) : (
+                            <VStack gap={0} w="100%">
+                                {messages.map((message) => (
+                                    <ChatMessage
+                                        key={message.id}
+                                        message={message}
+                                        onRetry={handleRetry}
                                     />
-                                </VStack>
+                                ))}
 
-                                <VStack align="flex-start" gap={1} flex={1}>
-                                    <Text fontSize="sm" fontWeight="medium">Height</Text>
-                                    <Input
-                                        type="number"
-                                        value={generationParams.height}
-                                        onChange={(e) => {
-                                            const value = parseInt(e.target.value) || 256;
-                                            setGenerationParams(prev => ({ ...prev, height: value }));
-                                        }}
-                                        min={64}
-                                        max={2048}
-                                        step={64}
-                                        size="sm"
-                                    />
-                                </VStack>
+                                {isLoading && (
+                                    <Box
+                                        w="100%"
+                                        bg="gray.50"
+                                        _dark={{ bg: 'gray.800' }}
+                                        py={6}
+                                        px={4}
+                                    >
+                                        <Box maxW="48rem" mx="auto">
+                                            <VStack align="flex-start" gap={3}>
+                                                <HStack gap={4}>
+                                                    <Box
+                                                        w="32px"
+                                                        h="32px"
+                                                        bg="purple.500"
+                                                        borderRadius="sm"
+                                                        display="flex"
+                                                        alignItems="center"
+                                                        justifyContent="center"
+                                                        color="white"
+                                                        fontWeight="bold"
+                                                        fontSize="sm"
+                                                    >
+                                                        🎨
+                                                    </Box>
+                                                    <VStack align="flex-start" gap={1} flex={1}>
+                                                        <Text fontSize="sm" color="gray.600" fontWeight="medium">
+                                                            {statusMessage || 'Generating your image...'}
+                                                        </Text>
+                                                        {generationProgress > 0 && (
+                                                            <Box w="100%" pt={1}>
+                                                                <Box
+                                                                    w="100%"
+                                                                    h="8px"
+                                                                    bg="gray.200"
+                                                                    _dark={{ bg: 'gray.700' }}
+                                                                    borderRadius="full"
+                                                                    overflow="hidden"
+                                                                >
+                                                                    <Box
+                                                                        h="100%"
+                                                                        bg="purple.500"
+                                                                        w={`${generationProgress}%`}
+                                                                        transition="width 0.3s ease"
+                                                                    />
+                                                                </Box>
+                                                                <Text fontSize="xs" color="gray.500" mt={1}>
+                                                                    {Math.round(generationProgress)}%
+                                                                </Text>
+                                                            </Box>
+                                                        )}
+                                                        {generationProgress === 0 && (
+                                                            <Spinner size="sm" color="purple.500" />
+                                                        )}
+                                                    </VStack>
+                                                </HStack>
+                                            </VStack>
+                                        </Box>
+                                    </Box>
+                                )}
+
+                                <div ref={messagesEndRef} />
+                            </VStack>
+                        )}
+                    </Box>
+
+                    {/* Input Area */}
+                    <Box position="relative" borderTop="1px solid" borderColor="gray.200" _dark={{ borderColor: 'gray.700' }}>
+                        <ChatInput
+                            onSendMessage={handleSendMessage}
+                            disabled={isLoading}
+                            placeholder={messages.length === 0 ? "Describe the image you want to generate..." : "Describe another image..."}
+                        />
+                        {/* Settings Toggle Button */}
+                        <IconButton
+                            aria-label="Toggle settings"
+                            position="absolute"
+                            right={4}
+                            top="50%"
+                            transform="translateY(-50%)"
+                            size="sm"
+                            variant="ghost"
+                            colorScheme="gray"
+                            onClick={() => setShowSettings(!showSettings)}
+                            zIndex={10}
+                        >
+                            <SettingsIcon />
+                        </IconButton>
+                    </Box>
+                </Box>
+
+                {/* Right Settings Panel - Part of chat area */}
+                <Box
+                    w={showSettings ? "320px" : "0"}
+                    borderLeft="1px solid"
+                    borderColor="gray.200"
+                    bg="gray.50"
+                    _dark={{ borderColor: 'gray.700', bg: 'gray.800' }}
+                    overflow="hidden"
+                    transition="width 0.3s ease-in-out"
+                    display="flex"
+                    flexDirection="column"
+                    flexShrink={0}
+                >
+                    {showSettings && (
+                        <>
+                            {/* Settings Header */}
+                            <HStack
+                                px={4}
+                                py={3}
+                                justify="space-between"
+                                borderBottom="1px solid"
+                                borderColor="gray.200"
+                                _dark={{ borderColor: 'gray.700' }}
+                            >
+                                <HStack gap={2}>
+                                    <SettingsIcon />
+                                    <Text fontSize="sm" fontWeight="semibold">
+                                        Settings
+                                    </Text>
+                                </HStack>
+                                <IconButton
+                                    aria-label="Close settings"
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => setShowSettings(false)}
+                                >
+                                    <XIcon />
+                                </IconButton>
                             </HStack>
 
-                            {/* Guidance Scale */}
-                            <VStack align="flex-start" gap={1}>
-                                <Text fontSize="sm" fontWeight="medium">
-                                    Guidance Scale: {generationParams.guidance_scale?.toFixed(1)}
-                                </Text>
-                                <Input
-                                    type="number"
-                                    value={generationParams.guidance_scale}
-                                    onChange={(e) => {
-                                        const value = parseFloat(e.target.value) || 3.5;
-                                        setGenerationParams(prev => ({ ...prev, guidance_scale: value }));
-                                    }}
-                                    min={1}
-                                    max={20}
-                                    step={0.1}
-                                    size="sm"
-                                />
-                            </VStack>
-
-                            {/* Inference Steps */}
-                            <VStack align="flex-start" gap={1}>
-                                <Text fontSize="sm" fontWeight="medium">Inference Steps</Text>
-                                <Input
-                                    type="number"
-                                    value={generationParams.num_inference_steps}
-                                    onChange={(e) => {
-                                        const value = parseInt(e.target.value) || 50;
-                                        setGenerationParams(prev => ({ ...prev, num_inference_steps: value }));
-                                    }}
-                                    min={1}
-                                    max={100}
-                                    size="sm"
-                                />
-                            </VStack>
-
-                            {/* Max Sequence Length */}
-                            <VStack align="flex-start" gap={1}>
-                                <Text fontSize="sm" fontWeight="medium">Max Sequence Length</Text>
-                                <Input
-                                    type="number"
-                                    value={generationParams.max_sequence_length}
-                                    onChange={(e) => {
-                                        const value = parseInt(e.target.value) || 512;
-                                        setGenerationParams(prev => ({ ...prev, max_sequence_length: value }));
-                                    }}
-                                    min={128}
-                                    max={2048}
-                                    step={128}
-                                    size="sm"
-                                />
-                            </VStack>
-
-                            {/* Seed */}
-                            <VStack align="flex-start" gap={1}>
-                                <Text fontSize="sm" fontWeight="medium">Seed (0 = random)</Text>
-                                <Input
-                                    type="number"
-                                    value={generationParams.seed}
-                                    onChange={(e) => {
-                                        const value = parseInt(e.target.value) || 0;
-                                        setGenerationParams(prev => ({ ...prev, seed: value }));
-                                    }}
-                                    min={0}
-                                    max={2147483647}
-                                    size="sm"
-                                />
-                            </VStack>
-
-                            <Button
-                                size="sm"
-                                variant="outline"
-                                onClick={resetToDefaults}
-                                w="fit-content"
+                            {/* Settings Content */}
+                            <Box
+                                flex={1}
+                                overflowY="auto"
+                                px={4}
+                                py={4}
                             >
-                                Reset to Defaults
-                            </Button>
-                        </VStack>
-                    </Box>
-                )}
+                                <VStack gap={4} align="stretch">
+                                    {/* Width and Height */}
+                                    <HStack gap={4}>
+                                        <VStack align="flex-start" gap={1} flex={1}>
+                                            <Text fontSize="sm" fontWeight="medium">Width</Text>
+                                            <Input
+                                                type="number"
+                                                value={generationParams.width}
+                                                onChange={(e) => {
+                                                    const value = parseInt(e.target.value) || 256;
+                                                    setGenerationParams(prev => ({ ...prev, width: value }));
+                                                }}
+                                                min={64}
+                                                max={2048}
+                                                step={64}
+                                                size="sm"
+                                            />
+                                        </VStack>
+
+                                        <VStack align="flex-start" gap={1} flex={1}>
+                                            <Text fontSize="sm" fontWeight="medium">Height</Text>
+                                            <Input
+                                                type="number"
+                                                value={generationParams.height}
+                                                onChange={(e) => {
+                                                    const value = parseInt(e.target.value) || 256;
+                                                    setGenerationParams(prev => ({ ...prev, height: value }));
+                                                }}
+                                                min={64}
+                                                max={2048}
+                                                step={64}
+                                                size="sm"
+                                            />
+                                        </VStack>
+                                    </HStack>
+
+                                    {/* Guidance Scale */}
+                                    <VStack align="flex-start" gap={1}>
+                                        <Text fontSize="sm" fontWeight="medium">
+                                            Guidance Scale: {generationParams.guidance_scale?.toFixed(1)}
+                                        </Text>
+                                        <Input
+                                            type="number"
+                                            value={generationParams.guidance_scale}
+                                            onChange={(e) => {
+                                                const value = parseFloat(e.target.value) || 3.5;
+                                                setGenerationParams(prev => ({ ...prev, guidance_scale: value }));
+                                            }}
+                                            min={1}
+                                            max={20}
+                                            step={0.1}
+                                            size="sm"
+                                        />
+                                    </VStack>
+
+                                    {/* Inference Steps */}
+                                    <VStack align="flex-start" gap={1}>
+                                        <Text fontSize="sm" fontWeight="medium">Inference Steps</Text>
+                                        <Input
+                                            type="number"
+                                            value={generationParams.num_inference_steps}
+                                            onChange={(e) => {
+                                                const value = parseInt(e.target.value) || 50;
+                                                setGenerationParams(prev => ({ ...prev, num_inference_steps: value }));
+                                            }}
+                                            min={1}
+                                            max={100}
+                                            size="sm"
+                                        />
+                                    </VStack>
+
+                                    {/* Max Sequence Length */}
+                                    <VStack align="flex-start" gap={1}>
+                                        <Text fontSize="sm" fontWeight="medium">Max Sequence Length</Text>
+                                        <Input
+                                            type="number"
+                                            value={generationParams.max_sequence_length}
+                                            onChange={(e) => {
+                                                const value = parseInt(e.target.value) || 512;
+                                                setGenerationParams(prev => ({ ...prev, max_sequence_length: value }));
+                                            }}
+                                            min={128}
+                                            max={2048}
+                                            step={128}
+                                            size="sm"
+                                        />
+                                    </VStack>
+
+                                    {/* Seed */}
+                                    <VStack align="flex-start" gap={1}>
+                                        <Text fontSize="sm" fontWeight="medium">Seed (0 = random)</Text>
+                                        <Input
+                                            type="number"
+                                            value={generationParams.seed}
+                                            onChange={(e) => {
+                                                const value = parseInt(e.target.value) || 0;
+                                                setGenerationParams(prev => ({ ...prev, seed: value }));
+                                            }}
+                                            min={0}
+                                            max={2147483647}
+                                            size="sm"
+                                        />
+                                    </VStack>
+
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={resetToDefaults}
+                                        w="100%"
+                                    >
+                                        Reset to Defaults
+                                    </Button>
+                                </VStack>
+                            </Box>
+                        </>
+                    )}
+                </Box>
             </Box>
 
-            {/* Input Area */}
-            <Box pb={{ base: 0, md: 0 }}>
-                <ChatInput
-                    onSendMessage={handleSendMessage}
-                    disabled={isLoading}
-                    placeholder={messages.length === 0 ? "Describe the image you want to generate..." : "Describe another image..."}
-                />
-            </Box>
-
-            {/* Log Display - Pushes content up */}
+            {/* Log Display - Separate from chat area, collapsible at bottom */}
             <LogDisplay />
         </Box>
     );

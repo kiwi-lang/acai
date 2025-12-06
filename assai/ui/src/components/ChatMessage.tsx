@@ -1,4 +1,5 @@
 import { Box, HStack, VStack, Text, Button } from '@chakra-ui/react';
+import { useEffect, useRef } from 'react';
 import { Message } from '../services/types';
 
 interface ChatMessageProps {
@@ -43,6 +44,14 @@ const AssistantIcon = () => (
 const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
     const isUser = message.role === 'user';
     const isError = message.retryPrompt !== undefined;
+    const logsEndRef = useRef<HTMLDivElement>(null);
+
+    // Auto-scroll logs to bottom when new logs arrive
+    useEffect(() => {
+        if (message.logs && message.logs.length > 0 && logsEndRef.current) {
+            logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        }
+    }, [message.logs]);
 
     return (
         <Box
@@ -96,6 +105,54 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                                     🔄 Retry
                                 </Button>
                             )}
+                        </Box>
+                    )}
+
+                    {/* Logs Display - Show when generating and no image yet */}
+                    {message.isGenerating && message.logs && message.logs.length > 0 && !message.imageUrl && (
+                        <Box
+                            w="100%"
+                            mt={2}
+                            p={3}
+                            bg="gray.900"
+                            _dark={{ bg: 'gray.950' }}
+                            borderRadius="md"
+                            border="1px solid"
+                            borderColor="gray.700"
+                            maxH="400px"
+                            overflowY="auto"
+                            fontFamily="mono"
+                            fontSize="xs"
+                            css={{
+                                '&::-webkit-scrollbar': {
+                                    width: '8px',
+                                },
+                                '&::-webkit-scrollbar-track': {
+                                    background: 'transparent',
+                                },
+                                '&::-webkit-scrollbar-thumb': {
+                                    background: '#4a5568',
+                                    borderRadius: '4px',
+                                },
+                                '&::-webkit-scrollbar-thumb:hover': {
+                                    background: '#718096',
+                                },
+                            }}
+                        >
+                            <VStack align="stretch" gap={0}>
+                                {message.logs.map((log, index) => (
+                                    <Text
+                                        key={index}
+                                        color={log.type === 'stderr' ? 'red.400' : 'gray.300'}
+                                        whiteSpace="pre-wrap"
+                                        wordBreak="break-word"
+                                        lineHeight="1.5"
+                                    >
+                                        {log.line}
+                                    </Text>
+                                ))}
+                                <div ref={logsEndRef} />
+                            </VStack>
                         </Box>
                     )}
 

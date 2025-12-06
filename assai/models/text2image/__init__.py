@@ -10,11 +10,15 @@ from assai.tools import namespaced_route
 import torchcompat.core as accelerator
 import base64
 from io import BytesIO
+from threading import Lock
 
 def pil_to_base64_png(img):
     buffer = BytesIO()
     img.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+original_stdout = sys.stdout
 
 
 class SocketIOBuffer:
@@ -31,32 +35,40 @@ class SocketIOBuffer:
             head, _, tail = msg.partition("\n")
             self.prev.append(head)
             line = "".join(self.prev)
-            self.push(line)
+
+            if line != "":
+                self.push(line)
 
             self.prev = []
             self.write(tail)
             
-
     def flush(self):
         pass
 
 
+socket_io_lock = Lock()
+
+
 @contextmanager
-def capture_progress(app):
+def capture_progress(app, action_id=0):
+    global socket_io_lock
+
     old_out = sys.stdout
     old_err = sys.stderr 
+    was_replaced = False
 
-    if not isinstance(sys.stdout, SocketIOBuffer):
-        sys.stdout = SocketIOBuffer(push=lambda line: app.message("log", line))
-        sys.stderr = SocketIOBuffer(push=lambda line: app.message("log", line))
+    with socket_io_lock:
+        if not isinstance(sys.stdout, SocketIOBuffer):
+            sys.stdout = SocketIOBuffer(push=lambda line: app.message("stdout", {"id": action_id, "line": line}))
+            sys.stderr = SocketIOBuffer(push=lambda line: app.message("stderr", {"id": action_id, "line": line}))
+            was_replaced = True
 
-        yield
+    yield
 
-        sys.stdout = old_out
-        sys.stderr = old_err
-    else:
-        yield
-
+    if was_replaced:
+        with socket_io_lock:
+            sys.stdout = old_out
+            sys.stderr = old_err
 
 cached_pipeline = {}
 
@@ -113,10 +125,11 @@ def routes(app: ASSAI, db):
         data = request.get_json()
         prompt = data.pop("prompt")
         session_id = data.pop("session_id")
+        action_id = data.pop("action_id", 0)
 
         @cached("t2i")
         def load():
-            with capture_progress(app):
+            with capture_progress(app, action_id):
                 pipe = FluxPipeline.from_pretrained(
                     model,
                     torch_dtype=torch.bfloat16,
@@ -137,7 +150,7 @@ def routes(app: ASSAI, db):
 
         pipe = load()
 
-        with capture_progress(app):
+        with capture_progress(app, action_id):
             output: FluxPipelineOutput = pipe(prompt,
                 # callback_on_step_end_tensor_inputs=[],
                 # callback_on_step_end=self.on_step,

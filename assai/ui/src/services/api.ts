@@ -139,7 +139,8 @@ class AssAI_API {
     prompt: string,
     params?: ImageGenerationParams,
     model?: string,
-    sessionId?: string
+    sessionId?: string,
+    actionId?: number
   ): Promise<string[]> {
     const endpoint = model
       ? `/text2image/model/run/${encodeURIComponent(model)}`
@@ -148,6 +149,9 @@ class AssAI_API {
     const body: any = { prompt, ...params };
     if (sessionId) {
       body.session_id = sessionId;
+    }
+    if (actionId !== undefined) {
+      body.action_id = actionId;
     }
 
     return this.request<string[]>(endpoint, {
