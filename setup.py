@@ -3,6 +3,7 @@ from pathlib import Path
 
 from setuptools import setup
 
+version = "0.0.0"
 with open("assai/server/__init__.py") as file:
     for line in file.readlines():
         if "version" in line:
@@ -18,7 +19,7 @@ if __name__ == "__main__":
         version=version,
         extras_require=extra_requires,
         description="Tool to test AI models",
-        long_description=(Path(__file__).parent / "README.rst").read_text(),
+        long_description=(Path(__file__).parent / "README.md").read_text(),
         author="Delaunay",
         author_email="pierre@delaunay.io",
         license="BSD 3-Clause License",
@@ -37,7 +38,19 @@ if __name__ == "__main__":
             "assai.models.text2image",
         ],
         setup_requires=["setuptools"],
-        install_requires=["importlib_resources"],
+        install_requires=[
+            "importlib_resources",
+            "flask",
+            "flask-socketio",
+            "diffusers",
+            "transformers",
+            "accelerate",
+            "protobuf", # WHY
+            "sentencepiece",
+            "torchcompat",
+            "voir",
+            "nvidia-ml-py"
+        ],
         package_data={
             "assai.data": [
                 "assai/data",

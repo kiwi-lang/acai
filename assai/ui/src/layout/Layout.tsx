@@ -1,6 +1,9 @@
-import { FC, ReactNode, useState } from 'react';
-import { Link, useLocation } from 'react-router-dom';
-import { IconButton, Box } from '@chakra-ui/react';
+import { FC, ReactNode, useState, useEffect } from 'react';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
+import { IconButton, Box, VStack, HStack, Text, Button } from '@chakra-ui/react';
+import { assaiAPI } from '../services/api';
+import { Conversation } from '../services/types';
+import TelemetryDisplay from '../components/TelemetryDisplay';
 import './Layout.css';
 
 // Custom icon components
@@ -16,55 +19,127 @@ const CloseIcon = () => (
   </svg>
 );
 
+const PlusIcon = () => (
+  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <line x1="12" y1="5" x2="12" y2="19" />
+    <line x1="5" y1="12" x2="19" y2="12" />
+  </svg>
+);
+
+const ChatIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
+const TrashIcon = () => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polyline points="3 6 5 6 21 6" />
+    <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+  </svg>
+);
+
+// Task type icons
+const Text2TextIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
+const Text2ImageIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <polyline points="21 15 16 10 5 21" />
+  </svg>
+);
+
+const Text2SpeechIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    <line x1="12" y1="19" x2="12" y2="23" />
+    <line x1="8" y1="23" x2="16" y2="23" />
+  </svg>
+);
+
+const Text2AudioIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+    <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07" />
+  </svg>
+);
+
+const Image2TextIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <polyline points="21 15 16 10 5 21" />
+    <path d="M12 8v8M8 12h8" />
+  </svg>
+);
+
+const Speech2TextIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+    <path d="M12 19v4M8 23h8" />
+    <path d="M12 15v4" />
+  </svg>
+);
+
+// Task type definitions
+const taskTypes = [
+  { id: 'text2text', name: 'Text to Text', path: '/', icon: Text2TextIcon, color: 'blue' },
+  { id: 'text2image', name: 'Text to Image', path: '/text2image', icon: Text2ImageIcon, color: 'purple' },
+  { id: 'text2speech', name: 'Text to Speech', path: '/text2speech', icon: Text2SpeechIcon, color: 'green' },
+  { id: 'text2audio', name: 'Text to Audio', path: '/text2audio', icon: Text2AudioIcon, color: 'teal' },
+  { id: 'image2text', name: 'Image to Text', path: '/image2text', icon: Image2TextIcon, color: 'orange' },
+  { id: 'speech2text', name: 'Speech to Text', path: '/speech2text', icon: Speech2TextIcon, color: 'pink' },
+];
+
 interface LayoutProps {
   children: ReactNode;
 }
 
-const sidebarSections = [
-  {
-    title: 'Cooking',
-    items: [
-      { name: 'Recipes', href: '/recipes' },
-      { name: 'Meal Plan', href: '/planning' },
-      { name: 'Ingredients', href: '/ingredients' },
-      { name: 'Compare Recipes', href: '/compare' },
-    ]
-  },
-  {
-    title: 'Inventory & Shopping',
-    items: [
-      { name: 'Receipts', href: '/receipts' },
-      { name: 'Pantry', href: '/pantry' },
-      { name: 'Budget', href: '/budget' },
-    ]
-  },
-  {
-    title: 'Planning',
-    items: [
-      { name: 'Calendar', href: '/calendar' },
-      { name: 'Tasks', href: '/tasks' },
-      { name: 'Projects', href: '/projects' },
-    ]
-  },
-  {
-    title: 'Units',
-    items: [
-      { name: 'Unit Conversions', href: '/conversions' },
-      { name: 'Unit Manager', href: '/unit-manager' },
-    ]
-  },
-  {
-    title: 'Settings',
-    items: [
-      { name: 'Settings', href: '/settings' },
-      { name: 'API Tester', href: '/api-tester' },
-    ]
-  },
-];
-
 const Layout: FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
+  const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [hoveredConv, setHoveredConv] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadConversations();
+  }, []);
+
+  const loadConversations = async () => {
+    try {
+      const convs = await assaiAPI.getConversations();
+      setConversations(convs);
+    } catch (error) {
+      console.error('Failed to load conversations:', error);
+    }
+  };
+
+  const handleNewChat = () => {
+    navigate('/');
+    closeMobileMenu();
+    // Reload the page to start fresh
+    window.location.reload();
+  };
+
+  const handleDeleteConversation = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+
+    try {
+      await assaiAPI.deleteConversation(id);
+      setConversations(convs => convs.filter(c => c.id !== id));
+    } catch (error) {
+      console.error('Failed to delete conversation:', error);
+    }
+  };
 
   const toggleMobileMenu = () => {
     setIsMobileMenuOpen(!isMobileMenuOpen);
@@ -75,7 +150,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
   };
 
   return (
-    <div className="layout" style={{ height: "100%", width: "100%" }}>
+    <div className="layout" style={{ height: "100vh", width: "100vw", overflow: "hidden" }}>
       {/* Mobile Menu Button */}
       <Box
         position="fixed"
@@ -87,47 +162,238 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         <IconButton
           aria-label="Toggle menu"
           onClick={toggleMobileMenu}
-          colorScheme="orange"
+          colorScheme="green"
           size="lg"
-          borderRadius="full"
+          borderRadius="md"
           boxShadow="lg"
         >
           {isMobileMenuOpen ? <CloseIcon /> : <HamburgerIcon />}
         </IconButton>
       </Box>
 
-      <div className={`sidebar ${isMobileMenuOpen ? 'mobile-open' : ''}`}>
-        <div className="sidebar-header">
-          <h2 className="sidebar-title">
-            <Link to="/" style={{ textDecoration: 'none', color: 'inherit' }} onClick={closeMobileMenu}>
-              Lifestyle
-            </Link>
-          </h2>
-        </div>
-        <nav className="sidebar-nav">
-          {sidebarSections.map((section) => (
-            <div key={section.title} className="nav-section">
-              <div className="nav-section-title">{section.title}</div>
-              {section.items.map((item) => (
+      {/* Sidebar */}
+      <Box
+        className={`sidebar ${isMobileMenuOpen ? 'mobile-open' : ''}`}
+        w="260px"
+        h="100vh"
+        bg="gray.900"
+        color="white"
+        display="flex"
+        flexDirection="column"
+        position="fixed"
+        left={0}
+        top={0}
+        zIndex={1000}
+        transition="transform 0.3s"
+        transform={{ base: isMobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)', md: 'translateX(0)' }}
+      >
+        {/* Header */}
+        <Box p={4} borderBottom="1px solid" borderColor="gray.700">
+          <Link to="/" style={{ textDecoration: 'none' }} onClick={closeMobileMenu}>
+            <HStack gap={2}>
+              <Box
+                w="32px"
+                h="32px"
+                bg="green.500"
+                borderRadius="md"
+                display="flex"
+                alignItems="center"
+                justifyContent="center"
+                fontWeight="bold"
+              >
+                AI
+              </Box>
+              <Text fontSize="xl" fontWeight="bold" color="white">
+                ASSAI
+              </Text>
+            </HStack>
+          </Link>
+        </Box>
+
+        {/* New Chat Button */}
+        <Box p={3}>
+          <Button
+            w="100%"
+            onClick={handleNewChat}
+            colorScheme="green"
+            variant="outline"
+            leftIcon={<PlusIcon />}
+            justifyContent="flex-start"
+            size="md"
+          >
+            New Chat
+          </Button>
+        </Box>
+
+        {/* Task Selector */}
+        <Box px={3} pb={3}>
+          <Text fontSize="xs" fontWeight="bold" color="gray.500" mb={2} px={2} textTransform="uppercase" letterSpacing="wide">
+            Tasks
+          </Text>
+          <VStack gap={1} align="stretch">
+            {taskTypes.map((task) => {
+              const Icon = task.icon;
+              const isActive = location.pathname === task.path ||
+                (task.path === '/' && location.pathname.startsWith('/chat/'));
+              return (
                 <Link
-                  key={item.name}
-                  to={item.href}
-                  className={`nav-item ${location.pathname === item.href ? 'active' : ''}`}
+                  key={task.id}
+                  to={task.path}
+                  style={{ textDecoration: 'none', width: '100%' }}
                   onClick={closeMobileMenu}
                 >
-                  {item.name}
+                  <HStack
+                    p={2.5}
+                    borderRadius="md"
+                    bg={isActive ? 'gray.700' : 'transparent'}
+                    _hover={{ bg: 'gray.800' }}
+                    cursor="pointer"
+                    gap={3}
+                    transition="all 0.2s"
+                  >
+                    <Box color={isActive ? `${task.color}.300` : 'gray.400'}>
+                      <Icon />
+                    </Box>
+                    <Text
+                      fontSize="sm"
+                      color={isActive ? 'white' : 'gray.300'}
+                      fontWeight={isActive ? 'medium' : 'normal'}
+                    >
+                      {task.name}
+                    </Text>
+                  </HStack>
                 </Link>
-              ))}
-            </div>
-          ))}
-        </nav>
-      </div>
+              );
+            })}
+          </VStack>
+        </Box>
 
-      <div className="main-content" style={{ height: "100%", width: "100%" }}>
-        <div className="content-wrapper" style={{ height: "100%", width: "100%" }}>
-          {children}
-        </div>
-      </div>
+        {/* Conversations List */}
+        <Box flex={1} overflowY="auto" px={2}>
+          <Text fontSize="xs" fontWeight="bold" color="gray.500" mb={2} px={2} textTransform="uppercase" letterSpacing="wide">
+            Recent Chats
+          </Text>
+          <VStack
+            gap={1}
+            align="stretch"
+            css={{
+              '&::-webkit-scrollbar': {
+                width: '4px',
+              },
+              '&::-webkit-scrollbar-track': {
+                background: 'transparent',
+              },
+              '&::-webkit-scrollbar-thumb': {
+                background: '#4A5568',
+                borderRadius: '2px',
+              },
+            }}
+          >
+            {conversations.length === 0 ? (
+              <Text fontSize="sm" color="gray.500" textAlign="center" py={4}>
+                No conversations yet
+              </Text>
+            ) : (
+              conversations.map((conv) => (
+                <Box
+                  key={conv.id}
+                  position="relative"
+                  onMouseEnter={() => setHoveredConv(conv.id)}
+                  onMouseLeave={() => setHoveredConv(null)}
+                >
+                  <Link
+                    to={`/chat/${conv.id}`}
+                    style={{ textDecoration: 'none', width: '100%' }}
+                    onClick={closeMobileMenu}
+                  >
+                    <HStack
+                      p={3}
+                      borderRadius="md"
+                      bg={location.pathname === `/chat/${conv.id}` ? 'gray.700' : 'transparent'}
+                      _hover={{ bg: 'gray.800' }}
+                      cursor="pointer"
+                      gap={2}
+                      justify="space-between"
+                    >
+                      <HStack gap={2} flex={1} minW={0}>
+                        <ChatIcon />
+                        <Text
+                          fontSize="sm"
+                          color="gray.300"
+                          noOfLines={1}
+                          flex={1}
+                        >
+                          {conv.title || 'New conversation'}
+                        </Text>
+                      </HStack>
+
+                      {hoveredConv === conv.id && (
+                        <IconButton
+                          aria-label="Delete conversation"
+                          size="xs"
+                          variant="ghost"
+                          colorScheme="red"
+                          onClick={(e) => handleDeleteConversation(conv.id, e)}
+                          opacity={0.7}
+                          _hover={{ opacity: 1 }}
+                        >
+                          <TrashIcon />
+                        </IconButton>
+                      )}
+                    </HStack>
+                  </Link>
+                </Box>
+              ))
+            )}
+          </VStack>
+        </Box>
+
+        {/* Footer */}
+        <Box p={4} borderTop="1px solid" borderColor="gray.700">
+          <VStack gap={1}>
+            <Link to="/models" style={{ textDecoration: 'none', width: '100%' }} onClick={closeMobileMenu}>
+              <HStack
+                p={2}
+                borderRadius="md"
+                _hover={{ bg: 'gray.800' }}
+                cursor="pointer"
+                w="100%"
+              >
+                <Text fontSize="sm" color="gray.400">
+                  AI Models
+                </Text>
+              </HStack>
+            </Link>
+            <Link to="/api-tester" style={{ textDecoration: 'none', width: '100%' }} onClick={closeMobileMenu}>
+              <HStack
+                p={2}
+                borderRadius="md"
+                _hover={{ bg: 'gray.800' }}
+                cursor="pointer"
+                w="100%"
+              >
+                <Text fontSize="sm" color="gray.400">
+                  API Tester
+                </Text>
+              </HStack>
+            </Link>
+          </VStack>
+
+          {/* Telemetry Display */}
+          <TelemetryDisplay />
+        </Box>
+      </Box>
+
+      {/* Main Content */}
+      <Box
+        className="main-content"
+        ml={{ base: 0, md: '260px' }}
+        h="100vh"
+        w={{ base: '100vw', md: 'calc(100vw - 260px)' }}
+        overflow="hidden"
+      >
+        {children}
+      </Box>
 
       {/* Mobile Overlay */}
       {isMobileMenuOpen && (

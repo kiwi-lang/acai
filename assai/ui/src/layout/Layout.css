@@ -1,89 +1,36 @@
+/* ChatGPT-inspired Layout Styles */
+
 .layout {
   display: flex;
-  min-height: 100vh;
-  background-color: #f7fafc;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+  background-color: #ffffff;
 }
 
 .sidebar {
-  width: 240px;
-  background-color: white;
-  border-right: 1px solid #e2e8f0;
+  width: 260px;
+  background-color: #171717;
   position: fixed;
   height: 100vh;
   left: 0;
   top: 0;
   z-index: 1000;
-}
-
-.sidebar-header {
-  padding: 2rem;
-  border-bottom: 1px solid #e2e8f0;
-}
-
-.sidebar-title {
-  font-size: 1.5rem;
-  font-weight: bold;
-  color: #f56500;
-  margin: 0;
-}
-
-.sidebar-nav {
-  padding: 1rem 0;
-}
-
-.nav-section {
-  margin-bottom: 1.5rem;
-}
-
-.nav-section:last-child {
-  margin-bottom: 0;
-}
-
-.nav-section-title {
-  padding: 0.5rem 1.5rem 0.5rem 1.5rem;
-  font-size: 0.75rem;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #718096;
-  margin-bottom: 0.25rem;
-}
-
-.nav-item {
-  display: block;
-  padding: 0.75rem 1.5rem;
-  color: #2d3748;
-  text-decoration: none;
-  transition: all 0.2s;
-  border-left: 3px solid transparent;
-}
-
-.nav-item:hover {
-  background-color: #f7fafc;
-  color: #f56500;
-  border-left-color: #f56500;
+  transition: transform 0.3s ease-in-out;
+  display: flex;
+  flex-direction: column;
 }
 
 .main-content {
   flex: 1;
-  margin-left: 240px;
-  padding: 1rem;
-}
-
-.content-wrapper {
-  background-color: white;
-  border-radius: 0.5rem;
-  padding: 2rem;
-  box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1);
-  min-height: calc(100vh - 6rem);
+  height: 100vh;
+  overflow: hidden;
 }
 
 /* Mobile responsiveness */
 @media (max-width: 768px) {
   .sidebar {
     transform: translateX(-100%);
-    transition: transform 0.3s ease-in-out;
-    z-index: 1000;
   }
 
   .sidebar.mobile-open {
@@ -91,19 +38,13 @@
   }
 
   .main-content {
-    margin-left: 0;
+    margin-left: 0 !important;
+    width: 100vw !important;
   }
 }
 
-/* Hover effects */
-.nav-item:hover {
-  transform: translateX(4px);
-}
-
-/* Active state styling */
-.nav-item.active {
-  background-color: #fed7d7;
-  color: #f56500;
-  border-left-color: #f56500;
-  font-weight: 600;
+@media (min-width: 769px) {
+  .sidebar {
+    transform: translateX(0);
+  }
 }

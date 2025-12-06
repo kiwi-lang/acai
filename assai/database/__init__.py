@@ -1,0 +1,1 @@
+"""SQLAlchemy model definition for the database"""

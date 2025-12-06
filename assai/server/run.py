@@ -2,11 +2,12 @@ import os
 import pkgutil
 import importlib
 import traceback
+from dataclasses import dataclass
 from typing import Optional
 # import importlib_resources
 
-
 from flask import Flask, jsonify, request, send_from_directory
+from flask_socketio import SocketIO, emit
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -15,8 +16,16 @@ STATIC_FOLDER_DEFAULT = os.path.join(ROOT, 'static')
 STATIC_FOLDER = os.path.abspath(os.getenv("FLASK_STATIC", STATIC_FOLDER_DEFAULT))
 STATIC_UPLOAD_FOLDER = os.path.join(STATIC_FOLDER, 'uploads')
 
-os.environ["XDG_CACHE_HOME"] = os.path.join(STATIC_FOLDER, "cache")
-os.environ["HF_HOME"] = os.path.join(STATIC_FOLDER, "cache")
+# os.environ["XDG_CACHE_HOME"] = os.path.join(STATIC_FOLDER, "cache")
+# os.environ["HF_HOME"] = os.path.join(STATIC_FOLDER, "cache")
+
+if os.path.exists("/opt/milabench/"):
+    os.environ["XDG_CACHE_HOME"] = "/opt/milabench/cache"
+    os.environ["HF_HOME"] = "/opt/milabench"
+    os.environ["HF_HUB_CACHE"] = "/opt/milabench/data/hub"
+    os.environ["HF_DATASETS_CACHE"] = "/opt/milabench/data"
+    os.environ["FLASHINFER_CACHE_DIR"] = "/opt/milabench/cache/flashinfer"
+
 
 def discover_plugins(module):
     path = module.__path__
@@ -34,38 +43,114 @@ def discover_plugins(module):
     return plugins
 
 
-# data_path = importlib_resources.files("assai.data")
-
-# with open(data_path / "data.json", encoding="utf-8") as file:
-#     print(json.dumps(json.load(file), indent=2))
-
-
-
-
 @dataclass
 class Layout:
     @dataclass
     class LayoutItem:
         name: str
         href: str
-        
+
     title: str
     href: Optional[str]
     items: list[LayoutItem]
+
+
+@dataclass
+class Message:
+    kind: str
+    data: dict
+
+
+
+
+@dataclass
+class Telemetry:
+    @dataclass
+    class CPUInfo:
+        memory: tuple[float, float]
+        load: float
+
+    @dataclass
+    class GPUInfo:
+        memory: tuple[float, float]
+        load: float
+        temp: float
+        power: float
+
+    cpu: CPUInfo
+    gpu: dict[str, GPUInfo]
+
 
 
 class ASSAI:
     def __init__(self):
         print(STATIC_FOLDER)
         self.app = Flask(__name__, static_folder=STATIC_FOLDER)
+        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
 
         import assai.models
 
         models = discover_plugins(assai.models)
 
         for k, module in models.items():
-            if hasattr(module, 'route'):
-                module.route(self)
+            if hasattr(module, 'routes'):
+                module.routes(self, None)
+
+        from voir.instruments.cpu import cpu_monitor 
+        from voir.instruments.gpu import select_backend, gpu_monitor
+
+        self.cpu_fn = cpu_monitor()
+        select_backend()
+        self.gpu_fn = gpu_monitor()
+
+        def message(self, kind, message):
+            self.socketio.emit(kind, message)
+
+        # WebSocket connection handler
+        @self.socketio.on('connect')
+        def handle_connect():
+            print('Client connected')
+            return True
+
+        @self.socketio.on('disconnect')
+        def handle_disconnect():
+            print('Client disconnected')
+
+        @self.socketio.on('join_session')
+        def handle_join_session(data):
+            session_id = data.get('session_id')
+            if session_id:
+                from flask_socketio import join_room
+                join_room(session_id)
+                print(f'Client joined session: {session_id}')
+                return {'status': 'joined', 'session_id': session_id}
+
+        @self.app.route("/")
+        def main():
+            pass
+
+        #
+        # Utility routes
+        #
+        @self.app.route("/upload/video")
+        def upload_vieo():
+            pass
+
+        @self.app.route("/upload/image")
+        def upload_image():
+            pass
+
+        @self.app.route("/upload/audio")
+        def upload_audio():
+            pass
+
+        @self.app.route("/stream/audio")
+        def stream_audio():
+            pass
+
+        @self.app.route("/stream/video")
+        def stream_video():
+            pass
 
         @self.app.route("/layout")
         def layout() -> Layout:
@@ -79,6 +164,10 @@ class ASSAI:
                 ]
             },
 
+        @self.app.route("/telemetry")
+        def telemetry() -> Telemetry:
+            """Use voir to fetch system usage (GPU & CPU & RAM)"""
+            return {"cpu": self.cpu_fn(), "gpu": self.gpu_fn()}
 
 
 def main():
