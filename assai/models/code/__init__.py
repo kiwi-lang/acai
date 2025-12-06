@@ -37,5 +37,6 @@ def routes(app: ASSAI, db):
         pass
 
 
+
 if __name__ == "__main__":
     routes(None)

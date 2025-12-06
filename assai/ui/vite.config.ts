@@ -7,16 +7,12 @@ export default defineConfig({
   // Set base path for GitHub Pages deployment
   base: process.env.VITE_BASE_PATH || '/',
   server: {
-    port: 3000,
+    port: 8081,
     host: true,
     open: true,
-    allowedHosts: [
-      "recipes.local",
-      "recipes.nas",
-    ],
     proxy: {
       '/api': {
-        target: 'http://localhost:5001',
+        target: 'http://localhost:5000',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       }
@@ -41,4 +37,4 @@ export default defineConfig({
       '@': '/src'
     }
   }
-}) 
+})

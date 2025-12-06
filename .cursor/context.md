@@ -1,5 +1,7 @@
 * assai/server
-    * core definition of flask
+    * core definition of flask app
+* assai/agent
+    * Compute server
 * assai/models
     * Each module is a AI model plugin
     * The plugins are loaded by the flask server
@@ -17,3 +19,10 @@
     * backend tests
 * docs
     * sphinx documentation for both front and backend
+
+
+    React Front End <-> Flask Backend <-> Compute Backend
+
+
+* Flask Backend and Compute Backend can be the samething 
+  but it does not have to be

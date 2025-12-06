@@ -4,7 +4,6 @@ import importlib
 import traceback
 # import importlib_resources
 
-
 from flask import Flask, jsonify, request, send_from_directory
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,8 +48,36 @@ class ASSAI:
         models = discover_plugins(assai.models)
 
         for k, module in models.items():
-            if hasattr(module, 'route'):
-                module.route(self)
+            if hasattr(module, 'routes'):
+                module.routes(self)
+
+
+        @self.app.route("/")
+        def main():
+            pass
+    
+        #
+        # Utility routes
+        #
+        @self.app.route("/upload/video")
+        def upload_vieo():
+            pass
+
+        @self.app.route("/upload/image")
+        def upload_image():
+            pass
+
+        @self.app.route("/upload/audio")
+        def upload_audio():
+            pass
+
+        @self.app.route("/stream/audio")
+        def stream_audio():
+            pass
+
+        @self.app.route("/stream/video")
+        def stream_video():
+            pass
 
 
 def main():
