@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-
+import sys
 import torch
 from diffusers import FluxPipeline
 from flask import request
@@ -17,9 +17,45 @@ def pil_to_base64_png(img):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def capture_progress():
-    yield
+class SocketIOBuffer:
+    def __init__(self, push, stdout=None):
+        self.prev = []
+        self.push = push
 
+    def write(self, msg):
+        msg = msg.replace("\x1b[A", "\n").replace("\r", "\n")
+
+        if "\n" not in msg:
+            self.prev.append(msg)
+        else:
+            head, _, tail = msg.partition("\n")
+            self.prev.append(head)
+            line = "".join(self.prev)
+            self.push(line)
+
+            self.prev = []
+            self.write(tail)
+            
+
+    def flush(self):
+        pass
+
+
+@contextmanager
+def capture_progress(app):
+    old_out = sys.stdout
+    old_err = sys.stderr 
+
+    if not isinstance(sys.stdout, SocketIOBuffer):
+        sys.stdout = SocketIOBuffer(push=lambda line: app.message("log", line))
+        sys.stderr = SocketIOBuffer(push=lambda line: app.message("log", line))
+
+        yield
+
+        sys.stdout = old_out
+        sys.stderr = old_err
+    else:
+        yield
 
 
 cached_pipeline = {}
@@ -76,15 +112,17 @@ def routes(app: ASSAI, db):
 
         data = request.get_json()
         prompt = data.pop("prompt")
+        session_id = data.pop("session_id")
 
         @cached("t2i")
         def load():
-            pipe = FluxPipeline.from_pretrained(
-                model,
-                torch_dtype=torch.bfloat16,
-                device_map="cuda"
-            )
-            return pipe
+            with capture_progress(app):
+                pipe = FluxPipeline.from_pretrained(
+                    model,
+                    torch_dtype=torch.bfloat16,
+                    device_map="cuda"
+                )
+                return pipe
 
         generation_args = {
             "height": 256,
@@ -93,15 +131,18 @@ def routes(app: ASSAI, db):
             "num_inference_steps": 50,
             "max_sequence_length": 512,
             "generator": torch.Generator(accelerator.device_type).manual_seed(data.pop("seed", 0))
-        }
+        } 
 
         generation_args.update(data)
 
-        output: FluxPipelineOutput = load()(prompt,
-            # callback_on_step_end_tensor_inputs=[],
-            # callback_on_step_end=self.on_step,
-            **generation_args
-        )
+        pipe = load()
+
+        with capture_progress(app):
+            output: FluxPipelineOutput = pipe(prompt,
+                # callback_on_step_end_tensor_inputs=[],
+                # callback_on_step_end=self.on_step,
+                **generation_args
+            )
 
         return [f"data:image/png;base64,{pil_to_base64_png(image)}" for image in output.images]
 

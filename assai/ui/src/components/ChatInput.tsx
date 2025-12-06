@@ -91,7 +91,6 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
             _dark={{ bg: 'gray.900' }}
             borderTop="1px solid"
             borderColor="gray.200"
-            _dark={{ borderColor: 'gray.700' }}
             py={4}
             px={4}
         >
@@ -161,7 +160,6 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
                             borderRadius="xl"
                             border="1px solid"
                             borderColor="gray.300"
-                            _dark={{ borderColor: 'gray.600' }}
                             _focusWithin={{
                                 borderColor: 'green.500',
                                 boxShadow: '0 0 0 1px var(--chakra-colors-green-500)'

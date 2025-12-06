@@ -15,6 +15,12 @@ export default defineConfig({
         target: 'http://localhost:5001',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
+      },
+      // Proxy WebSocket connections to Flask-SocketIO server
+      '/socket.io': {
+        target: 'http://localhost:5001',
+        ws: true,
+        changeOrigin: true,
       }
     }
   },

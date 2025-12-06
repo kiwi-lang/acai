@@ -4,6 +4,7 @@ import importlib
 import traceback
 from dataclasses import dataclass
 from typing import Optional
+import multiprocessing as mp
 # import importlib_resources
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -83,11 +84,14 @@ class Telemetry:
 
 
 class ASSAI:
+    def message(self, kind, message):
+        self.socketio.emit(kind, message)
+
     def __init__(self):
         print(STATIC_FOLDER)
         self.app = Flask(__name__, static_folder=STATIC_FOLDER)
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
-
+        # self.socketio.init_app(self.app)
         import assai.models
 
         models = discover_plugins(assai.models)
@@ -96,15 +100,13 @@ class ASSAI:
             if hasattr(module, 'routes'):
                 module.routes(self, None)
 
-        from voir.instruments.cpu import cpu_monitor 
+        from voir.instruments.cpu import cpu_monitor
         from voir.instruments.gpu import select_backend, gpu_monitor
 
         self.cpu_fn = cpu_monitor()
         select_backend()
         self.gpu_fn = gpu_monitor()
-
-        def message(self, kind, message):
-            self.socketio.emit(kind, message)
+        self.n_cpu = mp.cpu_count()
 
         # WebSocket connection handler
         @self.socketio.on('connect')
@@ -128,6 +130,10 @@ class ASSAI:
         @self.app.route("/")
         def main():
             pass
+
+        @self.app.route("/conversations")
+        def convo():
+            return []
 
         #
         # Utility routes
@@ -167,9 +173,15 @@ class ASSAI:
         @self.app.route("/telemetry")
         def telemetry() -> Telemetry:
             """Use voir to fetch system usage (GPU & CPU & RAM)"""
-            return {"cpu": self.cpu_fn(), "gpu": self.gpu_fn()}
+            cpu = self.cpu_fn()
+            cpu["load"] = cpu["load"] / self.n_cpu
+            return {"cpu": cpu, "gpu": self.gpu_fn()}
 
 
 def main():
     server = ASSAI()
+    # Return app for Flask CLI compatibility
+    # For threading support, use: python -m assai.server instead of flask run
+    # socketio.run() handles concurrent requests properly, allowing telemetry
+    # to work even during long-running image generation requests
     return server.app

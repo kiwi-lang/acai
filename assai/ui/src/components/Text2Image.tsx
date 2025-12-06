@@ -10,6 +10,7 @@ import {
 } from '@chakra-ui/react';
 import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
+import LogDisplay from './LogDisplay';
 import { Message } from '../services/types';
 import { assaiAPI, ImageGenerationParams } from '../services/api';
 import { websocketService, WebSocketMessage } from '../services/websocket';
@@ -155,16 +156,31 @@ const Text2Image = () => {
         setGenerationProgress(0);
 
         try {
-            // Get session ID from WebSocket service
+            // Get session ID from WebSocket service (for future WebSocket support)
             const sessionId = websocketService.getSessionId();
 
             // Generate image from prompt with current generation parameters
-            // Backend will send WebSocket messages for progress updates
-            // The final result will be handled by the WebSocket 'generation_complete' event
-            await assaiAPI.generateImage(content.trim(), generationParams, undefined, sessionId || undefined);
+            const imageDataUris = await assaiAPI.generateImage(content.trim(), generationParams, undefined, sessionId || undefined);
 
-            // Note: The actual image will be added via WebSocket 'generation_complete' event
-            // If WebSocket fails, we fall back to the HTTP response
+            // Handle HTTP response directly (backend currently doesn't send WebSocket messages)
+            if (imageDataUris && imageDataUris.length > 0) {
+                const imageUrl = imageDataUris[0];
+                const assistantMessage: Message = {
+                    id: (Date.now() + 1).toString(),
+                    role: 'assistant',
+                    content: `Generated image for: "${content.trim()}"`,
+                    timestamp: new Date(),
+                    type: 'image',
+                    imageUrl,
+                };
+                setMessages(prev => [...prev, assistantMessage]);
+            } else {
+                throw new Error('No image data received from server');
+            }
+
+            setIsLoading(false);
+            setStatusMessage('');
+            setGenerationProgress(0);
         } catch (error) {
             console.error('Failed to generate image:', error);
             const errorMessage = error instanceof Error ? error.message : 'Failed to generate image';
@@ -277,15 +293,18 @@ const Text2Image = () => {
             display="flex"
             flexDirection="column"
             h="100vh"
+            minH="100vh"
             w="100%"
             bg="white"
             _dark={{ bg: 'gray.900' }}
+            overflow="hidden"
         >
             {/* Messages Area */}
             <Box
                 flex={1}
                 overflowY="auto"
                 w="100%"
+                minH={0}
             >
                 {messages.length === 0 ? (
                     <EmptyState />
@@ -509,11 +528,16 @@ const Text2Image = () => {
             </Box>
 
             {/* Input Area */}
-            <ChatInput
-                onSendMessage={handleSendMessage}
-                disabled={isLoading}
-                placeholder={messages.length === 0 ? "Describe the image you want to generate..." : "Describe another image..."}
-            />
+            <Box pb={{ base: 0, md: 0 }}>
+                <ChatInput
+                    onSendMessage={handleSendMessage}
+                    disabled={isLoading}
+                    placeholder={messages.length === 0 ? "Describe the image you want to generate..." : "Describe another image..."}
+                />
+            </Box>
+
+            {/* Log Display - Pushes content up */}
+            <LogDisplay />
         </Box>
     );
 };

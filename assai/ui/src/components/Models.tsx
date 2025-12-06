@@ -24,7 +24,6 @@ const ModelCard = ({ model }: { model: ModelPlugin }) => {
             borderRadius="lg"
             border="1px solid"
             borderColor="gray.200"
-            _dark={{ borderColor: 'gray.700' }}
             _hover={{
                 shadow: 'lg',
                 borderColor: 'green.300',

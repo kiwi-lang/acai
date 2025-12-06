@@ -110,7 +110,6 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                             borderColor="gray.200"
                             _dark={{ borderColor: 'gray.700' }}
                             bg="gray.50"
-                            _dark={{ bg: 'gray.800' }}
                             p={2}
                         >
                             <Box

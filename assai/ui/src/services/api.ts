@@ -9,16 +9,38 @@ class AssAI_API {
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     // Development mode - make actual API calls
     const url = `${API_BASE_URL}${endpoint}`;
+
+    // Only add timeout for telemetry requests (500ms)
+    // All other routes have no timeout
+    const isTelemetry = endpoint === '/telemetry';
+    const timeout = isTelemetry ? 1000 : null;
+
+    let controller: AbortController | null = null;
+    let timeoutId: NodeJS.Timeout | null = null;
+
+    // Only create timeout controller for telemetry
+    if (timeout !== null) {
+      controller = new AbortController();
+      timeoutId = setTimeout(() => controller!.abort(), timeout);
+    }
+
+    // Use provided signal if available, otherwise use our timeout controller (if created)
+    const signal = options.signal || (controller ? controller.signal : undefined);
+
     const config: RequestInit = {
       headers: {
         'Content-Type': 'application/json',
         ...options.headers,
       },
       ...options,
+      ...(signal && { signal }),
     };
 
     try {
       const response = await fetch(url, config);
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -27,6 +49,19 @@ class AssAI_API {
 
       return await response.json();
     } catch (error) {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+      }
+      if (error instanceof Error && error.name === 'AbortError') {
+        // Don't throw for aborted requests - they're expected when cancelling
+        // Only throw timeout errors if it was our timeout (not user cancellation)
+        if (timeout !== null && controller && controller.signal.aborted) {
+          console.error(`API request timeout after ${timeout}ms:`, endpoint);
+          throw new Error(`Request timeout after ${timeout}ms`);
+        }
+        // If aborted but not by our timeout, it's a cancellation - rethrow as-is
+        throw error;
+      }
       console.error('API request failed:', error);
       throw error;
     }
@@ -122,11 +157,12 @@ class AssAI_API {
   }
 
   // Telemetry endpoint
-  async getTelemetry(): Promise<{
+  async getTelemetry(signal?: AbortSignal): Promise<{
     cpu: { memory: [number, number]; load: number };
     gpu: Record<string, { memory: [number, number]; load: number; temp: number; power: number }>;
   }> {
-    return this.request('/telemetry');
+    console.log("HERE telemetry call");
+    return this.request('/telemetry', { signal });
   }
 }
 

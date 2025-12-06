@@ -34,28 +34,43 @@ class WebSocketService {
         }
 
         // Determine WebSocket URL based on environment
-        const wsUrl = import.meta.env.VITE_WS_URL || window.location.origin;
+        // Default to Flask server port 5001, or use environment variable
+        let wsUrl = import.meta.env.VITE_WS_URL;
+        if (!wsUrl) {
+            // In development, connect directly to Flask server on port 5001
+            // Use same hostname and protocol as the current page
+            const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+            const hostname = window.location.hostname;
+            wsUrl = `${protocol}//${hostname}:5001`;
+        }
+
+        console.log('[WebSocket] Connecting to:', wsUrl);
 
         this.socket = io(wsUrl, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
             reconnectionAttempts: 5,
+            autoConnect: true,
         });
 
         this.socket.on('connect', () => {
-            console.log('WebSocket connected');
+            console.log('[WebSocket] Connected successfully');
             // Generate a unique session ID
             this.sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
             // Join the session room
             if (this.sessionId) {
-                this.socket?.emit('join_session', { session_id: this.sessionId });
+                this.socket?.emit('join_session', { session_id: this.sessionId }, (response: any) => {
+                    if (response?.status === 'joined') {
+                        console.log('[WebSocket] Joined session:', this.sessionId);
+                    }
+                });
             }
         });
 
-        this.socket.on('disconnect', () => {
-            console.log('WebSocket disconnected');
+        this.socket.on('disconnect', (reason) => {
+            console.log('[WebSocket] Disconnected:', reason);
         });
 
         this.socket.on('text2image_update', (message: WebSocketMessage) => {
@@ -72,8 +87,23 @@ class WebSocketService {
             }
         });
 
+        // Listen for direct log events from backend
+        this.socket.on('log', (message: string) => {
+            // Emit a custom event that LogDisplay can listen to
+            // We'll handle this directly in the component for simplicity
+        });
+
         this.socket.on('connect_error', (error) => {
-            console.error('WebSocket connection error:', error);
+            console.error('[WebSocket] Connection error:', error.message);
+            console.error('[WebSocket] Error details:', error);
+        });
+
+        this.socket.on('reconnect_attempt', (attemptNumber) => {
+            console.log(`[WebSocket] Reconnection attempt ${attemptNumber}`);
+        });
+
+        this.socket.on('reconnect_failed', () => {
+            console.error('[WebSocket] Reconnection failed after all attempts');
         });
     }
 
@@ -91,6 +121,10 @@ class WebSocketService {
 
     isConnected(): boolean {
         return this.socket?.connected || false;
+    }
+
+    getSocket(): Socket | null {
+        return this.socket;
     }
 
     on(messageType: WebSocketMessageType | '*', callback: (message: WebSocketMessage) => void): () => void {
