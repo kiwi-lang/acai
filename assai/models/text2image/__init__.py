@@ -6,6 +6,7 @@ import time
 import base64
 from io import BytesIO
 from threading import Lock
+import threading
 
 import torch
 from diffusers import FluxPipeline
@@ -13,90 +14,7 @@ from flask import request
 from contextlib import contextmanager
 import torchcompat.core as accelerator
 
-from assai.tools import namespaced_route
-
-def pil_to_base64_png(img):
-    buffer = BytesIO()
-    img.save(buffer, format="PNG")
-    return base64.b64encode(buffer.getvalue()).decode("ascii")
-
-
-original_stdout = sys.stdout
-
-
-class SocketIOBuffer:
-    def __init__(self, push, stdout=None):
-        self.prev = []
-        self.push = push
-
-    def write(self, msg):
-        msg = msg.replace("\x1b[A", "\n").replace("\r", "\n")
-
-        if "\n" not in msg:
-            self.prev.append(msg)
-        else:
-            head, _, tail = msg.partition("\n")
-            self.prev.append(head)
-            line = "".join(self.prev)
-
-            if line != "":
-                self.push(line)
-
-            self.prev = []
-            self.write(tail)
-            
-    def flush(self):
-        pass
-
-
-socket_io_lock = Lock()
-
-
-@contextmanager
-def capture_progress(app, action_id=0):
-    global socket_io_lock
-
-    old_out = sys.stdout
-    old_err = sys.stderr 
-    was_replaced = False
-
-    with socket_io_lock:
-        if not isinstance(sys.stdout, SocketIOBuffer):
-            sys.stdout = SocketIOBuffer(push=lambda line: app.message("stdout", {"id": action_id, "line": line}))
-            sys.stderr = SocketIOBuffer(push=lambda line: app.message("stderr", {"id": action_id, "line": line}))
-            was_replaced = True
-
-    yield
-
-    if was_replaced:
-        with socket_io_lock:
-            sys.stdout = old_out
-            sys.stderr = old_err
-
-cached_pipeline = {}
-
-_LOADING = object()
-
-
-def cached(key):
-    global cached_pipeline
-
-    def decorator(fun):
-        def _(*args, **kwargs):
-            if pipe := cached_pipeline.get(key): 
-                if pipe is _LOADING:
-                    raise RuntimeError("Pipe already loading")
- 
-                return pipe
-            
-            cached_pipeline[key] = _LOADING
-            pipe = fun(*args, **kwargs)
-            cached_pipeline[key] = pipe
-            return pipe
-
-        return _
-
-    return decorator
+from assai.tools import namespaced_route, capture_progress_thread, pil_to_base64_png, cached, websocket_pusher
 
 
 def routes(app: ASSAI, db):
@@ -119,12 +37,58 @@ def routes(app: ASSAI, db):
     def delete_model_t2i(name):
         """Delete a local model"""
 
-    @route("/model/list>")
+    @route("/model/list")
     def list_model_t2i(name):
         """List local models the user can choose from"""
         return [
             default_model,
         ]
+
+    @route("/model/settings")
+    @route("/model/settings/<string:name>")
+    def model_settings(name=default_model):
+        return {
+            "height": {
+                "type": int,
+                "min": 32,
+                "max": None,
+                "default": 256
+            },
+            "width": {
+                "type": int,
+                "min": 32,
+                "max": None,
+                "default": 256
+            },
+            "guidance_scale": {
+                "type": float,
+                "default": 2.5
+            },
+            "num_inference_steps": {
+                "type": int,
+                "min": 1,
+                "max": None,
+                "default": 25
+            },
+            "max_sequence_length": {
+                "type": int,
+                "min": None,
+                "max": 512,
+                "default": 512
+            },
+            "num_images_per_prompt": {
+                "type": int,
+                "min": 1,
+                "max": None,
+                "default": 1
+            },
+            "generator": {
+                "type": int,
+                "min": None,
+                "max": None,
+                "default": 256
+            }
+        }
 
     @route("/model/run", methods=['POST'])
     @route("/model/run/<string:model>", methods=['POST'])
@@ -136,9 +100,11 @@ def routes(app: ASSAI, db):
         session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
 
+        pusher = websocket_pusher(app, action_id)
+
         @cached("t2i")
         def load():
-            with capture_progress(app, action_id):
+            with capture_progress_thread(pusher, action_id):
                 pipe = FluxPipeline.from_pretrained(
                     model,
                     torch_dtype=torch.bfloat16,
@@ -166,7 +132,7 @@ def routes(app: ASSAI, db):
 
         pipe = load()
 
-        with capture_progress(app, action_id):
+        with capture_progress_thread(pusher, action_id):
             output: FluxPipelineOutput = pipe(prompt,
                 # callback_on_step_end_tensor_inputs=[],
                 # callback_on_step_end=self.on_step,
