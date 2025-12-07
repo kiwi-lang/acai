@@ -103,7 +103,7 @@ class ASSAI:
         print(STATIC_FOLDER)
         self.app = Flask(__name__, static_folder=STATIC_FOLDER)
         self.app.json = CustomJSONProvider(self.app)
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
+        self.socketio = SocketIO(self.app, cors_allowed_origins="*")
         # self.socketio.init_app(self.app)
         import assai.models
 
@@ -193,8 +193,10 @@ class ASSAI:
 
 def main():
     server = ASSAI()
-    # Return app for Flask CLI compatibility
-    # For threading support, use: python -m assai.server instead of flask run
-    # socketio.run() handles concurrent requests properly, allowing telemetry
-    # to work even during long-running image generation requests
     return server.app
+
+
+
+if __name__ == "__main__":
+    server = ASSAI()
+    server.socketio.run(server.app, host="0.0.0.0", port=5001, debug=True)

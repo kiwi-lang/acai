@@ -336,33 +336,53 @@ const HuggingFaceModels = () => {
                     borderColor="gray.700"
                     overflow="hidden"
                 >
-                    <Table.Root variant="outline" size="md" striped colorPalette="gray">
-                        <Table.Header bg="gray.700">
-                            <Table.Row>
-                                <Table.ColumnHeader color="gray.300" bg="gray.700">Model Name</Table.ColumnHeader>
-                                <Table.ColumnHeader color="gray.300" bg="gray.700">Type</Table.ColumnHeader>
-                                <Table.ColumnHeader color="gray.300" bg="gray.700">Size</Table.ColumnHeader>
-                                <Table.ColumnHeader color="gray.300" bg="gray.700">Files</Table.ColumnHeader>
-                                <Table.ColumnHeader color="gray.300" bg="gray.700">Revisions</Table.ColumnHeader>
-                                <Table.ColumnHeader color="gray.300" bg="gray.700">Last Accessed</Table.ColumnHeader>
-                                <Table.ColumnHeader color="gray.300" bg="gray.700" w="80px">Actions</Table.ColumnHeader>
+                    <Table.Root variant="line" size="md" colorPalette="gray" css={{
+                        '& th, & td': {
+                            borderColor: 'var(--chakra-colors-gray-700) !important',
+                        },
+                    }}>
+                        <Table.Header bg="gray.800">
+                            <Table.Row bg="gray.800">
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700" pl={6}>
+                                    Model Name
+                                </Table.ColumnHeader>
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
+                                    Type
+                                </Table.ColumnHeader>
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
+                                    Size
+                                </Table.ColumnHeader>
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
+                                    Files
+                                </Table.ColumnHeader>
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
+                                    Revisions
+                                </Table.ColumnHeader>
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
+                                    Last Accessed
+                                </Table.ColumnHeader>
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700" w="80px">
+                                    Actions
+                                </Table.ColumnHeader>
                             </Table.Row>
                         </Table.Header>
                         <Table.Body>
-                            {repos.map((repo, index) => {
+                            {repos.map((repo) => {
                                 const revisionCount = Object.keys(repo.revisions || {}).length;
                                 const lastAccessed = repo.last_accessed
                                     ? new Date(repo.last_accessed * 1000).toLocaleDateString()
                                     : 'Never';
-                                const isEven = index % 2 === 0;
 
                                 return (
                                     <Table.Row
                                         key={repo.repo_id}
-                                        bg={isEven ? "gray.800" : "gray.700"}
-                                        _hover={{ bg: "gray.600" }}
+                                        bg="gray.900"
+                                        _hover={{
+                                            bg: "gray.800",
+                                        }}
+                                        transition="all 0.2s"
                                     >
-                                        <Table.Cell bg={isEven ? "gray.800" : "gray.700"}>
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700" pl={6}>
                                             <Text
                                                 fontWeight="medium"
                                                 color="white"
@@ -371,7 +391,7 @@ const HuggingFaceModels = () => {
                                                 {repo.repo_id}
                                             </Text>
                                         </Table.Cell>
-                                        <Table.Cell bg={isEven ? "gray.800" : "gray.700"}>
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
                                             <Badge
                                                 colorScheme={
                                                     repo.repo_type === 'model' ? 'blue' :
@@ -381,31 +401,32 @@ const HuggingFaceModels = () => {
                                                 fontSize="xs"
                                                 px={2}
                                                 py={1}
+                                                variant="solid"
                                             >
                                                 {repo.repo_type || 'model'}
                                             </Badge>
                                         </Table.Cell>
-                                        <Table.Cell bg={isEven ? "gray.800" : "gray.700"}>
-                                            <Text color="gray.200">
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
+                                            <Text color="gray.300">
                                                 {formatBytes(repo.size_on_disk)}
                                             </Text>
                                         </Table.Cell>
-                                        <Table.Cell bg={isEven ? "gray.800" : "gray.700"}>
-                                            <Text color="gray.200">
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
+                                            <Text color="gray.300">
                                                 {repo.nb_files}
                                             </Text>
                                         </Table.Cell>
-                                        <Table.Cell bg={isEven ? "gray.800" : "gray.700"}>
-                                            <Text color="gray.200">
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
+                                            <Text color="gray.300">
                                                 {revisionCount}
                                             </Text>
                                         </Table.Cell>
-                                        <Table.Cell bg={isEven ? "gray.800" : "gray.700"}>
-                                            <Text color="gray.200">
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
+                                            <Text color="gray.300">
                                                 {lastAccessed}
                                             </Text>
                                         </Table.Cell>
-                                        <Table.Cell bg={isEven ? "gray.800" : "gray.700"}>
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
                                             <IconButton
                                                 aria-label="Delete model"
                                                 size="sm"
