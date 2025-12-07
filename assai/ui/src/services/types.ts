@@ -6,7 +6,8 @@ export interface Message {
     content: string;
     timestamp: Date;
     type?: 'text' | 'image' | 'audio';
-    imageUrl?: string;
+    imageUrl?: string; // Single image URL (for backward compatibility)
+    imageUrls?: string[]; // Multiple image URLs
     audioUrl?: string;
     retryPrompt?: string; // Store the prompt for retry functionality
     actionId?: number; // Action ID for linking logs to this message

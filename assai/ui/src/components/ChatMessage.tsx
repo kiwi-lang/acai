@@ -1,4 +1,4 @@
-import { Box, HStack, VStack, Text, Button } from '@chakra-ui/react';
+import { Box, HStack, VStack, Text, Button, Spinner } from '@chakra-ui/react';
 import { useEffect, useRef } from 'react';
 import { Message } from '../services/types';
 
@@ -56,8 +56,7 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
     return (
         <Box
             w="100%"
-            bg={isUser ? 'transparent' : 'gray.50'}
-            _dark={{ bg: isUser ? 'transparent' : 'gray.800' }}
+            bg={isUser ? 'transparent' : 'gray.800'}
             py={6}
             px={4}
         >
@@ -72,14 +71,18 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
 
                 {/* Message Content */}
                 <VStack align="flex-start" flex={1} gap={2}>
-                    <Text
-                        fontWeight="semibold"
-                        fontSize="sm"
-                        color={isUser ? 'purple.600' : 'green.600'}
-                        _dark={{ color: isUser ? 'purple.300' : 'green.300' }}
-                    >
-                        {isUser ? 'You' : 'Assistant'}
-                    </Text>
+                    <HStack gap={2} align="center">
+                        <Text
+                            fontWeight="semibold"
+                            fontSize="sm"
+                            color={isUser ? 'purple.300' : 'green.300'}
+                        >
+                            {isUser ? 'You' : 'Assistant'}
+                        </Text>
+                        {!isUser && message.isGenerating && (
+                            <Spinner size="xs" color="green.300" />
+                        )}
+                    </HStack>
 
                     {/* Text Content */}
                     {message.content && (
@@ -89,8 +92,7 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                                 lineHeight="1.75"
                                 whiteSpace="pre-wrap"
                                 wordBreak="break-word"
-                                color={isError ? 'red.600' : undefined}
-                                _dark={{ color: isError ? 'red.400' : undefined }}
+                                color={isError ? 'red.400' : 'gray.200'}
                             >
                                 {message.content}
                             </Text>
@@ -157,55 +159,69 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                     )}
 
                     {/* Image Content */}
-                    {message.imageUrl && (
+                    {(message.imageUrls && message.imageUrls.length > 0) || message.imageUrl ? (
                         <Box
-                            borderRadius="md"
-                            overflow="hidden"
-                            maxW="100%"
+                            display="flex"
+                            flexWrap="wrap"
+                            gap={4}
                             mt={2}
-                            border="1px solid"
-                            borderColor="gray.200"
-                            _dark={{ borderColor: 'gray.700' }}
-                            bg="gray.50"
-                            p={2}
+                            w="100%"
                         >
-                            <Box
-                                borderRadius="md"
-                                overflow="hidden"
-                                display="flex"
-                                justifyContent="center"
-                                alignItems="center"
-                                bg="white"
-                                _dark={{ bg: 'gray.900' }}
-                            >
-                                <img
-                                    src={message.imageUrl}
-                                    alt="Generated content"
-                                    style={{
-                                        maxWidth: '100%',
-                                        height: 'auto',
-                                        display: 'block',
-                                        maxHeight: '600px',
-                                        objectFit: 'contain'
-                                    }}
-                                />
-                            </Box>
-                            <HStack justify="flex-end" mt={2}>
-                                <Button
-                                    size="xs"
-                                    variant="outline"
-                                    onClick={() => {
-                                        const link = document.createElement('a');
-                                        link.href = message.imageUrl!;
-                                        link.download = `generated-image-${Date.now()}.png`;
-                                        link.click();
-                                    }}
+                            {(message.imageUrls || (message.imageUrl ? [message.imageUrl] : [])).map((imageUrl, index) => (
+                                <Box
+                                    key={index}
+                                    borderRadius="md"
+                                    overflow="hidden"
+                                    flex="1 1 auto"
+                                    minW="200px"
+                                    maxW="100%"
+                                    border="1px solid"
+                                    borderColor="gray.700"
+                                    bg="gray.800"
+                                    p={2}
                                 >
-                                    Download
-                                </Button>
-                            </HStack>
+                                    <Box
+                                        borderRadius="md"
+                                        overflow="hidden"
+                                        display="flex"
+                                        justifyContent="center"
+                                        alignItems="center"
+                                        bg="gray.900"
+                                    >
+                                        <img
+                                            src={imageUrl}
+                                            alt={`Generated image ${index + 1}`}
+                                            style={{
+                                                maxWidth: '100%',
+                                                height: 'auto',
+                                                display: 'block',
+                                                maxHeight: '600px',
+                                                objectFit: 'contain'
+                                            }}
+                                        />
+                                    </Box>
+                                    <HStack justify="flex-end" mt={2}>
+                                        <Button
+                                            size="xs"
+                                            variant="outline"
+                                            onClick={() => {
+                                                const link = document.createElement('a');
+                                                link.href = imageUrl;
+                                                link.download = `generated-image-${Date.now()}-${index + 1}.png`;
+                                                link.click();
+                                            }}
+                                            padding="5px"
+                                            color="gray.200"
+                                            borderColor="gray.600"
+                                            _hover={{ bg: 'gray.700', borderColor: 'gray.500' }}
+                                        >
+                                            Download
+                                        </Button>
+                                    </HStack>
+                                </Box>
+                            ))}
                         </Box>
-                    )}
+                    ) : null}
 
                     {/* Audio Content */}
                     {message.audioUrl && (

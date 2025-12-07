@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import os
 import sys
+import time
+import base64
+from io import BytesIO
+from threading import Lock
+
 import torch
 from diffusers import FluxPipeline
 from flask import request
 from contextlib import contextmanager
-from assai.tools import namespaced_route
 import torchcompat.core as accelerator
-import base64
-from io import BytesIO
-from threading import Lock
+
+from assai.tools import namespaced_route
 
 def pil_to_base64_png(img):
     buffer = BytesIO()
@@ -72,15 +75,21 @@ def capture_progress(app, action_id=0):
 
 cached_pipeline = {}
 
+_LOADING = object()
+
 
 def cached(key):
     global cached_pipeline
 
     def decorator(fun):
         def _(*args, **kwargs):
-            if pipe := cached_pipeline.get(key):
+            if pipe := cached_pipeline.get(key): 
+                if pipe is _LOADING:
+                    raise RuntimeError("Pipe already loading")
+ 
                 return pipe
-
+            
+            cached_pipeline[key] = _LOADING
             pipe = fun(*args, **kwargs)
             cached_pipeline[key] = pipe
             return pipe
@@ -124,7 +133,7 @@ def routes(app: ASSAI, db):
 
         data = request.get_json()
         prompt = data.pop("prompt")
-        session_id = data.pop("session_id")
+        session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
 
         @cached("t2i")
@@ -137,13 +146,20 @@ def routes(app: ASSAI, db):
                 )
                 return pipe
 
+
+        def seed():
+            if seed := data.pop("seed"):
+                return seed
+            return int(time.time() * 1000)
+
         generation_args = {
             "height": 256,
             "width": 256,
             "guidance_scale": 3.5,
             "num_inference_steps": 50,
             "max_sequence_length": 512,
-            "generator": torch.Generator(accelerator.device_type).manual_seed(data.pop("seed", 0))
+            "num_images_per_prompt": 5,
+            "generator": torch.Generator(accelerator.device_type).manual_seed(seed())
         } 
 
         generation_args.update(data)

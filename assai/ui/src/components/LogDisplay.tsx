@@ -1,6 +1,6 @@
-import { useState, useEffect, useRef } from 'react';
-import { Box, VStack, HStack, Text, IconButton, Button } from '@chakra-ui/react';
-import { websocketService } from '../services/websocket';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { Box, VStack, HStack, Text, Button } from '@chakra-ui/react';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 interface LogDisplayProps {
     isVisible?: boolean;
@@ -27,94 +27,129 @@ const XIcon = () => (
     </svg>
 );
 
-const LogDisplay = ({ isVisible = true, onToggle, clearOnNewRequest = false }: LogDisplayProps) => {
-    const [logs, setLogs] = useState<string[]>([]);
-    const [isCollapsed, setIsCollapsed] = useState(false);
+interface LogEntry {
+    line: string;
+    source?: 'stdout' | 'stderr';
+    actionId?: number;
+    timestamp: Date;
+}
+
+const LogDisplay = ({ isVisible = true, onToggle }: LogDisplayProps) => {
+    const { socket } = useWebSocket();
+    const [logs, setLogs] = useState<LogEntry[]>([]);
+    const [isCollapsed, setIsCollapsed] = useState(true);
     const logsEndRef = useRef<HTMLDivElement>(null);
     const autoScrollRef = useRef<boolean>(true);
-    const prevRequestIdRef = useRef<string | null>(null);
 
     // Expose clearLogs function via ref for parent components
     const clearLogs = () => {
         setLogs([]);
     };
 
+    // Memoize handlers to prevent duplicate listeners
+    const handleStdout = useCallback((data: { id: number; line: string }) => {
+        setLogs(prev => {
+            const updated = [...prev, {
+                line: data.line,
+                source: 'stdout' as const,
+                actionId: data.id,
+                timestamp: new Date()
+            }];
+            // Keep only last 500 lines to prevent memory issues
+            return updated.slice(-500);
+        });
+    }, []);
+
+    const handleStderr = useCallback((data: { id: number; line: string }) => {
+        setLogs(prev => {
+            const updated = [...prev, {
+                line: data.line,
+                source: 'stderr' as const,
+                actionId: data.id,
+                timestamp: new Date()
+            }];
+            // Keep only last 500 lines to prevent memory issues
+            return updated.slice(-500);
+        });
+    }, []);
+
+    // Also listen for legacy 'log' events for backward compatibility
+    const handleLog = useCallback((message: string) => {
+        setLogs(prev => {
+            const updated = [...prev, {
+                line: message,
+                timestamp: new Date()
+            }];
+            return updated.slice(-500);
+        });
+    }, []);
+
     useEffect(() => {
-        // Listen for log events from WebSocket
-        const handleLog = (message: string) => {
-            setLogs(prev => {
-                const updated = [...prev, message];
-                // Keep only last 500 lines to prevent memory issues
-                return updated.slice(-500);
-            });
-        };
-
-        // Ensure WebSocket is connected
-        websocketService.connect();
-
-        // Set up WebSocket listener for 'log' events
-        const setupListener = () => {
-            const socket = websocketService.getSocket();
-            if (socket && socket.connected) {
-                socket.on('log', handleLog);
-                return true;
-            }
-            return false;
-        };
-
-        // Try to set up listener immediately
-        if (!setupListener()) {
-            // If socket is not ready yet, wait for connection
-            const checkConnection = setInterval(() => {
-                if (setupListener()) {
-                    clearInterval(checkConnection);
-                }
-            }, 100);
-
-            // Also listen for connect event
-            const socket = websocketService.getSocket();
-            if (socket) {
-                const onConnect = () => {
-                    setupListener();
-                };
-                socket.on('connect', onConnect);
-
-                return () => {
-                    clearInterval(checkConnection);
-                    socket.off('connect', onConnect);
-                    socket.off('log', handleLog);
-                };
-            }
-
-            return () => {
-                clearInterval(checkConnection);
-                const socket = websocketService.getSocket();
-                if (socket) {
-                    socket.off('log', handleLog);
-                }
-            };
+        if (!socket) {
+            return;
         }
 
+        // Set up WebSocket listeners
+        socket.off('stdout', handleStdout);
+        socket.off('stderr', handleStderr);
+        socket.off('log', handleLog);
+        socket.on('stdout', handleStdout);
+        socket.on('stderr', handleStderr);
+        socket.on('log', handleLog);
+
         return () => {
-            const socket = websocketService.getSocket();
             if (socket) {
+                socket.off('stdout', handleStdout);
+                socket.off('stderr', handleStderr);
                 socket.off('log', handleLog);
             }
         };
-    }, []);
+    }, [socket, handleStdout, handleStderr, handleLog]);
 
-    // Auto-scroll to bottom when new logs arrive
+    const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+    // Auto-scroll to bottom when new logs arrive, but only if user is already at bottom
     useEffect(() => {
-        if (autoScrollRef.current && logsEndRef.current && !isCollapsed) {
-            logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+        if (!isCollapsed && logsEndRef.current && scrollContainerRef.current) {
+            const container = scrollContainerRef.current;
+            // Check if user is currently at bottom (within 10px threshold)
+            const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 10;
+
+            // Update the ref
+            autoScrollRef.current = isAtBottom;
+
+            // Only scroll if user is at bottom
+            if (isAtBottom) {
+                logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
+            }
         }
     }, [logs, isCollapsed]);
 
     const handleScroll = (e: React.UIEvent<HTMLDivElement>) => {
         const target = e.currentTarget;
+        // Check if user is at bottom (within 10px threshold)
         const isAtBottom = target.scrollHeight - target.scrollTop <= target.clientHeight + 10;
         autoScrollRef.current = isAtBottom;
     };
+
+    // When component expands, scroll to bottom if it was already at bottom
+    useEffect(() => {
+        if (!isCollapsed && scrollContainerRef.current && logs.length > 0) {
+            // Small delay to ensure DOM is updated
+            setTimeout(() => {
+                const container = scrollContainerRef.current;
+                if (container) {
+                    // Check current scroll position
+                    const isAtBottom = container.scrollHeight - container.scrollTop <= container.clientHeight + 10;
+                    autoScrollRef.current = isAtBottom;
+                    // If at bottom (or very close), scroll to bottom
+                    if (isAtBottom && logsEndRef.current) {
+                        logsEndRef.current.scrollIntoView({ behavior: 'auto' });
+                    }
+                }
+            }, 100);
+        }
+    }, [isCollapsed, logs.length]);
 
     if (!isVisible) {
         return null;
@@ -175,6 +210,7 @@ const LogDisplay = ({ isVisible = true, onToggle, clearOnNewRequest = false }: L
 
             {!isCollapsed && (
                 <Box
+                    ref={scrollContainerRef}
                     h="260px"
                     overflowY="auto"
                     p={2}
@@ -204,15 +240,33 @@ const LogDisplay = ({ isVisible = true, onToggle, clearOnNewRequest = false }: L
                             </Text>
                         ) : (
                             logs.map((log, index) => (
-                                <Text
-                                    key={index}
-                                    color="gray.300"
-                                    whiteSpace="pre-wrap"
-                                    wordBreak="break-word"
-                                    lineHeight="1.5"
-                                >
-                                    {log}
-                                </Text>
+                                <HStack key={index} align="flex-start" gap={2} w="100%">
+                                    {/* Metadata: action_id and source */}
+                                    <HStack gap={1} flexShrink={0} fontSize="xs" color="gray.500" fontFamily="mono">
+                                        {log.actionId !== undefined && (
+                                            <Text color="gray.600">[ID: {log.actionId}]</Text>
+                                        )}
+                                        {log.source && (
+                                            <Text
+                                                color={log.source === 'stderr' ? 'red.400' : 'green.400'}
+                                                fontWeight="semibold"
+                                            >
+                                                {log.source === 'stderr' ? 'stderr' : 'stdout'}
+                                            </Text>
+                                        )}
+                                    </HStack>
+                                    {/* Log line */}
+                                    <Text
+                                        flex={1}
+                                        color={log.source === 'stderr' ? 'red.300' : 'gray.300'}
+                                        whiteSpace="pre-wrap"
+                                        wordBreak="break-word"
+                                        lineHeight="1.5"
+                                        fontFamily="mono"
+                                    >
+                                        {log.line}
+                                    </Text>
+                                </HStack>
                             ))
                         )}
                         <div ref={logsEndRef} />

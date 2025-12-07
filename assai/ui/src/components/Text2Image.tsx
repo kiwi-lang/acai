@@ -3,7 +3,6 @@ import {
     Box,
     VStack,
     HStack,
-    Spinner,
     Text,
     Button,
     Input,
@@ -14,7 +13,7 @@ import ChatInput from './ChatInput';
 import LogDisplay from './LogDisplay';
 import { Message } from '../services/types';
 import { assaiAPI, ImageGenerationParams } from '../services/api';
-import { websocketService, WebSocketMessage } from '../services/websocket';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 const SettingsIcon = () => (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -31,11 +30,10 @@ const XIcon = () => (
 );
 
 const Text2Image = () => {
+    const { socket, sessionId } = useWebSocket();
     const [messages, setMessages] = useState<Message[]>([]);
     const [isLoading, setIsLoading] = useState(false);
-    const [showSettings, setShowSettings] = useState(false);
-    const [statusMessage, setStatusMessage] = useState<string>('');
-    const [generationProgress, setGenerationProgress] = useState<number>(0);
+    const [showSettings, setShowSettings] = useState(true);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const currentPromptRef = useRef<string>('');
     const actionIdCounterRef = useRef<number>(0);
@@ -91,115 +89,24 @@ const Text2Image = () => {
     useEffect(() => {
         document.title = 'Text to Image - ASSAI';
 
-        // Connect to WebSocket
-        websocketService.connect();
-
-        // Set up log listeners - socket.io will queue events if not connected yet
-        // Remove existing listeners first to prevent duplicates
-        const setupLogListeners = () => {
-            const socket = websocketService.getSocket();
-            if (socket) {
-                // Remove any existing listeners first to prevent duplicates
-                socket.off('stdout', handleStdout);
-                socket.off('stderr', handleStderr);
-                // Add listeners
-                socket.on('stdout', handleStdout);
-                socket.on('stderr', handleStderr);
-                return true;
-            }
-            return false;
-        };
-
-        // Try to set up listeners immediately
-        setupLogListeners();
-
-        // Also set up on connect in case socket wasn't ready
-        const socket = websocketService.getSocket();
-        let connectHandler: (() => void) | null = null;
-        if (socket) {
-            connectHandler = () => {
-                setupLogListeners();
-            };
-            socket.on('connect', connectHandler);
+        if (!socket) {
+            return;
         }
 
-        // Set up WebSocket listeners for legacy events (if still used)
-        const unsubscribeModelLoading = websocketService.on('model_loading', (msg: WebSocketMessage) => {
-            setStatusMessage(msg.data.message || 'Loading model...');
-        });
-
-        const unsubscribeModelLoaded = websocketService.on('model_loaded', (msg: WebSocketMessage) => {
-            setStatusMessage(msg.data.message || 'Model loaded');
-        });
-
-        const unsubscribeGenerationStarted = websocketService.on('generation_started', (msg: WebSocketMessage) => {
-            setStatusMessage(msg.data.message || 'Starting generation...');
-            setGenerationProgress(0);
-        });
-
-        const unsubscribeGenerationProgress = websocketService.on('generation_progress', (msg: WebSocketMessage) => {
-            if (msg.data.progress !== undefined) {
-                setGenerationProgress(msg.data.progress * 100);
-            }
-            if (msg.data.message) {
-                setStatusMessage(msg.data.message);
-            }
-        });
-
-        const unsubscribeGenerationComplete = websocketService.on('generation_complete', (msg: WebSocketMessage) => {
-            setStatusMessage('');
-            setGenerationProgress(0);
-            setIsLoading(false);
-
-            if (msg.data.images && msg.data.images.length > 0) {
-                const imageUrl = msg.data.images[0];
-                const assistantMessage: Message = {
-                    id: (Date.now() + 1).toString(),
-                    role: 'assistant',
-                    content: `Generated image for: "${currentPromptRef.current}"`,
-                    timestamp: new Date(),
-                    type: 'image',
-                    imageUrl,
-                };
-                setMessages(prev => [...prev, assistantMessage]);
-            }
-        });
-
-        const unsubscribeError = websocketService.on('error', (msg: WebSocketMessage) => {
-            setStatusMessage('');
-            setGenerationProgress(0);
-            setIsLoading(false);
-
-            const errorMessage = msg.data.message || msg.data.error || 'An error occurred';
-            const errorMsg: Message = {
-                id: (Date.now() + 1).toString(),
-                role: 'assistant',
-                content: `Sorry, I encountered an error: ${errorMessage}. Please try again.`,
-                timestamp: new Date(),
-                type: 'text',
-                retryPrompt: currentPromptRef.current,
-            };
-            setMessages(prev => [...prev, errorMsg]);
-        });
+        // Set up log listeners for stdout/stderr
+        socket.off('stdout', handleStdout);
+        socket.off('stderr', handleStderr);
+        socket.on('stdout', handleStdout);
+        socket.on('stderr', handleStderr);
 
         // Cleanup on unmount
         return () => {
-            const cleanupSocket = websocketService.getSocket();
-            if (cleanupSocket) {
-                cleanupSocket.off('stdout', handleStdout);
-                cleanupSocket.off('stderr', handleStderr);
-                if (connectHandler) {
-                    cleanupSocket.off('connect', connectHandler);
-                }
+            if (socket) {
+                socket.off('stdout', handleStdout);
+                socket.off('stderr', handleStderr);
             }
-            unsubscribeModelLoading();
-            unsubscribeModelLoaded();
-            unsubscribeGenerationStarted();
-            unsubscribeGenerationProgress();
-            unsubscribeGenerationComplete();
-            unsubscribeError();
         };
-    }, [handleStdout, handleStderr]);
+    }, [socket, handleStdout, handleStderr]);
 
     useEffect(() => {
         // Scroll to bottom when new messages arrive
@@ -232,7 +139,7 @@ const Text2Image = () => {
         const assistantMessage: Message = {
             id: assistantMessageId,
             role: 'assistant',
-            content: `Generating image for: "${content.trim()}"`,
+            content: ``,
             timestamp: new Date(),
             type: 'image',
             actionId,
@@ -245,33 +152,30 @@ const Text2Image = () => {
         actionIdToMessageIdRef.current.set(actionId, assistantMessageId);
 
         setIsLoading(true);
-        setStatusMessage('Initializing...');
-        setGenerationProgress(0);
 
         try {
-            // Get session ID from WebSocket service
-            const sessionId = websocketService.getSessionId();
+            // Use session ID from context
 
             // Generate image from prompt with current generation parameters and action_id
             const imageDataUris = await assaiAPI.generateImage(
                 content.trim(),
                 generationParams,
                 undefined,
-                sessionId || undefined,
+                sessionId ?? undefined,
                 actionId
             );
 
-            // Handle HTTP response - replace logs with image
+            // Handle HTTP response - replace logs with images
             if (imageDataUris && imageDataUris.length > 0) {
-                const imageUrl = imageDataUris[0];
                 setMessages(prev => prev.map(msg => {
                     if (msg.id === assistantMessageId) {
                         return {
                             ...msg,
-                            imageUrl,
-                            logs: undefined, // Remove logs when image is ready
+                            imageUrls: imageDataUris, // Store all images
+                            imageUrl: imageDataUris[0], // Keep first for backward compatibility
+                            logs: undefined, // Remove logs when images are ready
                             isGenerating: false,
-                            content: `Generated image for: "${content.trim()}"`,
+                            content: ``,
                         };
                     }
                     return msg;
@@ -281,8 +185,6 @@ const Text2Image = () => {
             }
 
             setIsLoading(false);
-            setStatusMessage('');
-            setGenerationProgress(0);
 
             // Clean up action ID mapping after a delay
             setTimeout(() => {
@@ -292,8 +194,6 @@ const Text2Image = () => {
             console.error('Failed to generate image:', error);
             const errorMessage = error instanceof Error ? error.message : 'Failed to generate image';
 
-            setStatusMessage('');
-            setGenerationProgress(0);
             setIsLoading(false);
 
             // Update the placeholder message with error
@@ -360,17 +260,17 @@ const Text2Image = () => {
             </Box>
 
             <VStack gap={2} textAlign="center">
-                <Text fontSize="2xl" fontWeight="semibold">
+                <Text fontSize="2xl" fontWeight="semibold" color="white">
                     Text to Image
                 </Text>
-                <Text fontSize="md" color="gray.600" maxW="md">
+                <Text fontSize="md" color="gray.400" maxW="md">
                     Describe the image you want to generate, and I'll create it for you.
                     Each prompt will generate a new image.
                 </Text>
             </VStack>
 
             <VStack gap={3} w="100%" maxW="2xl" mt={4}>
-                <Text fontSize="sm" fontWeight="semibold" color="gray.700">
+                <Text fontSize="sm" fontWeight="semibold" color="gray.300">
                     Try prompts like:
                 </Text>
                 <VStack gap={2} w="100%">
@@ -383,14 +283,13 @@ const Text2Image = () => {
                         <Box
                             key={example}
                             p={3}
-                            bg="gray.50"
-                            _dark={{ bg: 'gray.800' }}
+                            bg="gray.800"
                             borderRadius="lg"
                             w="100%"
                             fontSize="sm"
-                            color="gray.700"
+                            color="gray.300"
                             cursor="pointer"
-                            _hover={{ bg: 'gray.100', _dark: { bg: 'gray.700' } }}
+                            _hover={{ bg: 'gray.700' }}
                             onClick={() => handleSendMessage(example)}
                         >
                             {example}
@@ -407,8 +306,7 @@ const Text2Image = () => {
             flexDirection="column"
             h="100vh"
             w="100%"
-            bg="white"
-            _dark={{ bg: 'gray.900' }}
+            bg="gray.900"
             overflow="hidden"
         >
             {/* Chat Area - Conversation + Input + Settings */}
@@ -446,66 +344,6 @@ const Text2Image = () => {
                                     />
                                 ))}
 
-                                {isLoading && (
-                                    <Box
-                                        w="100%"
-                                        bg="gray.50"
-                                        _dark={{ bg: 'gray.800' }}
-                                        py={6}
-                                        px={4}
-                                    >
-                                        <Box maxW="48rem" mx="auto">
-                                            <VStack align="flex-start" gap={3}>
-                                                <HStack gap={4}>
-                                                    <Box
-                                                        w="32px"
-                                                        h="32px"
-                                                        bg="purple.500"
-                                                        borderRadius="sm"
-                                                        display="flex"
-                                                        alignItems="center"
-                                                        justifyContent="center"
-                                                        color="white"
-                                                        fontWeight="bold"
-                                                        fontSize="sm"
-                                                    >
-                                                        🎨
-                                                    </Box>
-                                                    <VStack align="flex-start" gap={1} flex={1}>
-                                                        <Text fontSize="sm" color="gray.600" fontWeight="medium">
-                                                            {statusMessage || 'Generating your image...'}
-                                                        </Text>
-                                                        {generationProgress > 0 && (
-                                                            <Box w="100%" pt={1}>
-                                                                <Box
-                                                                    w="100%"
-                                                                    h="8px"
-                                                                    bg="gray.200"
-                                                                    _dark={{ bg: 'gray.700' }}
-                                                                    borderRadius="full"
-                                                                    overflow="hidden"
-                                                                >
-                                                                    <Box
-                                                                        h="100%"
-                                                                        bg="purple.500"
-                                                                        w={`${generationProgress}%`}
-                                                                        transition="width 0.3s ease"
-                                                                    />
-                                                                </Box>
-                                                                <Text fontSize="xs" color="gray.500" mt={1}>
-                                                                    {Math.round(generationProgress)}%
-                                                                </Text>
-                                                            </Box>
-                                                        )}
-                                                        {generationProgress === 0 && (
-                                                            <Spinner size="sm" color="purple.500" />
-                                                        )}
-                                                    </VStack>
-                                                </HStack>
-                                            </VStack>
-                                        </Box>
-                                    </Box>
-                                )}
 
                                 <div ref={messagesEndRef} />
                             </VStack>
@@ -513,7 +351,7 @@ const Text2Image = () => {
                     </Box>
 
                     {/* Input Area */}
-                    <Box position="relative" borderTop="1px solid" borderColor="gray.200" _dark={{ borderColor: 'gray.700' }}>
+                    <Box position="relative" borderTop="1px solid" borderColor="gray.700">
                         <ChatInput
                             onSendMessage={handleSendMessage}
                             disabled={isLoading}
@@ -541,9 +379,8 @@ const Text2Image = () => {
                 <Box
                     w={showSettings ? "320px" : "0"}
                     borderLeft="1px solid"
-                    borderColor="gray.200"
-                    bg="gray.50"
-                    _dark={{ borderColor: 'gray.700', bg: 'gray.800' }}
+                    borderColor="gray.700"
+                    bg="gray.800"
                     overflow="hidden"
                     transition="width 0.3s ease-in-out"
                     display="flex"
@@ -558,12 +395,11 @@ const Text2Image = () => {
                                 py={3}
                                 justify="space-between"
                                 borderBottom="1px solid"
-                                borderColor="gray.200"
-                                _dark={{ borderColor: 'gray.700' }}
+                                borderColor="gray.700"
                             >
                                 <HStack gap={2}>
                                     <SettingsIcon />
-                                    <Text fontSize="sm" fontWeight="semibold">
+                                    <Text fontSize="sm" fontWeight="semibold" color="gray.200">
                                         Settings
                                     </Text>
                                 </HStack>
@@ -588,7 +424,7 @@ const Text2Image = () => {
                                     {/* Width and Height */}
                                     <HStack gap={4}>
                                         <VStack align="flex-start" gap={1} flex={1}>
-                                            <Text fontSize="sm" fontWeight="medium">Width</Text>
+                                            <Text fontSize="sm" fontWeight="medium" color="gray.300">Width</Text>
                                             <Input
                                                 type="number"
                                                 value={generationParams.width}
@@ -600,11 +436,15 @@ const Text2Image = () => {
                                                 max={2048}
                                                 step={64}
                                                 size="sm"
+                                                bg="gray.700"
+                                                borderColor="gray.600"
+                                                color="gray.100"
+                                                _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
                                             />
                                         </VStack>
 
                                         <VStack align="flex-start" gap={1} flex={1}>
-                                            <Text fontSize="sm" fontWeight="medium">Height</Text>
+                                            <Text fontSize="sm" fontWeight="medium" color="gray.300">Height</Text>
                                             <Input
                                                 type="number"
                                                 value={generationParams.height}
@@ -616,13 +456,17 @@ const Text2Image = () => {
                                                 max={2048}
                                                 step={64}
                                                 size="sm"
+                                                bg="gray.700"
+                                                borderColor="gray.600"
+                                                color="gray.100"
+                                                _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
                                             />
                                         </VStack>
                                     </HStack>
 
                                     {/* Guidance Scale */}
                                     <VStack align="flex-start" gap={1}>
-                                        <Text fontSize="sm" fontWeight="medium">
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">
                                             Guidance Scale: {generationParams.guidance_scale?.toFixed(1)}
                                         </Text>
                                         <Input
@@ -636,12 +480,16 @@ const Text2Image = () => {
                                             max={20}
                                             step={0.1}
                                             size="sm"
+                                            bg="gray.700"
+                                            borderColor="gray.600"
+                                            color="gray.100"
+                                            _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
                                         />
                                     </VStack>
 
                                     {/* Inference Steps */}
                                     <VStack align="flex-start" gap={1}>
-                                        <Text fontSize="sm" fontWeight="medium">Inference Steps</Text>
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">Inference Steps</Text>
                                         <Input
                                             type="number"
                                             value={generationParams.num_inference_steps}
@@ -652,12 +500,16 @@ const Text2Image = () => {
                                             min={1}
                                             max={100}
                                             size="sm"
+                                            bg="gray.700"
+                                            borderColor="gray.600"
+                                            color="gray.100"
+                                            _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
                                         />
                                     </VStack>
 
                                     {/* Max Sequence Length */}
                                     <VStack align="flex-start" gap={1}>
-                                        <Text fontSize="sm" fontWeight="medium">Max Sequence Length</Text>
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">Max Sequence Length</Text>
                                         <Input
                                             type="number"
                                             value={generationParams.max_sequence_length}
@@ -669,12 +521,16 @@ const Text2Image = () => {
                                             max={2048}
                                             step={128}
                                             size="sm"
+                                            bg="gray.700"
+                                            borderColor="gray.600"
+                                            color="gray.100"
+                                            _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
                                         />
                                     </VStack>
 
                                     {/* Seed */}
                                     <VStack align="flex-start" gap={1}>
-                                        <Text fontSize="sm" fontWeight="medium">Seed (0 = random)</Text>
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">Seed (0 = random)</Text>
                                         <Input
                                             type="number"
                                             value={generationParams.seed}
@@ -685,6 +541,10 @@ const Text2Image = () => {
                                             min={0}
                                             max={2147483647}
                                             size="sm"
+                                            bg="gray.700"
+                                            borderColor="gray.600"
+                                            color="gray.100"
+                                            _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
                                         />
                                     </VStack>
 
@@ -693,6 +553,9 @@ const Text2Image = () => {
                                         variant="outline"
                                         onClick={resetToDefaults}
                                         w="100%"
+                                        color="gray.200"
+                                        borderColor="gray.600"
+                                        _hover={{ bg: 'gray.700', borderColor: 'gray.500' }}
                                     >
                                         Reset to Defaults
                                     </Button>

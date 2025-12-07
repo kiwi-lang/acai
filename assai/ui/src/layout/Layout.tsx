@@ -186,11 +186,16 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         zIndex={1000}
         transition="transform 0.3s"
         transform={{ base: isMobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)', md: 'translateX(0)' }}
+        borderRight="1px solid"
+        borderColor="gray.700"
       >
         {/* Header */}
         <Box p={4} borderBottom="1px solid" borderColor="gray.700">
           <Link to="/" style={{ textDecoration: 'none' }} onClick={closeMobileMenu}>
             <HStack gap={2}>
+            <Text fontSize="xl" fontWeight="bold" color="white">
+                AS
+              </Text>
               <Box
                 w="32px"
                 h="32px"
@@ -201,11 +206,8 @@ const Layout: FC<LayoutProps> = ({ children }) => {
                 justifyContent="center"
                 fontWeight="bold"
               >
-                AI
+                SAÏ
               </Box>
-              <Text fontSize="xl" fontWeight="bold" color="white">
-                ASSAI
-              </Text>
             </HStack>
           </Link>
         </Box>
@@ -217,11 +219,16 @@ const Layout: FC<LayoutProps> = ({ children }) => {
             onClick={handleNewChat}
             colorScheme="green"
             variant="outline"
-            leftIcon={<PlusIcon />}
             justifyContent="flex-start"
             size="md"
+            color="gray.200"
+            borderColor="gray.600"
+            _hover={{ bg: 'gray.700', borderColor: 'gray.500' }}
           >
-            New Chat
+            <HStack gap={2}>
+              <PlusIcon />
+              <Text>New Chat</Text>
+            </HStack>
           </Button>
         </Box>
 
@@ -320,8 +327,10 @@ const Layout: FC<LayoutProps> = ({ children }) => {
                         <Text
                           fontSize="sm"
                           color="gray.300"
-                          noOfLines={1}
                           flex={1}
+                          overflow="hidden"
+                          textOverflow="ellipsis"
+                          whiteSpace="nowrap"
                         >
                           {conv.title || 'New conversation'}
                         </Text>

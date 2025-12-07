@@ -87,10 +87,9 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
             position="sticky"
             bottom={0}
             w="100%"
-            bg="white"
-            _dark={{ bg: 'gray.900' }}
+            bg="gray.900"
             borderTop="1px solid"
-            borderColor="gray.200"
+            borderColor="gray.700"
             py={4}
             px={4}
         >
@@ -107,7 +106,7 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
                                         maxH="100px"
                                         borderRadius="md"
                                         border="1px solid"
-                                        borderColor="gray.300"
+                                        borderColor="gray.600"
                                     />
                                     <IconButton
                                         aria-label="Remove image"
@@ -127,8 +126,7 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
                             {audioFile && (
                                 <Box
                                     p={3}
-                                    bg="gray.100"
-                                    _dark={{ bg: 'gray.700' }}
+                                    bg="gray.700"
                                     borderRadius="md"
                                     position="relative"
                                 >
@@ -155,11 +153,10 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
                     <HStack gap={2} align="flex-end">
                         <HStack
                             flex={1}
-                            bg="white"
-                            _dark={{ bg: 'gray.800' }}
+                            bg="gray.800"
                             borderRadius="xl"
                             border="1px solid"
-                            borderColor="gray.300"
+                            borderColor="gray.600"
                             _focusWithin={{
                                 borderColor: 'green.500',
                                 boxShadow: '0 0 0 1px var(--chakra-colors-green-500)'
@@ -191,6 +188,8 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
                                 overflow="auto"
                                 bg="transparent"
                                 flex={1}
+                                color="gray.100"
+                                _placeholder={{ color: 'gray.500' }}
                             />
                         </HStack>
 
@@ -210,14 +209,6 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
                     </HStack>
                 </VStack>
 
-                <Text
-                    fontSize="xs"
-                    color="gray.500"
-                    textAlign="center"
-                    mt={2}
-                >
-                    ASSAI can make mistakes. Check important info.
-                </Text>
             </Box>
         </Box>
     );
