@@ -93,6 +93,10 @@ interface CachedRepo {
     revisions: Record<string, CachedRevision>;
     last_accessed: number;
     last_modified: number;
+    card?: {
+        pipeline_tag?: string;
+        [key: string]: any;
+    };
 }
 
 interface CacheInfo {
@@ -350,6 +354,9 @@ const HuggingFaceModels = () => {
                                     Type
                                 </Table.ColumnHeader>
                                 <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
+                                    Pipeline Tag
+                                </Table.ColumnHeader>
+                                <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
                                     Size
                                 </Table.ColumnHeader>
                                 <Table.ColumnHeader color="gray.300" fontWeight="semibold" py={4} bg="gray.800" borderColor="gray.700">
@@ -405,6 +412,23 @@ const HuggingFaceModels = () => {
                                             >
                                                 {repo.repo_type || 'model'}
                                             </Badge>
+                                        </Table.Cell>
+                                        <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
+                                            {repo.card?.pipeline_tag ? (
+                                                <Badge
+                                                    colorScheme="teal"
+                                                    fontSize="xs"
+                                                    px={2}
+                                                    py={1}
+                                                    variant="solid"
+                                                >
+                                                    {repo.card.pipeline_tag}
+                                                </Badge>
+                                            ) : (
+                                                <Text color="gray.500" fontSize="sm">
+                                                    -
+                                                </Text>
+                                            )}
                                         </Table.Cell>
                                         <Table.Cell py={4} bg="gray.900" borderColor="gray.700">
                                             <Text color="gray.300">

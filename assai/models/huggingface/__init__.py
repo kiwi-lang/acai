@@ -33,10 +33,22 @@ def routes(app: ASSAI, db):
 
     @route("/info/<string:name>")
     def model_info(name):
-        return api.model_info(search=name, filter=filter, limit=20)
+        card = api.model_info(repo_id=name)
+        d = asdict(card)
+        return d
     
     @route("/list")
     def available():
-        cache_info = scan_cache_dir()
-        d = asdict(cache_info)
-        return d
+        cache_info: HFCacheInfo = scan_cache_dir()
+        repos = []
+
+        for repo in cache_info.repos:
+            if repo.repo_type == "model":
+                model_card = api.model_info(repo_id=repo.repo_id)
+                repo = asdict(repo)
+                repo['card'] = model_card
+                repos.append(repo)
+            else:
+                repos.append(repo)
+
+        return {"repos": repos}
