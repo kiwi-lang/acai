@@ -244,7 +244,7 @@ const LogDisplay = ({ isVisible = true, onToggle }: LogDisplayProps) => {
                                     {/* Metadata: action_id and source */}
                                     <HStack gap={1} flexShrink={0} fontSize="xs" color="gray.500" fontFamily="mono">
                                         {log.actionId !== undefined && (
-                                            <Text color="gray.600">[ID: {log.actionId}]</Text>
+                                            <Text color="gray.500">[ID: {log.actionId}]</Text>
                                         )}
                                         {log.source && (
                                             <Text

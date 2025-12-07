@@ -50,7 +50,7 @@ const Home = () => {
       imageUrl,
       audioUrl,
     };
- 
+
     setMessages(prev => [...prev, userMessage]);
     setIsLoading(true);
 
@@ -110,17 +110,17 @@ const Home = () => {
       </Box>
 
       <VStack gap={2} textAlign="center">
-        <Text fontSize="2xl" fontWeight="semibold">
+        <Text fontSize="2xl" fontWeight="semibold" color="white">
           Welcome to ASSAI
         </Text>
-        <Text fontSize="md" color="gray.600" maxW="md">
+        <Text fontSize="md" color="gray.400" maxW="md">
           Your AI-powered multi-modal assistant. Ask me anything, generate images,
           convert speech to text, and more.
         </Text>
       </VStack>
 
       <VStack gap={3} w="100%" maxW="2xl" mt={4}>
-        <Text fontSize="sm" fontWeight="semibold" color="gray.700">
+        <Text fontSize="sm" fontWeight="semibold" color="gray.300">
           Try asking me to:
         </Text>
         <VStack gap={2} w="100%">
@@ -133,12 +133,11 @@ const Home = () => {
             <Box
               key={example}
               p={3}
-              bg="gray.50"
-              _dark={{ bg: 'gray.800' }}
+              bg="gray.800"
               borderRadius="lg"
               w="100%"
               fontSize="sm"
-              color="gray.700"
+              color="gray.200"
             >
               {example}
             </Box>
@@ -154,8 +153,7 @@ const Home = () => {
       flexDirection="column"
       h="100vh"
       w="100%"
-      bg="white"
-      _dark={{ bg: 'gray.900' }}
+      bg="gray.900"
     >
       {/* Messages Area */}
       <Box
@@ -174,8 +172,7 @@ const Home = () => {
             {isLoading && (
               <Box
                 w="100%"
-                bg="gray.50"
-                _dark={{ bg: 'gray.800' }}
+                bg="gray.800"
                 py={6}
                 px={4}
               >

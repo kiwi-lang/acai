@@ -14,6 +14,7 @@ import Home from './components/Home';
 import ApiTester from './components/ApiTester';
 import Models from './components/Models';
 import Text2Image from './components/Text2Image';
+import HuggingFaceModels from './components/HuggingFaceModels';
 import './App.css';
 
 // Create the theme system for Chakra UI v3 with dark mode as default
@@ -24,7 +25,7 @@ const system = createSystem(defaultConfig, {
 // Placeholder component for tasks not yet implemented
 const TaskPlaceholder = ({ taskName }: { taskName: string }) => {
   return (
-    <Box p={8} maxW="6xl" mx="auto">
+    <Box p={8} maxW="6xl" mx="auto" bg="gray.900" minH="100vh">
       <VStack gap={4} py={12}>
         <Heading size="2xl" color="white">{taskName}</Heading>
         <Text fontSize="lg" color="gray.400">
@@ -50,6 +51,7 @@ function App() {
               <Route path="/image2text" element={<TaskPlaceholder taskName="Image to Text" />} />
               <Route path="/speech2text" element={<TaskPlaceholder taskName="Speech to Text" />} />
               <Route path="/models" element={<Models />} />
+              <Route path="/huggingface" element={<HuggingFaceModels />} />
               <Route path="/api-tester" element={<ApiTester />} />
             </Routes>
           </Layout>

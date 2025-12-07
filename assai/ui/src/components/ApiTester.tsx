@@ -92,8 +92,8 @@ const ApiTester = () => {
     };
 
     return (
-        <Box p={6}>
-            <Heading mb={6}>API Tester</Heading>
+        <Box p={6} bg="gray.900" minH="100vh">
+            <Heading mb={6} color="white">API Tester</Heading>
 
             <VStack gap={4} align="stretch">
                 {/* Method and URL */}
@@ -105,8 +105,10 @@ const ApiTester = () => {
                             width: '120px',
                             padding: '8px',
                             borderRadius: '6px',
-                            border: '1px solid #E2E8F0',
+                            border: '1px solid #4A5568',
                             fontSize: '14px',
+                            backgroundColor: '#2D3748',
+                            color: '#E2E8F0',
                         }}
                     >
                         <option value="GET">GET</option>
@@ -118,13 +120,18 @@ const ApiTester = () => {
                         value={url}
                         onChange={(e) => setUrl(e.target.value)}
                         flex={1}
+                        bg="gray.700"
+                        borderColor="gray.600"
+                        color="gray.100"
+                        _placeholder={{ color: 'gray.500' }}
+                        _focus={{ borderColor: 'green.500', bg: 'gray.700' }}
                     />
                 </HStack>
 
                 {/* Query Parameters */}
-                <Box borderWidth="1px" borderColor="gray.200" borderRadius="md" p={4} bg="gray.50">
+                <Box borderWidth="1px" borderColor="gray.700" borderRadius="md" p={4} bg="gray.800">
                     <Flex justify="space-between" align="center" mb={3}>
-                        <Text fontWeight="bold">Query Parameters</Text>
+                        <Text fontWeight="bold" color="gray.200">Query Parameters</Text>
                         <Button size="sm" colorScheme="blue" onClick={addQueryParam}>
                             Add Parameter
                         </Button>
@@ -138,12 +145,22 @@ const ApiTester = () => {
                                     value={param.key}
                                     onChange={(e) => updateQueryParam(param.id, 'key', e.target.value)}
                                     size="sm"
+                                    bg="gray.700"
+                                    borderColor="gray.600"
+                                    color="gray.100"
+                                    _placeholder={{ color: 'gray.500' }}
+                                    _focus={{ borderColor: 'green.500', bg: 'gray.700' }}
                                 />
                                 <Input
                                     placeholder="Value"
                                     value={param.value}
                                     onChange={(e) => updateQueryParam(param.id, 'value', e.target.value)}
                                     size="sm"
+                                    bg="gray.700"
+                                    borderColor="gray.600"
+                                    color="gray.100"
+                                    _placeholder={{ color: 'gray.500' }}
+                                    _focus={{ borderColor: 'green.500', bg: 'gray.700' }}
                                 />
                                 <IconButton
                                     aria-label="Remove parameter"
@@ -161,14 +178,18 @@ const ApiTester = () => {
 
                 {/* POST Body */}
                 {method === 'POST' && (
-                    <Box borderWidth="1px" borderColor="gray.200" borderRadius="md" p={4} bg="gray.50">
-                        <Text fontWeight="bold" mb={2}>Request Body (JSON)</Text>
+                    <Box borderWidth="1px" borderColor="gray.700" borderRadius="md" p={4} bg="gray.800">
+                        <Text fontWeight="bold" mb={2} color="gray.200">Request Body (JSON)</Text>
                         <Textarea
                             placeholder='{"key": "value"}'
                             value={postBody}
                             onChange={(e) => setPostBody(e.target.value)}
                             rows={6}
                             fontFamily="monospace"
+                            bg="gray.700"
+                            borderColor="gray.600"
+                            color="gray.100"
+                            _placeholder={{ color: 'gray.500' }}
                         />
                     </Box>
                 )}
@@ -185,9 +206,9 @@ const ApiTester = () => {
 
                 {/* Built URL Preview */}
                 {url && (
-                    <Box borderWidth="1px" borderColor="gray.200" borderRadius="md" p={3} bg="gray.50">
-                        <Text fontSize="sm" fontWeight="bold" mb={1}>Full URL:</Text>
-                        <Code colorScheme="gray" p={2} borderRadius="md" display="block">
+                    <Box borderWidth="1px" borderColor="gray.700" borderRadius="md" p={3} bg="gray.800">
+                        <Text fontSize="sm" fontWeight="bold" mb={1} color="gray.200">Full URL:</Text>
+                        <Code colorScheme="gray" p={2} borderRadius="md" display="block" bg="gray.900" color="gray.300">
                             {buildUrl()}
                         </Code>
                     </Box>
@@ -204,10 +225,10 @@ const ApiTester = () => {
 
                 {/* Response Display */}
                 {response && (
-                    <Box borderWidth="1px" borderColor="gray.200" borderRadius="md" p={4} bg="gray.50">
-                        <Text fontWeight="bold" mb={2}>Response:</Text>
+                    <Box borderWidth="1px" borderColor="gray.700" borderRadius="md" p={4} bg="gray.800">
+                        <Text fontWeight="bold" mb={2} color="gray.200">Response:</Text>
                         <Box
-                            bg="gray.800"
+                            bg="gray.900"
                             p={4}
                             borderRadius="md"
                             overflowX="auto"

@@ -168,6 +168,22 @@ class AssAI_API {
     console.log("HERE telemetry call");
     return this.request('/telemetry', { signal });
   }
+
+  // Hugging Face endpoints
+  async getHuggingFaceCache(): Promise<any> {
+    return this.request('/huggingface/list');
+  }
+
+  async searchHuggingFaceModels(name: string, filter?: string): Promise<any> {
+    const endpoint = filter
+      ? `/huggingface/search/${encodeURIComponent(name)}/${encodeURIComponent(filter)}`
+      : `/huggingface/search/${encodeURIComponent(name)}`;
+    return this.request(endpoint);
+  }
+
+  async getHuggingFaceModelInfo(name: string): Promise<any> {
+    return this.request(`/huggingface/info/${encodeURIComponent(name)}`);
+  }
 }
 
 // Text2Image generation parameters interface

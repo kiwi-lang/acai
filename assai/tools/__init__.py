@@ -93,29 +93,30 @@ class SocketIOBuffer:
 
 class StreamRouter:
     def __init__(self, push):
-        self.prev = defaultdict(list)
         self.route = push
-        self.lock = RLock()
+        self._local = threading.local()
+
+    @property
+    def prev(self):
+        if not hasattr(self._local, "prev"):
+            self._local.prev = []   # each thread gets its own list object
+        return self._local.prev
 
     def write(self, msg):
         thread_id = threading.get_ident()
-
         msg = msg.replace("\x1b[A", "\n").replace("\r", "\n")
 
-        with self.lock:
-            prev = self.prev[thread_id]
-
         if "\n" not in msg:
-            prev.append(msg)
+            self.prev.append(msg)
         else:
             head, _, tail = msg.partition("\n")
-            prev.append(head)
-            line = "".join(prev)
+            self.prev.append(head)
+            line = "".join(self.prev)
 
             if line != "":
                 self.route(thread_id, line)
 
-            prev.clear()
+            self.prev.clear()
             self.write(tail)
             
     def flush(self):

@@ -79,8 +79,8 @@ const FileUpload = ({ onImageUpload, onAudioUpload, disabled = false }: FileUplo
                         disabled={disabled}
                         variant="ghost"
                         size="sm"
-                        color="gray.600"
-                        _hover={{ bg: 'gray.100' }}
+                        color="gray.400"
+                        _hover={{ bg: 'gray.700', color: 'gray.300' }}
                     >
                         <ImageIcon />
                     </IconButton>
@@ -102,8 +102,8 @@ const FileUpload = ({ onImageUpload, onAudioUpload, disabled = false }: FileUplo
                         disabled={disabled}
                         variant="ghost"
                         size="sm"
-                        color="gray.600"
-                        _hover={{ bg: 'gray.100' }}
+                        color="gray.400"
+                        _hover={{ bg: 'gray.700', color: 'gray.300' }}
                     >
                         <MicIcon />
                     </IconButton>

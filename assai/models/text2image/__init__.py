@@ -38,7 +38,7 @@ def routes(app: ASSAI, db):
         """Delete a local model"""
 
     @route("/model/list")
-    def list_model_t2i(name):
+    def list_model_t2i():
         """List local models the user can choose from"""
         return [
             default_model,

@@ -9,6 +9,7 @@ import multiprocessing as mp
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
+from flask.json.provider import DefaultJSONProvider
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -83,6 +84,17 @@ class Telemetry:
 
 
 
+class CustomJSONProvider(DefaultJSONProvider):
+
+    def default(self, o):
+        if isinstance(o, frozenset):
+            return list(o)
+
+        try:
+            return super().default(o)
+        except TypeError:
+            return str(o)
+
 class ASSAI:
     def message(self, kind, message):
         self.socketio.emit(kind, message)
@@ -90,6 +102,7 @@ class ASSAI:
     def __init__(self):
         print(STATIC_FOLDER)
         self.app = Flask(__name__, static_folder=STATIC_FOLDER)
+        self.app.json = CustomJSONProvider(self.app)
         self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode='threading')
         # self.socketio.init_app(self.app)
         import assai.models

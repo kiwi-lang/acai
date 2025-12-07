@@ -23,7 +23,7 @@ install:
 	(. .venv/bin/activate && pip install -e .)
 
 back-dev:
-	(. .venv/bin/activate && FLASK_STATIC=$(pwd) python -m assai.server)
+	(. .venv/bin/activate && FLASK_STATIC=$(pwd) flask --debug --app assai.server.run:main run  --with-threads --port 5001)
 
 front-dev:
 	(cd assai/ui && npm i && npm run dev)

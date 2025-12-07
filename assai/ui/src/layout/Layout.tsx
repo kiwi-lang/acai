@@ -88,6 +88,14 @@ const Speech2TextIcon = () => (
   </svg>
 );
 
+const HuggingFaceIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M12 2L2 7l10 5 10-5-10-5z" />
+    <path d="M2 17l10 5 10-5" />
+    <path d="M2 12l10 5 10-5" />
+  </svg>
+);
+
 // Task type definitions
 const taskTypes = [
   { id: 'text2text', name: 'Text to Text', path: '/', icon: Text2TextIcon, color: 'blue' },
@@ -193,7 +201,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         <Box p={4} borderBottom="1px solid" borderColor="gray.700">
           <Link to="/" style={{ textDecoration: 'none' }} onClick={closeMobileMenu}>
             <HStack gap={2}>
-            <Text fontSize="xl" fontWeight="bold" color="white">
+              <Text fontSize="xl" fontWeight="bold" color="white">
                 AS
               </Text>
               <Box
@@ -364,12 +372,31 @@ const Layout: FC<LayoutProps> = ({ children }) => {
               <HStack
                 p={2}
                 borderRadius="md"
+                bg={location.pathname === '/models' ? 'gray.700' : 'transparent'}
                 _hover={{ bg: 'gray.800' }}
                 cursor="pointer"
                 w="100%"
+                gap={2}
               >
-                <Text fontSize="sm" color="gray.400">
+                <HuggingFaceIcon />
+                <Text fontSize="sm" color={location.pathname === '/models' ? 'white' : 'gray.400'}>
                   AI Models
+                </Text>
+              </HStack>
+            </Link>
+            <Link to="/huggingface" style={{ textDecoration: 'none', width: '100%' }} onClick={closeMobileMenu}>
+              <HStack
+                p={2}
+                borderRadius="md"
+                bg={location.pathname === '/huggingface' ? 'gray.700' : 'transparent'}
+                _hover={{ bg: 'gray.800' }}
+                cursor="pointer"
+                w="100%"
+                gap={2}
+              >
+                <HuggingFaceIcon />
+                <Text fontSize="sm" color={location.pathname === '/huggingface' ? 'white' : 'gray.400'}>
+                  Hugging Face
                 </Text>
               </HStack>
             </Link>
@@ -377,11 +404,12 @@ const Layout: FC<LayoutProps> = ({ children }) => {
               <HStack
                 p={2}
                 borderRadius="md"
+                bg={location.pathname === '/api-tester' ? 'gray.700' : 'transparent'}
                 _hover={{ bg: 'gray.800' }}
                 cursor="pointer"
                 w="100%"
               >
-                <Text fontSize="sm" color="gray.400">
+                <Text fontSize="sm" color={location.pathname === '/api-tester' ? 'white' : 'gray.400'}>
                   API Tester
                 </Text>
               </HStack>

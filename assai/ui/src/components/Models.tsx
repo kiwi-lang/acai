@@ -19,11 +19,10 @@ const ModelCard = ({ model }: { model: ModelPlugin }) => {
     return (
         <Box
             p={6}
-            bg="white"
-            _dark={{ bg: 'gray.800' }}
+            bg="gray.800"
             borderRadius="lg"
             border="1px solid"
-            borderColor="gray.200"
+            borderColor="gray.700"
             _hover={{
                 shadow: 'lg',
                 borderColor: 'green.300',
@@ -32,7 +31,7 @@ const ModelCard = ({ model }: { model: ModelPlugin }) => {
         >
             <VStack align="flex-start" gap={3}>
                 <HStack justify="space-between" w="100%">
-                    <Text fontSize="lg" fontWeight="bold">
+                    <Text fontSize="lg" fontWeight="bold" color="white">
                         {model.name}
                     </Text>
                     <Badge colorScheme={getColorScheme(model.type)} fontSize="xs">
@@ -40,7 +39,7 @@ const ModelCard = ({ model }: { model: ModelPlugin }) => {
                     </Badge>
                 </HStack>
 
-                <HStack gap={2} fontSize="sm" color="gray.600">
+                <HStack gap={2} fontSize="sm" color="gray.300">
                     <Badge variant="subtle" colorScheme="blue">
                         {model.input}
                     </Badge>
@@ -51,7 +50,7 @@ const ModelCard = ({ model }: { model: ModelPlugin }) => {
                 </HStack>
 
                 {model.description && (
-                    <Text fontSize="sm" color="gray.600">
+                    <Text fontSize="sm" color="gray.400">
                         {model.description}
                     </Text>
                 )}
@@ -89,10 +88,11 @@ const Models = () => {
                 alignItems="center"
                 justifyContent="center"
                 h="100vh"
+                bg="gray.900"
             >
                 <VStack gap={4}>
                     <Spinner size="xl" color="green.500" />
-                    <Text color="gray.600">Loading models...</Text>
+                    <Text color="gray.300">Loading models...</Text>
                 </VStack>
             </Box>
         );
@@ -105,9 +105,10 @@ const Models = () => {
                 alignItems="center"
                 justifyContent="center"
                 h="100vh"
+                bg="gray.900"
             >
                 <VStack gap={4}>
-                    <Text color="red.500" fontSize="lg">
+                    <Text color="red.400" fontSize="lg">
                         {error}
                     </Text>
                 </VStack>
@@ -116,10 +117,10 @@ const Models = () => {
     }
 
     return (
-        <Box p={8} maxW="7xl" mx="auto">
+        <Box p={8} maxW="7xl" mx="auto" bg="gray.900" minH="100vh">
             <VStack align="flex-start" gap={6} mb={8}>
-                <Heading size="2xl">AI Models</Heading>
-                <Text fontSize="lg" color="gray.600">
+                <Heading size="2xl" color="white">AI Models</Heading>
+                <Text fontSize="lg" color="gray.400">
                     Available AI model plugins in ASSAI. These models power various capabilities
                     from text generation to image creation and speech processing.
                 </Text>
@@ -129,11 +130,12 @@ const Models = () => {
                 <Box
                     p={12}
                     textAlign="center"
-                    bg="gray.50"
-                    _dark={{ bg: 'gray.800' }}
+                    bg="gray.800"
                     borderRadius="lg"
+                    border="1px solid"
+                    borderColor="gray.700"
                 >
-                    <Text fontSize="lg" color="gray.500">
+                    <Text fontSize="lg" color="gray.400">
                         No models currently loaded. Add model plugins to get started.
                     </Text>
                 </Box>
