@@ -81,7 +81,7 @@ def routes(app: ASSAI, db):
         return {
             "language": {
                 "type": str,
-                "default": None  # None = auto-detect
+                "default": "en"  # None = auto-detect
             },
             "task": {
                 "type": str,
@@ -127,7 +127,7 @@ def routes(app: ASSAI, db):
                     "automatic-speech-recognition",
                     model=model,
                     device=device,
-                    torch_dtype=torch.float16 if accelerator.device_type == "cuda" else torch.float32
+                    torch_dtype=torch.bfloat16 if accelerator.device_type == "cuda" else torch.float32
                 )
                 print("[S2T] Model loaded successfully", flush=True)
                 sys.stdout.flush()

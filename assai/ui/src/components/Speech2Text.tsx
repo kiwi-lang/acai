@@ -36,7 +36,6 @@ const Speech2Text = () => {
     const audioChunksRef = useRef<Blob[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const actionIdCounterRef = useRef<number>(0);
-    const actionIdToMessageIdRef = useRef<Map<number, string>>(new Map());
 
     // Recognition parameters
     const [recognitionParams] = useState<SpeechRecognitionParams>({
@@ -45,40 +44,37 @@ const Speech2Text = () => {
     });
 
     // Memoize handlers to prevent duplicate listeners
-    const handleStdout = useCallback((data: { id: number; line: string }) => {
-        const messageId = actionIdToMessageIdRef.current.get(data.id);
-        if (messageId) {
-            setMessages(prev => prev.map(msg => {
-                if (msg.id === messageId) {
-                    return {
-                        ...msg,
-                        logs: [
-                            ...(msg.logs || []),
-                            { type: 'stdout' as const, line: data.line, timestamp: new Date() }
-                        ]
-                    };
-                }
-                return msg;
-            }));
-        }
+    // These handlers route logs to messages based on action_id
+    const handleStdout = useCallback((data: { id: number; line: string; thread_id?: number }) => {
+        // Find the message with matching action_id
+        setMessages(prev => prev.map(msg => {
+            if (msg.action_id === data.id && msg.isGenerating) {
+                return {
+                    ...msg,
+                    logs: [
+                        ...(msg.logs || []),
+                        { type: 'stdout' as const, line: data.line, timestamp: new Date() }
+                    ]
+                };
+            }
+            return msg;
+        }));
     }, []);
 
-    const handleStderr = useCallback((data: { id: number; line: string }) => {
-        const messageId = actionIdToMessageIdRef.current.get(data.id);
-        if (messageId) {
-            setMessages(prev => prev.map(msg => {
-                if (msg.id === messageId) {
-                    return {
-                        ...msg,
-                        logs: [
-                            ...(msg.logs || []),
-                            { type: 'stderr' as const, line: data.line, timestamp: new Date() }
-                        ]
-                    };
-                }
-                return msg;
-            }));
-        }
+    const handleStderr = useCallback((data: { id: number; line: string; thread_id?: number }) => {
+        // Find the message with matching action_id
+        setMessages(prev => prev.map(msg => {
+            if (msg.action_id === data.id && msg.isGenerating) {
+                return {
+                    ...msg,
+                    logs: [
+                        ...(msg.logs || []),
+                        { type: 'stderr' as const, line: data.line, timestamp: new Date() }
+                    ]
+                };
+            }
+            return msg;
+        }));
     }, []);
 
     useEffect(() => {
@@ -261,9 +257,6 @@ const Speech2Text = () => {
         };
         setMessages(prev => [...prev, assistantMessage]);
 
-        // Map action ID to message ID for log routing
-        actionIdToMessageIdRef.current.set(actionId, String(assistantMessageId));
-
         setIsProcessing(true);
 
         try {
@@ -305,11 +298,6 @@ const Speech2Text = () => {
             }
 
             setIsProcessing(false);
-
-            // Clean up action ID mapping after a delay
-            setTimeout(() => {
-                actionIdToMessageIdRef.current.delete(actionId);
-            }, 5000);
         } catch (error) {
             console.error('Failed to transcribe speech:', error);
             const errorMessage = error instanceof Error ? error.message : 'Failed to transcribe speech';
@@ -335,9 +323,6 @@ const Speech2Text = () => {
                 }
                 return msg;
             }));
-
-            // Clean up action ID mapping
-            actionIdToMessageIdRef.current.delete(actionId);
         } finally {
             // Clean up audio URL after processing
             URL.revokeObjectURL(audioUrl);
