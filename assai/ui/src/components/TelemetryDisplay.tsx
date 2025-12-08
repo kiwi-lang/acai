@@ -20,12 +20,13 @@ interface SparklineProps {
     color: string;
     width?: number;
     height?: number;
+    fill?: boolean;
 }
 
-const Sparkline = ({ values, color, width = 60, height = 20 }: SparklineProps) => {
-    const points = useMemo(() => {
+const Sparkline = ({ values, color, width = 60, height = 20, fill = false }: SparklineProps) => {
+    const { points, fillPath } = useMemo(() => {
         if (values.length === 0) {
-            return '';
+            return { points: '', fillPath: '' };
         }
 
         const padding = 2;
@@ -37,23 +38,47 @@ const Sparkline = ({ values, color, width = 60, height = 20 }: SparklineProps) =
         const maxValue = 100;
         const range = maxValue - minValue;
 
-        return values.map((value, index) => {
+        const pointCoords = values.map((value, index) => {
             const x = padding + (index / (values.length - 1 || 1)) * graphWidth;
             // Clamp value between 0 and 100, then normalize to 0-1
             const clampedValue = Math.max(0, Math.min(100, value));
             const normalizedValue = (clampedValue - minValue) / range;
             const y = padding + graphHeight - (normalizedValue * graphHeight);
-            return `${x},${y}`;
-        }).join(' ');
-    }, [values, width, height]);
+            return { x, y };
+        });
+
+        const points = pointCoords.map(p => `${p.x},${p.y}`).join(' ');
+
+        // Create fill path: start at bottom left, draw curve, line to bottom right, close
+        let fillPathStr = '';
+        if (fill && pointCoords.length > 0) {
+            const firstPoint = pointCoords[0];
+            const lastPoint = pointCoords[pointCoords.length - 1];
+            const bottomY = padding + graphHeight;
+            // Create path: Move to bottom-left, draw line to first point, draw polyline through all points, line to bottom-right, close
+            const curvePath = pointCoords.map(p => `L ${p.x},${p.y}`).join(' ');
+            fillPathStr = `M ${firstPoint.x},${bottomY} ${curvePath} L ${lastPoint.x},${bottomY} Z`;
+        }
+
+        return { points, fillPath: fillPathStr };
+    }, [values, width, height, fill]);
 
     if (values.length === 0) {
         return <Box w={width} h={height} />;
     }
 
+    const fillOpacity = 0.2;
+
     return (
         <Box flexShrink={0} className="PLOT">
             <svg width={width} height={height} style={{ display: 'block' }}>
+                {fill && fillPath && (
+                    <path
+                        d={fillPath}
+                        fill={color}
+                        fillOpacity={fillOpacity}
+                    />
+                )}
                 <polyline
                     points={points}
                     fill="none"
@@ -85,8 +110,9 @@ const TelemetryDisplay = () => {
     const [error, setError] = useState<string | null>(null);
     const [isPaused, setIsPaused] = useState(false);
     const [intervalSeconds, setIntervalSeconds] = useState<number>(10);
+    const [fillGraphs, setFillGraphs] = useState<boolean>(true);
     const [cpuHistory, setCpuHistory] = useState<number[]>([]);
-    const [gpuHistory, setGpuHistory] = useState<number[]>([]);
+    const [gpuHistory, setGpuHistory] = useState<number[]>([]); 
     const [gpuMemoryHistory, setGpuMemoryHistory] = useState<number[]>([]);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
@@ -298,6 +324,18 @@ const TelemetryDisplay = () => {
                         <Text fontSize="xs" color="gray.500" w="15px">
                             s
                         </Text>
+                        {/* <IconButton
+                            aria-label={fillGraphs ? 'Disable fill' : 'Enable fill'}
+                            size="xs"
+                            variant={fillGraphs ? "solid" : "ghost"}
+                            colorScheme="gray"
+                            onClick={() => setFillGraphs(!fillGraphs)}
+                            title={fillGraphs ? 'Disable area fill' : 'Enable area fill'}
+                        >
+                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                            </svg>
+                        </IconButton> */}
                         <IconButton
                             aria-label={isPaused ? 'Resume telemetry' : 'Pause telemetry'}
                             size="xs"
@@ -314,7 +352,7 @@ const TelemetryDisplay = () => {
                         <Text color="gray.400" w="57px" fontWeight="medium">
                             CPU:
                         </Text>
-                        <Sparkline values={cpuHistory} color="#90cdf4" />
+                        <Sparkline values={cpuHistory} color="#90cdf4" fill={fillGraphs} />
                         <Text color="blue.300" w="40px" fontFamily="mono">
                             {cpuLoadPercent.toFixed(1)}%
                         </Text>
@@ -325,7 +363,7 @@ const TelemetryDisplay = () => {
                                 <Text color="gray.400" w="57px" fontWeight="medium">
                                     GPU:
                                 </Text>
-                                <Sparkline values={gpuHistory} color="#c084fc" />
+                                <Sparkline values={gpuHistory} color="#c084fc" fill={fillGraphs} />
                                 <Text color="purple.300" w="40px" fontFamily="mono">
                                     {(firstGpu.load * 100).toFixed(1)}%
                                 </Text>
@@ -334,7 +372,7 @@ const TelemetryDisplay = () => {
                                 <Text color="gray.400" w="57px" fontWeight="medium">
                                     GPU Mem:
                                 </Text>
-                                <Sparkline values={gpuMemoryHistory} color="#86efac" />
+                                <Sparkline values={gpuMemoryHistory} color="#86efac" fill={fillGraphs} />
                                 <Text color="green.300" w="40px" fontFamily="mono">
                                     {gpuMemoryPercent.toFixed(1)}%
                                 </Text>

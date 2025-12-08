@@ -4,7 +4,7 @@ import os
 import sys
 import base64
 import numpy as np
-from io import BytesIO
+import io
 import wave
 from threading import Lock
 import threading
@@ -14,47 +14,31 @@ from flask import request
 from contextlib import contextmanager
 import torchcompat.core as accelerator
 from transformers import pipeline
+import torchaudio
 
 from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher
 
 
-def audio_base64_to_numpy(audio_base64_data_uri, sample_rate=16000):
-    """Convert base64 audio data URI (WAV or WebM) to numpy array"""
-    # Remove data URI prefix
-    if audio_base64_data_uri.startswith("data:audio/"):
-        audio_base64 = audio_base64_data_uri.split(",", 1)[1]
-        mime_type = audio_base64_data_uri.split(";")[0].split(":")[1]
-    else:
-        audio_base64 = audio_base64_data_uri
-        mime_type = "audio/wav"
+def audio_from_url(data_url, sample_rate=16000):
+    mono = True
 
-    # Decode base64
-    audio_bytes = base64.b64decode(audio_base64)
-    buffer = BytesIO(audio_bytes)
+    header, b64 = data_url.split(",", 1)
+    audio_bytes = base64.b64decode(b64)
+    bio = io.BytesIO(audio_bytes)
 
-    # Try librosa first (handles many formats including WebM if ffmpeg is available)
-    try:
-        import librosa
-        audio_array, sample_rate_from_file = librosa.load(buffer, sr=sample_rate, mono=True)
-        return audio_array, sample_rate_from_file
-    except ImportError:
-        # Fallback to WAV only if librosa not available
-        if mime_type == "audio/wav" or mime_type == "audio/wave":
-            with wave.open(buffer, 'rb') as wav_file:
-                frames = wav_file.getnframes()
-                sample_rate_from_file = wav_file.getframerate()
-                audio_bytes = wav_file.readframes(frames)
-                audio_array = np.frombuffer(audio_bytes, dtype=np.int16).astype(np.float32) / 32767.0
+    bio.seek(0)
+    waveform, sr = torchaudio.load(bio, format=None)
 
-                # Resample if needed
-                if sample_rate_from_file != sample_rate:
-                    ratio = sample_rate / sample_rate_from_file
-                    indices = np.arange(len(audio_array)) * ratio
-                    audio_array = np.interp(indices, np.arange(len(audio_array)), audio_array)
+    if mono and waveform.shape[0] > 1:
+        waveform = torch.mean(waveform, dim=0, keepdim=True)
 
-                return audio_array, sample_rate
-        else:
-            raise ValueError(f"Audio format {mime_type} not supported. Please install librosa for WebM/Opus support or convert to WAV.")
+    if sample_rate is not None and sr != sample_rate:
+        # resample
+        resampler = torchaudio.transforms.Resample(orig_freq=sr, new_freq=sample_rate)
+        waveform = resampler(waveform)
+        sr = sample_rate
+
+    return waveform, sr
 
 
 def routes(app: ASSAI, db):
@@ -108,7 +92,7 @@ def routes(app: ASSAI, db):
         """Execute the model from the provided input"""
 
         data = request.get_json()
-        audio_data_uri = data.pop("audio")  # Base64 WAV data URI
+        audio_data_uri = data.pop("audio")  # Base64 data URI (WebM or WAV)
         session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
 
@@ -151,7 +135,7 @@ def routes(app: ASSAI, db):
             # Convert audio data URI to numpy array
             print("[S2T] Converting audio data...", flush=True)
             sys.stdout.flush()
-            audio_array, sample_rate = audio_base64_to_numpy(audio_data_uri)
+            audio_array, sample_rate = audio_from_url(audio_data_uri)
             print(f"[S2T] Audio shape: {audio_array.shape}, sample rate: {sample_rate}", flush=True)
             sys.stdout.flush()
 

@@ -5,7 +5,6 @@ import {
     HStack,
     Text,
     Button,
-    IconButton,
 } from '@chakra-ui/react';
 import ChatMessage from './ChatMessage';
 import LogDisplay from './LogDisplay';
@@ -33,7 +32,6 @@ const Speech2Text = () => {
     const [messages, setMessages] = useState<Message[]>([]);
     const [isRecording, setIsRecording] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [recordedAudioUrl, setRecordedAudioUrl] = useState<string | null>(null);
     const mediaRecorderRef = useRef<MediaRecorder | null>(null);
     const audioChunksRef = useRef<Blob[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -217,85 +215,17 @@ const Speech2Text = () => {
         }
     };
 
-    const blobToBase64Wav = async (blob: Blob): Promise<string> => {
-        // Convert WebM/Opus to WAV using Web Audio API
+    const blobToDataUrl = async (blob: Blob): Promise<string> => {
+        // Simply convert the blob to a data URL in its original format (WebM)
         return new Promise((resolve, reject) => {
             const reader = new FileReader();
-            reader.onloadend = async () => {
-                try {
-                    const arrayBuffer = reader.result as ArrayBuffer;
-                    const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-
-                    // Convert to WAV
-                    const wav = audioBufferToWav(audioBuffer);
-                    const base64 = btoa(String.fromCharCode(...new Uint8Array(wav)));
-                    resolve(`data:audio/wav;base64,${base64}`);
-                } catch (error) {
-                    // Fallback: send as WebM if conversion fails
-                    // Convert ArrayBuffer to base64
-                    const arrayBuffer = reader.result as ArrayBuffer;
-                    const uint8Array = new Uint8Array(arrayBuffer);
-                    const base64 = btoa(String.fromCharCode(...uint8Array));
-                    resolve(`data:audio/webm;base64,${base64}`);
-                }
+            reader.onloadend = () => {
+                const dataUrl = reader.result as string;
+                resolve(dataUrl);
             };
             reader.onerror = reject;
-            reader.readAsArrayBuffer(blob);
+            reader.readAsDataURL(blob);
         });
-    };
-
-    const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
-        const length = buffer.length;
-        const numberOfChannels = buffer.numberOfChannels;
-        const sampleRate = buffer.sampleRate;
-        const arrayBuffer = new ArrayBuffer(44 + length * numberOfChannels * 2);
-        const view = new DataView(arrayBuffer);
-        const channels: Float32Array[] = [];
-        let offset = 0;
-        let pos = 0;
-
-        // Write WAV header
-        const setUint16 = (data: number) => {
-            view.setUint16(pos, data, true);
-            pos += 2;
-        };
-        const setUint32 = (data: number) => {
-            view.setUint32(pos, data, true);
-            pos += 4;
-        };
-
-        // RIFF identifier
-        setUint32(0x46464952); // "RIFF"
-        setUint32(36 + length * numberOfChannels * 2); // File length - 8
-        setUint32(0x45564157); // "WAVE"
-        setUint32(0x20746d66); // "fmt " chunk
-        setUint32(16); // fmt chunk length
-        setUint16(1); // audio format (1 = PCM)
-        setUint16(numberOfChannels);
-        setUint32(sampleRate);
-        setUint32(sampleRate * numberOfChannels * 2); // byte rate
-        setUint16(numberOfChannels * 2); // block align
-        setUint16(16); // bits per sample
-        setUint32(0x61746164); // "data" chunk
-        setUint32(length * numberOfChannels * 2);
-
-        // Get channel data
-        for (let i = 0; i < numberOfChannels; i++) {
-            channels.push(buffer.getChannelData(i));
-        }
-
-        // Interleave channels
-        for (let i = 0; i < length; i++) {
-            for (let channel = 0; channel < numberOfChannels; channel++) {
-                let sample = Math.max(-1, Math.min(1, channels[channel][i]));
-                sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-                view.setInt16(pos, sample, true);
-                pos += 2;
-            }
-        }
-
-        return arrayBuffer;
     };
 
     const processAudio = async (audioBlob: Blob, audioUrl: string) => {
@@ -326,8 +256,8 @@ const Speech2Text = () => {
         setIsProcessing(true);
 
         try {
-            // Convert blob to base64
-            const audioDataUri = await blobToBase64Wav(audioBlob);
+            // Convert blob to data URL in its original format (WebM)
+            const audioDataUri = await blobToDataUrl(audioBlob);
 
             // Transcribe audio
             const response = await assaiAPI.transcribeSpeech(
@@ -387,7 +317,6 @@ const Speech2Text = () => {
             // Clean up audio URL after processing
             URL.revokeObjectURL(audioUrl);
             audioChunksRef.current = [];
-            setRecordedAudioUrl(null);
         }
     };
 
@@ -486,10 +415,12 @@ const Speech2Text = () => {
                                 size="lg"
                                 colorScheme="red"
                                 onClick={stopRecording}
-                                leftIcon={<StopIcon />}
                                 disabled={isProcessing}
                             >
-                                Stop Recording
+                                <HStack gap={2}>
+                                    <StopIcon />
+                                    <Text>Stop Recording</Text>
+                                </HStack>
                             </Button>
                         </>
                     ) : (
@@ -497,10 +428,12 @@ const Speech2Text = () => {
                             size="lg"
                             colorScheme="orange"
                             onClick={startRecording}
-                            leftIcon={<MicIcon />}
                             disabled={isProcessing || isRecording}
                         >
-                            {isProcessing ? 'Processing...' : 'Start Recording'}
+                            <HStack gap={2}>
+                                <MicIcon />
+                                <Text>{isProcessing ? 'Processing...' : 'Start Recording'}</Text>
+                            </HStack>
                         </Button>
                     )}
                 </VStack>

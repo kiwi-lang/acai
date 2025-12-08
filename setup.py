@@ -50,7 +50,9 @@ if __name__ == "__main__":
             "torchcompat",
             "voir",
             "nvidia-ml-py",
-            "datasets"
+            "datasets",
+            "librosa", # Audio
+            "torchaudio",
         ],
         package_data={
             "assai.data": [

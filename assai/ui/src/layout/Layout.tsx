@@ -101,9 +101,10 @@ const taskTypes = [
   { id: 'text2text', name: 'Text to Text', path: '/text2text', icon: Text2TextIcon, color: 'blue' },
   { id: 'text2image', name: 'Text to Image', path: '/text2image', icon: Text2ImageIcon, color: 'purple' },
   { id: 'text2speech', name: 'Text to Speech', path: '/text2speech', icon: Text2SpeechIcon, color: 'green' },
-  { id: 'text2audio', name: 'Text to Audio', path: '/text2audio', icon: Text2AudioIcon, color: 'teal' },
-  { id: 'image2text', name: 'Image to Text', path: '/image2text', icon: Image2TextIcon, color: 'orange' },
   { id: 'speech2text', name: 'Speech to Text', path: '/speech2text', icon: Speech2TextIcon, color: 'pink' },
+
+  // { id: 'text2audio', name: 'Text to Audio', path: '/text2audio', icon: Text2AudioIcon, color: 'teal' },
+  // { id: 'image2text', name: 'Image to Text', path: '/image2text', icon: Image2TextIcon, color: 'orange' },
 ];
 
 interface LayoutProps {
