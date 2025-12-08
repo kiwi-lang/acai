@@ -16,6 +16,9 @@ import torchcompat.core as accelerator
 from transformers import pipeline
 
 from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher
+from assai.tools.input import Input, Message, Conversation
+from datetime import datetime
+import time
 
 
 def audio_to_base64_wav(audio_array, sample_rate=22050):
@@ -91,26 +94,45 @@ def routes(app: ASSAI, db):
     @route("/model/run", methods=['POST'])
     @route("/model/run/<string:model>", methods=['POST'])
     def run_t2s(model=default_model):
-        """Execute the model from the provided input"""
+        """Execute the model from the provided input using Message format"""
 
         data = request.get_json()
-        prompt = data.pop("prompt")
+        message = data.pop("message", {})
         session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
+
+        # Validate message
+        if not message:
+            return {"error": "No message provided"}, 400
+
+        if message.get("role") != "user":
+            return {"error": "Message must be from user"}, 400
+
+        content_input = message.get("content", {})
+        if content_input.get("kind") != "text":
+            return {"error": "Text2Speech expects text input"}, 400
+
+        prompt = content_input.get("data", "")
 
         pusher = websocket_pusher(app, action_id)
 
         @cached("t2s")
         def load():
             with capture_progress_thread(pusher, action_id):
+                print(f"[T2S] Loading TTS model: {model}", flush=True)
+                sys.stdout.flush()
                 # Use transformers pipeline for TTS
                 device = 0 if accelerator.device_type == "cuda" else -1
+                print(f"[T2S] Using device: {device}", flush=True)
+                sys.stdout.flush()
 
                 pipe = pipeline(
                     "text-to-speech",
                     model=model,
                     device=device
                 )
+                print("[T2S] Model loaded successfully", flush=True)
+                sys.stdout.flush()
                 return pipe
 
         generation_args = {
@@ -124,11 +146,23 @@ def routes(app: ASSAI, db):
         pipe = load()
 
         with capture_progress_thread(pusher, action_id):
+            print(f"[T2S] Starting speech generation for prompt: {prompt[:50]}...", flush=True)
+            print(f"[T2S] Action ID: {action_id}", flush=True)
+            sys.stdout.flush()
+
+            print("[T2S] Fetching speaker embeddings...", flush=True)
+            sys.stdout.flush()
             from .dataset import fetch
 
             vector = fetch()
             speaker_embeddings = torch.tensor(vector).unsqueeze(0)
+
+            print("[T2S] Generating speech...", flush=True)
+            sys.stdout.flush()
             output = pipe(prompt, forward_params={"speaker_embeddings": speaker_embeddings})
+
+            print("[T2S] Speech generation complete", flush=True)
+            sys.stdout.flush()
 
             # Handle different output formats
             if isinstance(output, dict):
@@ -166,7 +200,24 @@ def routes(app: ASSAI, db):
             if max_val > 1.0:
                 audio_array = audio_array / max_val
 
-        return [audio_to_base64_wav(audio_array, sample_rate)]
+        # Convert audio to Input format
+        audio_data_url = audio_to_base64_wav(audio_array, sample_rate)
+
+        response_input: Input = {
+            "kind": "audio",
+            "encoding": "data_url",
+            "data": audio_data_url
+        }
+
+        response_message: Message = {
+            "id": int(time.time() * 1000),
+            "action_id": action_id,
+            "role": "assistant",
+            "content": response_input,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        return {"message": response_message}
 
 
 if __name__ == "__main__":

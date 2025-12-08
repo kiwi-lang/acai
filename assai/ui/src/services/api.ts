@@ -1,6 +1,6 @@
 // API service for ASSAI - AI Multi-Modal Platform
 // Use /api prefix to leverage Vite proxy and avoid CORS issues
-import { ChatRequest, ChatResponse, Conversation, ModelPlugin, MultimodalConversation, MultimodalMessage } from './types';
+import { ChatRequest, ChatResponse, Conversation, Message, ModelPlugin, MultimodalConversation, MultimodalMessage } from './types';
 
 const API_BASE_URL = "/api";
 
@@ -153,116 +153,128 @@ class AssAI_API {
     return response.json();
   }
 
-  // Text2Image endpoint
-  // Backend returns an array of base64 data URIs: ["data:image/png;base64,..."]
+  // Unified model run endpoint - all models use Message format
+  // Takes a single Message, returns Message response
+  async runModel(
+    message: Message,
+    modelType: 'text2text' | 'text2image' | 'text2speech' | 'speech2text',
+    params?: Record<string, any>,
+    model?: string,
+    sessionId?: string,
+    actionId?: number
+  ): Promise<{ message: Message }> {
+    const endpoint = model
+      ? `/${modelType}/model/run/${encodeURIComponent(model)}`
+      : `/${modelType}/model/run`;
+
+    const body: any = { message, ...params };
+    if (sessionId) {
+      body.session_id = sessionId;
+    }
+    if (actionId !== undefined) {
+      body.action_id = actionId;
+    }
+
+    return this.request<{ message: Message }>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Text2Image endpoint - uses unified Message format
   async generateImage(
     prompt: string,
     params?: ImageGenerationParams,
     model?: string,
     sessionId?: string,
-    actionId?: number
-  ): Promise<string[]> {
-    const endpoint = model
-      ? `/text2image/model/run/${encodeURIComponent(model)}`
-      : '/text2image/model/run';
+    actionId?: number,
+    message?: Message
+  ): Promise<{ message: Message }> {
+    // Build message if not provided
+    const msg: Message = message || {
+      id: Date.now(),
+      role: 'user',
+      content: {
+        kind: 'text',
+        encoding: 'utf8',
+        data: prompt
+      },
+      timestamp: new Date().toISOString()
+    };
 
-    const body: any = { prompt, ...params };
-    if (sessionId) {
-      body.session_id = sessionId;
-    }
-    if (actionId !== undefined) {
-      body.action_id = actionId;
-    }
-
-    return this.request<string[]>(endpoint, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+    return this.runModel(msg, 'text2image', params, model, sessionId, actionId);
   }
 
-  // Text2Speech endpoint
-  // Backend returns an array of base64 data URIs: ["data:audio/wav;base64,..."]
+  // Text2Speech endpoint - uses unified Message format
   async generateSpeech(
     prompt: string,
     params?: SpeechGenerationParams,
     model?: string,
     sessionId?: string,
-    actionId?: number
-  ): Promise<string[]> {
-    const endpoint = model
-      ? `/text2speech/model/run/${encodeURIComponent(model)}`
-      : '/text2speech/model/run';
+    actionId?: number,
+    message?: Message
+  ): Promise<{ message: Message }> {
+    // Build message if not provided
+    const msg: Message = message || {
+      id: Date.now(),
+      role: 'user',
+      content: {
+        kind: 'text',
+        encoding: 'utf8',
+        data: prompt
+      },
+      timestamp: new Date().toISOString()
+    };
 
-    const body: any = { prompt, ...params };
-    if (sessionId) {
-      body.session_id = sessionId;
-    }
-    if (actionId !== undefined) {
-      body.action_id = actionId;
-    }
-
-    return this.request<string[]>(endpoint, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+    return this.runModel(msg, 'text2speech', params, model, sessionId, actionId);
   }
 
-  // Text2Text endpoint
-  // Backend returns { text: string }
+  // Text2Text endpoint - uses unified Message format
   async generateText(
     prompt: string,
     params?: TextGenerationParams,
     model?: string,
     sessionId?: string,
     actionId?: number,
-    conversationHistory?: Array<{ role: string; content: string }>
-  ): Promise<{ text: string }> {
-    const endpoint = model
-      ? `/text2text/model/run/${encodeURIComponent(model)}`
-      : '/text2text/model/run';
+    message?: Message
+  ): Promise<{ message: Message }> {
+    // Build message if not provided
+    const msg: Message = message || {
+      id: Date.now(),
+      role: 'user',
+      content: {
+        kind: 'text',
+        encoding: 'utf8',
+        data: prompt
+      },
+      timestamp: new Date().toISOString()
+    };
 
-    const body: any = { prompt, ...params };
-    if (sessionId) {
-      body.session_id = sessionId;
-    }
-    if (actionId !== undefined) {
-      body.action_id = actionId;
-    }
-    if (conversationHistory) {
-      body.conversation_history = conversationHistory;
-    }
-
-    return this.request<{ text: string }>(endpoint, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+    return this.runModel(msg, 'text2text', params, model, sessionId, actionId);
   }
 
-  // Speech2Text endpoint
-  // Backend returns { text: string }
+  // Speech2Text endpoint - uses unified Message format
   async transcribeSpeech(
     audioDataUri: string,
     params?: SpeechRecognitionParams,
     model?: string,
     sessionId?: string,
-    actionId?: number
-  ): Promise<{ text: string }> {
-    const endpoint = model
-      ? `/speech2text/model/run/${encodeURIComponent(model)}`
-      : '/speech2text/model/run';
+    actionId?: number,
+    message?: Message
+  ): Promise<{ message: Message }> {
+    // Build message if not provided
+    const msg: Message = message || {
+      id: Date.now(),
+      role: 'user',
+      content: {
+        kind: 'audio',
+        encoding: 'data_url',
+        data: audioDataUri
+      },
+      timestamp: new Date().toISOString()
+    };
 
-    const body: any = { audio: audioDataUri, ...params };
-    if (sessionId) {
-      body.session_id = sessionId;
-    }
-    if (actionId !== undefined) {
-      body.action_id = actionId;
-    }
-
-    return this.request<{ text: string }>(endpoint, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
+    return this.runModel(msg, 'speech2text', params, model, sessionId, actionId);
   }
 
   // Telemetry endpoint

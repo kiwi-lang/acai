@@ -55,12 +55,19 @@ export const WebSocketProvider = ({ children }: WebSocketProviderProps) => {
         // Determine WebSocket URL based on environment
         let wsUrl = import.meta.env.VITE_WS_URL;
         if (!wsUrl) {
-            const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-            const hostname = window.location.hostname;
-            wsUrl = `${protocol}//${hostname}:5001`;
+            // In development, use relative path to go through Vite proxy
+            // This works for both localhost and IP addresses
+            if (import.meta.env.DEV) {
+                wsUrl = undefined; // Use relative path - socket.io will use current origin
+            } else {
+                // In production, use the same hostname and protocol as the page
+                const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
+                const hostname = window.location.hostname;
+                wsUrl = `${protocol}//${hostname}:5001`;
+            }
         }
 
-        console.log('[WebSocket] Connecting to:', wsUrl);
+        console.log('[WebSocket] Connecting to:', wsUrl || 'current origin (via proxy)');
 
         const socketInstance = io(wsUrl, {
             transports: ['websocket', 'polling'],

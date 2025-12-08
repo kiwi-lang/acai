@@ -8,7 +8,7 @@ import {
 } from '@chakra-ui/react';
 import ChatMessage from './ChatMessage';
 import LogDisplay from './LogDisplay';
-import { Message } from '../services/types';
+import { Message, Input as InputType } from '../services/types';
 import { assaiAPI, SpeechRecognitionParams } from '../services/api';
 import { useWebSocket } from '../contexts/WebSocketContext';
 
@@ -164,20 +164,27 @@ const Speech2Text = () => {
                 const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
                 const audioUrl = URL.createObjectURL(audioBlob);
 
-                // Add user message with recorded audio
-                const userMessageId = Date.now().toString();
+                // Add user message with recorded audio in unified Input format
+                const userMessageId = Date.now();
+                // Convert blob to data URL for the message
+                const audioDataUri = await blobToDataUrl(audioBlob);
+                const userInput: InputType = {
+                    kind: 'audio',
+                    encoding: 'data_url',
+                    data: audioDataUri
+                };
                 const userMessage: Message = {
                     id: userMessageId,
                     role: 'user',
-                    content: '',
-                    timestamp: new Date(),
-                    type: 'audio',
-                    audioUrl: audioUrl,
+                    content: userInput,
+                    timestamp: new Date().toISOString(),
+                    type: 'audio', // UI extension
+                    audioUrl: audioUrl, // Keep for display
                 };
                 setMessages(prev => [...prev, userMessage]);
 
-                // Convert to WAV and send for transcription
-                await processAudio(audioBlob, audioUrl);
+                // Convert to WAV and send for transcription (pass the user message)
+                await processAudio(audioBlob, audioUrl, userMessage);
             };
 
             mediaRecorder.onerror = (event) => {
@@ -228,61 +235,73 @@ const Speech2Text = () => {
         });
     };
 
-    const processAudio = async (audioBlob: Blob, audioUrl: string) => {
+    const processAudio = async (audioBlob: Blob, audioUrl: string, userMessage: Message) => {
         if (!audioBlob) {
             return;
         }
 
         // Generate unique action ID for this request
         const actionId = ++actionIdCounterRef.current;
-        const assistantMessageId = (Date.now() + 1).toString();
+        const assistantMessageId = Date.now() + 1;
 
         // Create placeholder message for logs/transcription
         const assistantMessage: Message = {
             id: assistantMessageId,
             role: 'assistant',
-            content: ``,
-            timestamp: new Date(),
-            type: 'text',
-            actionId,
+            content: {
+                kind: 'text',
+                encoding: 'utf8',
+                data: ''
+            },
+            timestamp: new Date().toISOString(),
+            type: 'text', // UI extension
+            action_id: actionId,
             logs: [],
             isGenerating: true,
         };
         setMessages(prev => [...prev, assistantMessage]);
 
         // Map action ID to message ID for log routing
-        actionIdToMessageIdRef.current.set(actionId, assistantMessageId);
+        actionIdToMessageIdRef.current.set(actionId, String(assistantMessageId));
 
         setIsProcessing(true);
 
         try {
-            // Convert blob to data URL in its original format (WebM)
-            const audioDataUri = await blobToDataUrl(audioBlob);
+            // Extract audio data URI from user message
+            const audioDataUri = typeof userMessage.content === 'object' && userMessage.content.kind === 'audio'
+                ? userMessage.content.data
+                : await blobToDataUrl(audioBlob);
 
-            // Transcribe audio
+            // Transcribe audio using unified Message format
             const response = await assaiAPI.transcribeSpeech(
                 audioDataUri,
                 recognitionParams,
                 undefined,
                 sessionId ?? undefined,
-                actionId
+                actionId,
+                userMessage
             );
 
-            // Handle HTTP response - replace logs with transcribed text
-            if (response && response.text) {
+            // Handle HTTP response - update assistant message with response
+            if (response && response.message) {
+                const responseMessage = response.message;
                 setMessages(prev => prev.map(msg => {
                     if (msg.id === assistantMessageId) {
-                        return {
-                            ...msg,
-                            content: response.text,
-                            logs: undefined, // Remove logs when text is ready
+                        // Extract display values from Input for UI compatibility
+                        const input = responseMessage.content;
+                        const displayMessage: Message = {
+                            ...responseMessage,
+                            id: assistantMessageId, // Keep our ID
+                            logs: undefined, // Remove logs when response is ready
                             isGenerating: false,
+                            type: input.kind === 'text' ? 'text' : 'text',
                         };
+                        return displayMessage;
                     }
                     return msg;
                 }));
             } else {
-                throw new Error('No text data received from server');
+                throw new Error('No message received from server');
             }
 
             setIsProcessing(false);
@@ -298,11 +317,17 @@ const Speech2Text = () => {
             setIsProcessing(false);
 
             // Update the placeholder message with error
+            const errorInput: InputType = {
+                kind: 'text',
+                encoding: 'utf8',
+                data: `Sorry, I encountered an error: ${errorMessage}. Please try again.`
+            };
+
             setMessages(prev => prev.map(msg => {
                 if (msg.id === assistantMessageId) {
                     return {
                         ...msg,
-                        content: `Sorry, I encountered an error: ${errorMessage}. Please try again.`,
+                        content: errorInput,
                         type: 'text',
                         logs: undefined,
                         isGenerating: false,

@@ -13,6 +13,8 @@ import torchcompat.core as accelerator
 from transformers import pipeline
 
 from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher
+from assai.tools.input import Input, Message, Conversation, text as text_input
+from datetime import datetime
 
 
 def routes(app: ASSAI, db):
@@ -94,13 +96,25 @@ def routes(app: ASSAI, db):
     @route("/model/run", methods=['POST'])
     @route("/model/run/<string:model>", methods=['POST'])
     def run_t2t(model=default_model):
-        """Execute the model from the provided input"""
+        """Execute the model from the provided input using Message format"""
 
         data = request.get_json()
-        prompt = data.pop("prompt")
+        message = data.pop("message", {})
         session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
-        conversation_history = data.pop("conversation_history", [])
+
+        # Validate message
+        if not message:
+            return {"error": "No message provided"}, 400
+
+        if message.get("role") != "user":
+            return {"error": "Message must be from user"}, 400
+
+        content_input = message.get("content", {})
+        if content_input.get("kind") != "text":
+            return {"error": "Text2Text expects text input"}, 400
+
+        prompt = content_input.get("data", "")
 
         pusher = websocket_pusher(app, action_id)
 
@@ -142,16 +156,8 @@ def routes(app: ASSAI, db):
             print(f"[T2T] Action ID: {action_id}", flush=True)
             sys.stdout.flush()
 
-            # Build context from conversation history if provided
-            if conversation_history:
-                # Format conversation history as context
-                context = "\n".join([
-                    f"{'User' if msg.get('role') == 'user' else 'Assistant'}: {msg.get('content', '')}"
-                    for msg in conversation_history[-5:]  # Last 5 messages for context
-                ])
-                full_prompt = f"{context}\nUser: {prompt}\nAssistant:"
-            else:
-                full_prompt = prompt
+            # Use prompt directly (conversation history can be managed via session_id if needed)
+            full_prompt = prompt
 
             print("[T2T] Generating text...", flush=True)
             sys.stdout.flush()
@@ -171,9 +177,21 @@ def routes(app: ASSAI, db):
                 # Remove the prompt from the generated text
                 if generated_text.startswith(full_prompt):
                     generated_text = generated_text[len(full_prompt):].strip()
-                return {"text": generated_text}
             else:
-                return {"text": str(outputs)}
+                generated_text = str(outputs)
+
+            # Return Message format
+            response_input: Input = text_input(generated_text)
+
+            response_message: Message = {
+                "id": int(time.time() * 1000),
+                "action_id": action_id,
+                "role": "assistant",
+                "content": response_input,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            return {"message": response_message}
 
 if __name__ == "__main__":
     routes(None)

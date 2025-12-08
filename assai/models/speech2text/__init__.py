@@ -17,6 +17,9 @@ from transformers import pipeline
 import torchaudio
 
 from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher
+from assai.tools.input import Input, Message, Conversation, text as text_input
+from datetime import datetime
+import time
 
 
 def audio_from_url(data_url, sample_rate=16000):
@@ -89,12 +92,25 @@ def routes(app: ASSAI, db):
     @route("/model/run", methods=['POST'])
     @route("/model/run/<string:model>", methods=['POST'])
     def run_s2t(model=default_model):
-        """Execute the model from the provided input"""
+        """Execute the model from the provided input using Message format"""
 
         data = request.get_json()
-        audio_data_uri = data.pop("audio")  # Base64 data URI (WebM or WAV)
+        message = data.pop("message", {})
         session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
+
+        # Validate message
+        if not message:
+            return {"error": "No message provided"}, 400
+
+        if message.get("role") != "user":
+            return {"error": "Message must be from user"}, 400
+
+        content_input = message.get("content", {})
+        if content_input.get("kind") != "audio":
+            return {"error": "Speech2Text expects audio input"}, 400
+
+        audio_data_uri = content_input.get("data", "")
 
         pusher = websocket_pusher(app, action_id)
 
@@ -159,7 +175,18 @@ def routes(app: ASSAI, db):
             else:
                 text = str(result)
 
-            return {"text": text}
+            # Return Message format
+            response_input: Input = text_input(text)
+
+            response_message: Message = {
+                "id": int(time.time() * 1000),
+                "action_id": action_id,
+                "role": "assistant",
+                "content": response_input,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            return {"message": response_message}
 
 if __name__ == "__main__":
     routes(None)

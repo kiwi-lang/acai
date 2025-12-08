@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from io import BytesIO
 import base64
-
+from datetime import datetime
+from typing import Optional
 
 
 @dataclass
@@ -13,8 +14,11 @@ class Input:
 
 @dataclass
 class Message:
+    id: int
+    action_id: Optional[int]
     role: str
     content: Input
+    timestamp: datetime
 
 
 @dataclass

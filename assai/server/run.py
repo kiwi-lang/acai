@@ -5,6 +5,7 @@ import traceback
 from dataclasses import dataclass
 from typing import Optional
 import multiprocessing as mp
+import sys
 # import importlib_resources
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -20,6 +21,12 @@ STATIC_UPLOAD_FOLDER = os.path.join(STATIC_FOLDER, 'uploads')
 
 # os.environ["XDG_CACHE_HOME"] = os.path.join(STATIC_FOLDER, "cache")
 # os.environ["HF_HOME"] = os.path.join(STATIC_FOLDER, "cache")
+
+
+_out = sys.stdout
+
+def logprint(*args, **kwargs):
+    print(*args, **kwargs, file=_out)
 
 if os.path.exists("/opt/milabench/"):
     os.environ["XDG_CACHE_HOME"] = "/opt/milabench/cache"
@@ -97,9 +104,8 @@ class CustomJSONProvider(DefaultJSONProvider):
 
 class ASSAI:
     def message(self, kind, message):
-        # Use broadcast=True to send to all connected clients
-        # This is necessary when emitting from background threads or outside request context
         self.socketio.emit(kind, message)
+        logprint(kind, message)
 
 
     def __init__(self):

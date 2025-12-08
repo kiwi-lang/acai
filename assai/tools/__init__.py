@@ -8,6 +8,7 @@ from io import BytesIO
 from threading import Lock, RLock
 import threading
 from collections import defaultdict
+from dataclasses import dataclass
 
 import torch
 from diffusers import FluxPipeline
@@ -38,9 +39,22 @@ def pil_to_base64_png(img):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-cached_pipeline = {}
+@dataclass
+class ModelCache:
+    model: any
+    lock: threading.Lock
 
-_LOADING = object()
+
+class ThreadSafeModel:
+    def __init__(self, cached_entry: ModelCache):
+        self.entry = cached_entry
+
+    def __call__(self, *args, **kwargs):
+        with self.entry.lock:
+            return self.entry.model(*args, **kwargs)
+
+
+cached_pipeline = {}
 
 
 def cached(key):
@@ -48,16 +62,13 @@ def cached(key):
 
     def decorator(fun):
         def _(*args, **kwargs):
-            if pipe := cached_pipeline.get(key): 
-                if pipe is _LOADING:
-                    raise RuntimeError("Pipe already loading")
- 
-                return pipe
-            
-            cached_pipeline[key] = _LOADING
-            pipe = fun(*args, **kwargs)
-            cached_pipeline[key] = pipe
-            return pipe
+            cache_entry = cached_pipeline.setdefault(key, ModelCache(None, threading.Lock()))
+
+            with cache_entry.lock:
+                if cache_entry.model is None:
+                    cache_entry.model = fun(*args, **kwargs)
+
+            return ThreadSafeModel(cache_entry)
 
         return _
 
