@@ -63,7 +63,7 @@ def routes(app: ASSAI, db):
     # to reduce latency but also a way to move them if we need more VRAM/RAM
     #
     route = namespaced_route(app, '/speech2text')
-    default_model = "openai/whisper-large"  # Default ASR model
+    default_model = "openai/whisper-large-v3"  # Default ASR model
 
     @route("/model/download")
     @route("/model/download/<string:name>")
@@ -85,7 +85,7 @@ def routes(app: ASSAI, db):
             "openai/whisper-tiny",
             "openai/whisper-small",
             "openai/whisper-medium",
-            "openai/whisper-large",
+            "openai/whisper-large-v3",
         ]
 
     @route("/model/settings")
@@ -134,7 +134,7 @@ def routes(app: ASSAI, db):
                 return pipe
 
         generation_args = {
-            "language": None,  # Auto-detect
+            "language": "en",  # Auto-detect
             "task": "transcribe",
         }
 

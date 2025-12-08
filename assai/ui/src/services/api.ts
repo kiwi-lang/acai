@@ -1,6 +1,6 @@
 // API service for ASSAI - AI Multi-Modal Platform
 // Use /api prefix to leverage Vite proxy and avoid CORS issues
-import { ChatRequest, ChatResponse, Conversation, ModelPlugin } from './types';
+import { ChatRequest, ChatResponse, Conversation, ModelPlugin, MultimodalConversation, MultimodalMessage } from './types';
 
 const API_BASE_URL = "/api";
 
@@ -72,6 +72,26 @@ class AssAI_API {
     return this.request<ChatResponse>('/chat', {
       method: 'POST',
       body: JSON.stringify(request),
+    });
+  }
+
+  // Multimodal chat endpoints
+  async sendMultimodalMessage(
+    conversation: MultimodalConversation,
+    sessionId?: string,
+    actionId?: number
+  ): Promise<{ message: MultimodalMessage; conversation_id: string }> {
+    const endpoint = '/multimodal/chat';
+    const body: any = { conversation };
+    if (sessionId) {
+      body.session_id = sessionId;
+    }
+    if (actionId !== undefined) {
+      body.action_id = actionId;
+    }
+    return this.request<{ message: MultimodalMessage; conversation_id: string }>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
     });
   }
 

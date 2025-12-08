@@ -1,5 +1,24 @@
 // Type definitions for ASSAI API
 
+// Multimodal Input format (matches backend assai.tools.input)
+export interface Input {
+    kind: 'text' | 'image' | 'audio' | 'video';
+    encoding: string;
+    data: string;
+}
+
+// Multimodal Message format (matches backend assai.tools.input)
+export interface MultimodalMessage {
+    role: 'user' | 'assistant';
+    content: Input;
+}
+
+// Multimodal Conversation format (matches backend assai.tools.input)
+export interface MultimodalConversation {
+    messages: MultimodalMessage[];
+}
+
+// Legacy Message format (for other components)
 export interface Message {
     id: string;
     role: 'user' | 'assistant';

@@ -21,7 +21,7 @@ def routes(app: ASSAI, db):
     # to reduce latency but also a way to move them if we need more VRAM/RAM
     #
     route = namespaced_route(app, '/text2text')
-    default_model = "microsoft/DialoGPT-medium"  # Default conversational model
+    default_model = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"  # Default conversational model
 
     @route("/model/download")
     @route("/model/download/<string:name>")
@@ -59,7 +59,7 @@ def routes(app: ASSAI, db):
                 "type": int,
                 "min": 1,
                 "max": 2048,
-                "default": 50
+                "default": 2048
             },
             "temperature": {
                 "type": float,
