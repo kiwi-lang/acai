@@ -187,12 +187,69 @@ class AssAI_API {
     });
   }
 
+  // Text2Text endpoint
+  // Backend returns { text: string }
+  async generateText(
+    prompt: string,
+    params?: TextGenerationParams,
+    model?: string,
+    sessionId?: string,
+    actionId?: number,
+    conversationHistory?: Array<{ role: string; content: string }>
+  ): Promise<{ text: string }> {
+    const endpoint = model
+      ? `/text2text/model/run/${encodeURIComponent(model)}`
+      : '/text2text/model/run';
+
+    const body: any = { prompt, ...params };
+    if (sessionId) {
+      body.session_id = sessionId;
+    }
+    if (actionId !== undefined) {
+      body.action_id = actionId;
+    }
+    if (conversationHistory) {
+      body.conversation_history = conversationHistory;
+    }
+
+    return this.request<{ text: string }>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
+  // Speech2Text endpoint
+  // Backend returns { text: string }
+  async transcribeSpeech(
+    audioDataUri: string,
+    params?: SpeechRecognitionParams,
+    model?: string,
+    sessionId?: string,
+    actionId?: number
+  ): Promise<{ text: string }> {
+    const endpoint = model
+      ? `/speech2text/model/run/${encodeURIComponent(model)}`
+      : '/speech2text/model/run';
+
+    const body: any = { audio: audioDataUri, ...params };
+    if (sessionId) {
+      body.session_id = sessionId;
+    }
+    if (actionId !== undefined) {
+      body.action_id = actionId;
+    }
+
+    return this.request<{ text: string }>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
   // Telemetry endpoint
   async getTelemetry(signal?: AbortSignal): Promise<{
     cpu: { memory: [number, number]; load: number };
     gpu: Record<string, { memory: [number, number]; load: number; temp: number; power: number }>;
   }> {
-    console.log("HERE telemetry call");
     return this.request('/telemetry', { signal });
   }
 
@@ -228,6 +285,23 @@ export interface SpeechGenerationParams {
   speed?: number;
   pitch?: number;
   sample_rate?: number;
+}
+
+// Text2Text generation parameters interface
+export interface TextGenerationParams {
+  max_length?: number;
+  max_new_tokens?: number;
+  temperature?: number;
+  top_p?: number;
+  top_k?: number;
+  repetition_penalty?: number;
+  do_sample?: boolean;
+}
+
+// Speech2Text recognition parameters interface
+export interface SpeechRecognitionParams {
+  language?: string | null;
+  task?: 'transcribe' | 'translate';
 }
 
 // Export a singleton instance

@@ -12,7 +12,7 @@ import ChatMessage from './ChatMessage';
 import ChatInput from './ChatInput';
 import LogDisplay from './LogDisplay';
 import { Message } from '../services/types';
-import { assaiAPI, SpeechGenerationParams } from '../services/api';
+import { assaiAPI, TextGenerationParams } from '../services/api';
 import { useWebSocket } from '../contexts/WebSocketContext';
 
 const SettingsIcon = () => (
@@ -29,7 +29,7 @@ const XIcon = () => (
     </svg>
 );
 
-const Text2Speech = () => {
+const Text2Text = () => {
     const { socket, sessionId } = useWebSocket();
     const [messages, setMessages] = useState<Message[]>([]);
     const [isLoading, setIsLoading] = useState(false);
@@ -40,10 +40,13 @@ const Text2Speech = () => {
     const actionIdToMessageIdRef = useRef<Map<number, string>>(new Map());
 
     // Generation parameters with defaults matching backend
-    const [generationParams, setGenerationParams] = useState<SpeechGenerationParams>({
-        speed: 1.0,
-        pitch: 0.0,
-        sample_rate: 22050,
+    const [generationParams, setGenerationParams] = useState<TextGenerationParams>({
+        max_new_tokens: 50,
+        temperature: 0.7,
+        top_p: 0.9,
+        top_k: 50,
+        repetition_penalty: 1.0,
+        do_sample: true,
     });
 
     // Memoize handlers to prevent duplicate listeners
@@ -84,7 +87,7 @@ const Text2Speech = () => {
     }, []);
 
     useEffect(() => {
-        document.title = 'Text to Speech - ASSAI';
+        document.title = 'Text to Text - ASSAI';
 
         if (!socket) {
             return;
@@ -133,14 +136,14 @@ const Text2Speech = () => {
         };
         setMessages(prev => [...prev, userMessage]);
 
-        // Create placeholder message for logs/audio
+        // Create placeholder message for logs/text
         const assistantMessageId = (Date.now() + 1).toString();
         const assistantMessage: Message = {
             id: assistantMessageId,
             role: 'assistant',
             content: ``,
             timestamp: new Date(),
-            type: 'audio',
+            type: 'text',
             actionId,
             logs: [],
             isGenerating: true,
@@ -153,31 +156,42 @@ const Text2Speech = () => {
         setIsLoading(true);
 
         try {
-            // Generate speech from prompt with current generation parameters and action_id
-            const audioDataUris = await assaiAPI.generateSpeech(
+            // Build conversation history from previous messages (excluding the current one)
+            // Backend uses last 5 messages, so we send last 5 pairs (10 messages max)
+            const conversationHistory = messages
+                .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+                .filter(msg => msg.content && msg.content.trim() !== '') // Only include messages with content
+                .slice(-10) // Last 10 messages for context (backend will use last 5)
+                .map(msg => ({
+                    role: msg.role,
+                    content: msg.content || '',
+                }));
+
+            // Generate text from prompt with current generation parameters and action_id
+            const response = await assaiAPI.generateText(
                 content.trim(),
                 generationParams,
                 undefined,
                 sessionId ?? undefined,
-                actionId
+                actionId,
+                conversationHistory
             );
 
-            // Handle HTTP response - replace logs with audio
-            if (audioDataUris && audioDataUris.length > 0) {
+            // Handle HTTP response - replace logs with generated text
+            if (response && response.text) {
                 setMessages(prev => prev.map(msg => {
                     if (msg.id === assistantMessageId) {
                         return {
                             ...msg,
-                            audioUrl: audioDataUris[0], // Use first audio
-                            logs: undefined, // Remove logs when audio is ready
+                            content: response.text,
+                            logs: undefined, // Remove logs when text is ready
                             isGenerating: false,
-                            content: ``,
                         };
                     }
                     return msg;
                 }));
             } else {
-                throw new Error('No audio data received from server');
+                throw new Error('No text data received from server');
             }
 
             setIsLoading(false);
@@ -187,8 +201,8 @@ const Text2Speech = () => {
                 actionIdToMessageIdRef.current.delete(actionId);
             }, 5000);
         } catch (error) {
-            console.error('Failed to generate speech:', error);
-            const errorMessage = error instanceof Error ? error.message : 'Failed to generate speech';
+            console.error('Failed to generate text:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Failed to generate text';
 
             setIsLoading(false);
 
@@ -223,9 +237,12 @@ const Text2Speech = () => {
 
     const resetToDefaults = () => {
         setGenerationParams({
-            speed: 1.0,
-            pitch: 0.0,
-            sample_rate: 22050,
+            max_new_tokens: 50,
+            temperature: 0.7,
+            top_p: 0.9,
+            top_k: 50,
+            repetition_penalty: 1.0,
+            do_sample: true,
         });
     };
 
@@ -240,7 +257,7 @@ const Text2Speech = () => {
             <Box
                 w="64px"
                 h="64px"
-                bg="green.500"
+                bg="blue.500"
                 borderRadius="xl"
                 display="flex"
                 alignItems="center"
@@ -249,15 +266,15 @@ const Text2Speech = () => {
                 color="white"
                 fontWeight="bold"
             >
-                🔊
+                💬
             </Box>
 
             <VStack gap={2} textAlign="center">
                 <Text fontSize="2xl" fontWeight="semibold" color="white">
-                    Text to Speech
+                    Text to Text
                 </Text>
                 <Text fontSize="md" color="gray.400" maxW="md">
-                    Enter text and I'll convert it to speech. Each prompt will generate a new audio file.
+                    Have a conversation with an AI language model. Ask questions, get answers, and explore AI-generated text.
                 </Text>
             </VStack>
 
@@ -267,10 +284,10 @@ const Text2Speech = () => {
                 </Text>
                 <VStack gap={2} w="100%">
                     {[
-                        'Hello, this is a test of the text to speech system.',
-                        'The quick brown fox jumps over the lazy dog.',
-                        'Welcome to ASSAI, your AI assistant platform.',
-                        'Text to speech conversion is now available.',
+                        'Tell me a short story about a robot',
+                        'Explain quantum computing in simple terms',
+                        'Write a poem about the ocean',
+                        'What are the benefits of renewable energy?',
                     ].map((example) => (
                         <Box
                             key={example}
@@ -347,7 +364,7 @@ const Text2Speech = () => {
                         <ChatInput
                             onSendMessage={handleSendMessage}
                             disabled={isLoading}
-                            placeholder={messages.length === 0 ? "Enter text to convert to speech..." : "Enter more text..."}
+                            placeholder={messages.length === 0 ? "Start a conversation..." : "Continue the conversation..."}
                         />
                         {/* Settings Toggle Button */}
                         <IconButton
@@ -413,72 +430,130 @@ const Text2Speech = () => {
                                 py={4}
                             >
                                 <VStack gap={4} align="stretch">
-                                    {/* Speed */}
+                                    {/* Max New Tokens */}
+                                    <VStack align="flex-start" gap={1}>
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">Max New Tokens</Text>
+                                        <Input
+                                            type="number"
+                                            value={generationParams.max_new_tokens}
+                                            onChange={(e) => {
+                                                const value = parseInt(e.target.value) || 50;
+                                                setGenerationParams(prev => ({ ...prev, max_new_tokens: value }));
+                                            }}
+                                            min={1}
+                                            max={2048}
+                                            size="sm"
+                                            bg="gray.700"
+                                            borderColor="gray.600"
+                                            color="gray.100"
+                                            _focus={{ borderColor: 'blue.500', bg: 'gray.700' }}
+                                        />
+                                    </VStack>
+
+                                    {/* Temperature */}
                                     <VStack align="flex-start" gap={1}>
                                         <Text fontSize="sm" fontWeight="medium" color="gray.300">
-                                            Speed: {generationParams.speed?.toFixed(1)}x
+                                            Temperature: {generationParams.temperature?.toFixed(2)}
                                         </Text>
                                         <Input
                                             type="number"
-                                            value={generationParams.speed}
+                                            value={generationParams.temperature}
                                             onChange={(e) => {
-                                                const value = parseFloat(e.target.value) || 1.0;
-                                                setGenerationParams(prev => ({ ...prev, speed: value }));
+                                                const value = parseFloat(e.target.value) || 0.7;
+                                                setGenerationParams(prev => ({ ...prev, temperature: value }));
                                             }}
-                                            min={0.5}
-                                            max={2.0}
+                                            min={0}
+                                            max={2}
                                             step={0.1}
                                             size="sm"
                                             bg="gray.700"
                                             borderColor="gray.600"
                                             color="gray.100"
-                                            _focus={{ borderColor: 'green.500', bg: 'gray.700' }}
+                                            _focus={{ borderColor: 'blue.500', bg: 'gray.700' }}
                                         />
                                     </VStack>
 
-                                    {/* Pitch */}
+                                    {/* Top P */}
                                     <VStack align="flex-start" gap={1}>
                                         <Text fontSize="sm" fontWeight="medium" color="gray.300">
-                                            Pitch: {generationParams.pitch?.toFixed(1)} semitones
+                                            Top P: {generationParams.top_p?.toFixed(2)}
                                         </Text>
                                         <Input
                                             type="number"
-                                            value={generationParams.pitch}
+                                            value={generationParams.top_p}
                                             onChange={(e) => {
-                                                const value = parseFloat(e.target.value) || 0.0;
-                                                setGenerationParams(prev => ({ ...prev, pitch: value }));
+                                                const value = parseFloat(e.target.value) || 0.9;
+                                                setGenerationParams(prev => ({ ...prev, top_p: value }));
                                             }}
-                                            min={-12.0}
-                                            max={12.0}
-                                            step={0.5}
+                                            min={0}
+                                            max={1}
+                                            step={0.05}
                                             size="sm"
                                             bg="gray.700"
                                             borderColor="gray.600"
                                             color="gray.100"
-                                            _focus={{ borderColor: 'green.500', bg: 'gray.700' }}
+                                            _focus={{ borderColor: 'blue.500', bg: 'gray.700' }}
                                         />
                                     </VStack>
 
-                                    {/* Sample Rate */}
+                                    {/* Top K */}
                                     <VStack align="flex-start" gap={1}>
-                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">Sample Rate (Hz)</Text>
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">Top K</Text>
                                         <Input
                                             type="number"
-                                            value={generationParams.sample_rate}
+                                            value={generationParams.top_k}
                                             onChange={(e) => {
-                                                const value = parseInt(e.target.value) || 22050;
-                                                setGenerationParams(prev => ({ ...prev, sample_rate: value }));
+                                                const value = parseInt(e.target.value) || 50;
+                                                setGenerationParams(prev => ({ ...prev, top_k: value }));
                                             }}
-                                            min={8000}
-                                            max={48000}
-                                            step={1000}
+                                            min={0}
+                                            max={100}
                                             size="sm"
                                             bg="gray.700"
                                             borderColor="gray.600"
                                             color="gray.100"
-                                            _focus={{ borderColor: 'green.500', bg: 'gray.700' }}
+                                            _focus={{ borderColor: 'blue.500', bg: 'gray.700' }}
                                         />
                                     </VStack>
+
+                                    {/* Repetition Penalty */}
+                                    <VStack align="flex-start" gap={1}>
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">
+                                            Repetition Penalty: {generationParams.repetition_penalty?.toFixed(2)}
+                                        </Text>
+                                        <Input
+                                            type="number"
+                                            value={generationParams.repetition_penalty}
+                                            onChange={(e) => {
+                                                const value = parseFloat(e.target.value) || 1.0;
+                                                setGenerationParams(prev => ({ ...prev, repetition_penalty: value }));
+                                            }}
+                                            min={0}
+                                            max={2}
+                                            step={0.1}
+                                            size="sm"
+                                            bg="gray.700"
+                                            borderColor="gray.600"
+                                            color="gray.100"
+                                            _focus={{ borderColor: 'blue.500', bg: 'gray.700' }}
+                                        />
+                                    </VStack>
+
+                                    {/* Do Sample */}
+                                    <HStack justify="space-between">
+                                        <Text fontSize="sm" fontWeight="medium" color="gray.300">Do Sample</Text>
+                                        <Button
+                                            size="sm"
+                                            variant={generationParams.do_sample ? "solid" : "outline"}
+                                            colorScheme={generationParams.do_sample ? "blue" : "gray"}
+                                            onClick={() => {
+                                                setGenerationParams(prev => ({ ...prev, do_sample: !prev.do_sample }));
+                                            }}
+                                            px={3}
+                                        >
+                                            {generationParams.do_sample ? "On" : "Off"}
+                                        </Button>
+                                    </HStack>
 
                                     <Button
                                         size="sm"
@@ -504,5 +579,5 @@ const Text2Speech = () => {
     );
 };
 
-export default Text2Speech;
+export default Text2Text;
 

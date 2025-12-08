@@ -1,4 +1,4 @@
-import { useState, useRef, KeyboardEvent } from 'react';
+import { useState, useRef, KeyboardEvent, useLayoutEffect } from 'react';
 import { Box, Textarea, IconButton, HStack, Text, VStack, Image } from '@chakra-ui/react';
 import FileUpload from './FileUpload';
 
@@ -26,24 +26,64 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
     const [audioFile, setAudioFile] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const shouldRestoreFocusRef = useRef(false);
 
     const handleSend = () => {
         if ((message.trim() || imageFile || audioFile) && !disabled) {
+            // Store current focus state before any operations
+            const wasFocused = document.activeElement === textareaRef.current;
+
+            // Mark that we should restore focus after state updates
+            if (wasFocused) {
+                shouldRestoreFocusRef.current = true;
+            }
+
             onSendMessage(
                 message.trim(),
                 imageFile || undefined,
                 audioFile || undefined
             );
+
+            // Clear state
             setMessage('');
             setImageFile(null);
             setAudioFile(null);
             setImagePreview(null);
+
             // Reset textarea height
             if (textareaRef.current) {
                 textareaRef.current.style.height = 'auto';
             }
         }
     };
+
+    // Restore focus after state updates complete
+    useLayoutEffect(() => {
+        if (shouldRestoreFocusRef.current && textareaRef.current && !disabled) {
+            // Use setTimeout to ensure all parent re-renders complete
+            const timeoutId = setTimeout(() => {
+                if (textareaRef.current && !disabled && document.activeElement !== textareaRef.current) {
+                    textareaRef.current.focus();
+                }
+                shouldRestoreFocusRef.current = false;
+            }, 50); // Increased delay to ensure parent async operations complete
+
+            return () => clearTimeout(timeoutId);
+        }
+    }, [message, imageFile, audioFile, disabled]);
+
+    // Also restore focus when disabled changes from true to false (after async operations)
+    useLayoutEffect(() => {
+        if (!disabled && textareaRef.current && shouldRestoreFocusRef.current) {
+            const timeoutId = setTimeout(() => {
+                if (textareaRef.current && !disabled) {
+                    textareaRef.current.focus();
+                }
+            }, 50);
+
+            return () => clearTimeout(timeoutId);
+        }
+    }, [disabled]);
 
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -195,7 +235,11 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
 
                         <IconButton
                             aria-label="Send message"
-                            onClick={handleSend}
+                            onMouseDown={(e) => {
+                                // Prevent button from taking focus and handle send
+                                e.preventDefault();
+                                handleSend();
+                            }}
                             disabled={disabled || (!message.trim() && !imageFile && !audioFile)}
                             colorScheme="green"
                             size="lg"
@@ -203,6 +247,8 @@ const ChatInput = ({ onSendMessage, disabled = false, placeholder = "Send a mess
                             h="50px"
                             w="50px"
                             flexShrink={0}
+                            type="button"
+                            tabIndex={-1}
                         >
                             <SendIcon />
                         </IconButton>

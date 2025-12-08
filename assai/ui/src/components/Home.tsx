@@ -16,8 +16,10 @@ const Home = () => {
   }, []);
 
   useEffect(() => {
-    // Scroll to bottom when new messages arrive
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    // Scroll to bottom when new messages arrive, but don't steal focus
+    if (messagesEndRef.current) {
+      messagesEndRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
   }, [messages]);
 
   const handleSendMessage = async (content: string, imageFile?: File, audioFile?: File) => {
