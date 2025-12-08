@@ -97,13 +97,16 @@ class CustomJSONProvider(DefaultJSONProvider):
 
 class ASSAI:
     def message(self, kind, message):
+        # Use broadcast=True to send to all connected clients
+        # This is necessary when emitting from background threads or outside request context
         self.socketio.emit(kind, message)
+
 
     def __init__(self):
         print(STATIC_FOLDER)
         self.app = Flask(__name__, static_folder=STATIC_FOLDER)
         self.app.json = CustomJSONProvider(self.app)
-        self.socketio = SocketIO(self.app, cors_allowed_origins="*")
+        self.socketio = SocketIO(self.app, cors_allowed_origins="*", async_mode="threading")
         # self.socketio.init_app(self.app)
         import assai.models
 

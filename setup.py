@@ -49,7 +49,8 @@ if __name__ == "__main__":
             "sentencepiece",
             "torchcompat",
             "voir",
-            "nvidia-ml-py"
+            "nvidia-ml-py",
+            "datasets"
         ],
         package_data={
             "assai.data": [

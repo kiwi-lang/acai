@@ -17,6 +17,7 @@ import torchcompat.core as accelerator
 
 
 
+
 def namespaced_route(app, namespace):
     if not namespace.startswith("/"):
         namespace = "/" + namespace
@@ -109,15 +110,15 @@ class StreamRouter:
         if "\n" not in msg:
             self.prev.append(msg)
         else:
-            head, _, tail = msg.partition("\n")
-            self.prev.append(head)
-            line = "".join(self.prev)
+            while msg:
+                head, _, msg = msg.partition("\n")
+                self.prev.append(head)
+                line = "".join(self.prev)
 
-            if line != "":
-                self.route(thread_id, line)
+                if line != "":
+                    self.route(thread_id, line)
 
-            self.prev.clear()
-            self.write(tail)
+                self.prev.clear()
             
     def flush(self):
         pass

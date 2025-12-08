@@ -160,6 +160,33 @@ class AssAI_API {
     });
   }
 
+  // Text2Speech endpoint
+  // Backend returns an array of base64 data URIs: ["data:audio/wav;base64,..."]
+  async generateSpeech(
+    prompt: string,
+    params?: SpeechGenerationParams,
+    model?: string,
+    sessionId?: string,
+    actionId?: number
+  ): Promise<string[]> {
+    const endpoint = model
+      ? `/text2speech/model/run/${encodeURIComponent(model)}`
+      : '/text2speech/model/run';
+
+    const body: any = { prompt, ...params };
+    if (sessionId) {
+      body.session_id = sessionId;
+    }
+    if (actionId !== undefined) {
+      body.action_id = actionId;
+    }
+
+    return this.request<string[]>(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+  }
+
   // Telemetry endpoint
   async getTelemetry(signal?: AbortSignal): Promise<{
     cpu: { memory: [number, number]; load: number };
@@ -194,6 +221,13 @@ export interface ImageGenerationParams {
   num_inference_steps?: number;
   max_sequence_length?: number;
   seed?: number;
+}
+
+// Text2Speech generation parameters interface
+export interface SpeechGenerationParams {
+  speed?: number;
+  pitch?: number;
+  sample_rate?: number;
 }
 
 // Export a singleton instance

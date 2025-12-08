@@ -14,6 +14,7 @@ import Home from './components/Home';
 import ApiTester from './components/ApiTester';
 import Models from './components/Models';
 import Text2Image from './components/Text2Image';
+import Text2Speech from './components/Text2Speech';
 import HuggingFaceModels from './components/HuggingFaceModels';
 import './App.css';
 
@@ -46,7 +47,7 @@ function App() {
               <Route path="/" element={<Home />} />
               <Route path="/chat/:conversationId" element={<Home />} />
               <Route path="/text2image" element={<Text2Image />} />
-              <Route path="/text2speech" element={<TaskPlaceholder taskName="Text to Speech" />} />
+              <Route path="/text2speech" element={<Text2Speech />} />
               <Route path="/text2audio" element={<TaskPlaceholder taskName="Text to Audio" />} />
               <Route path="/image2text" element={<TaskPlaceholder taskName="Image to Text" />} />
               <Route path="/speech2text" element={<TaskPlaceholder taskName="Speech to Text" />} />
