@@ -381,7 +381,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
               >
                 <HuggingFaceIcon />
                 <Text fontSize="sm" color={location.pathname === '/models' ? 'white' : 'gray.400'}>
-                  AI Models
+                  Loaded AI Models
                 </Text>
               </HStack>
             </Link>

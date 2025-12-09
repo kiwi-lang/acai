@@ -71,6 +71,7 @@ class ModelCacheEntry:
     lock: threading.Lock
     before: any = None
     after: any = None
+    last_used: float = None
 
     def memory(self):
         mem = -1
@@ -93,6 +94,13 @@ class ModelCacheEntry:
             return (self.after["time"] - self.before["time"])
         return -1
 
+    def __json__(self):
+        return {
+            "memory_usage": self.memory(),
+            "load_time":  self.time(),
+            "last_used": self.last_used,  
+        }
+
 
 class ThreadSafeModel:
     def __init__(self, cached_entry: ModelCacheEntry):
@@ -100,10 +108,13 @@ class ThreadSafeModel:
 
     def __call__(self, *args, **kwargs):
         with self.entry.lock:
+            self.entry.last_used = time.time()
             return self.entry.model(*args, **kwargs)
 
 
 class ModelCache:
+    """Model are loaded once and kept alive until later"""
+
     def __init__(self):
         self.cache = dict()
         self.lock = threading.Lock()
@@ -116,6 +127,7 @@ class ModelCache:
             if cache_entry.model is None:
                 # Force loading one model at a time
                 with self.lock:
+                    cache_entry.last_used = 0
                     cache_entry.before = self.observe()
                     cache_entry.model = fun(*args, **kwargs)
                     cache_entry.after = self.observe()
@@ -124,14 +136,11 @@ class ModelCache:
 
     def remove(self, item):
         self.cache.pop(item)
+        torch.cuda.empty_cache()
 
     def __json__(self):
         return {
-            name: {
-                "memory_usage": entry.memory(),
-                "load_time":  entry.time(),
-            }
-            for name, entry in self.cache.items()
+            name: entry.__json__() for name, entry in self.cache.items()
         }
 
 
