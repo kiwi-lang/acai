@@ -9,6 +9,7 @@ from threading import Lock, RLock
 import threading
 from collections import defaultdict
 from dataclasses import dataclass
+import gc
 
 import torch
 from diffusers import FluxPipeline
@@ -136,6 +137,7 @@ class ModelCache:
 
     def remove(self, item):
         self.cache.pop(item)
+        gc.collect()
         torch.cuda.empty_cache()
 
     def __json__(self):

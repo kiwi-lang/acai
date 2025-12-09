@@ -19,13 +19,14 @@ from huggingface_hub import scan_cache_dir
 from huggingface_hub import HfApi
 
 from assai.tools import namespaced_route, capture_progress_thread, pil_to_base64_png, cached, websocket_pusher
-from assai.tools import live_models
+from assai.tools import live_models, system_monitor
 
 
 def routes(app: ASSAI, db):
 
     route = namespaced_route(app, '/huggingface')
     api = HfApi()
+    observe = system_monitor()
 
     @route("/search/<string:name>")
     @route("/search/<string:name>/<string:filter>")
@@ -56,7 +57,14 @@ def routes(app: ASSAI, db):
 
     @route("/loaded/models/list")
     def loaded():
-        return live_models.__json__()
+        return {
+            "system": observe(),
+            "torch": {
+                "allocated": torch.cuda.memory_allocated() / 1024 / 1024,
+                "reserved": torch.cuda.memory_reserved() / 1024 / 1024,
+            },
+            "models": live_models.__json__(),
+        }
 
     @route("/loaded/models/remove/<string:name>", methods=['DELETE'])
     def remove_model(name):

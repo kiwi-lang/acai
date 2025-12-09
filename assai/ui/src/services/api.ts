@@ -302,7 +302,18 @@ class AssAI_API {
   }
 
   // Loaded models endpoints
-  async getLoadedModels(): Promise<Record<string, { memory_usage: number; load_time: number }>> {
+  async getLoadedModels(): Promise<{
+    system: {
+      gpu: Record<string, {
+        memory: [number, number];
+      }>;
+    };
+    torch: {
+      allocated: number;
+      reserved: number;
+    };
+    models: Record<string, { memory_usage: number; load_time: number }>;
+  }> {
     return this.request('/huggingface/loaded/models/list');
   }
 

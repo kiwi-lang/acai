@@ -7,8 +7,21 @@ interface LoadedModel {
     load_time: number;
 }
 
+interface LoadedModelsResponse {
+    system: {
+        gpu: Record<string, {
+            memory: [number, number]; // [used, total]
+        }>;
+    };
+    torch: {
+        allocated: number; // MB
+        reserved: number; // MB
+    };
+    models: Record<string, LoadedModel>;
+}
+
 const Models = () => {
-    const [loadedModels, setLoadedModels] = useState<Record<string, LoadedModel>>({});
+    const [loadedModelsData, setLoadedModelsData] = useState<LoadedModelsResponse | null>(null);
     const [isLoadingLoaded, setIsLoadingLoaded] = useState(true);
     const [notification, setNotification] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
@@ -20,7 +33,7 @@ const Models = () => {
     const loadLoadedModels = async () => {
         try {
             const data = await assaiAPI.getLoadedModels();
-            setLoadedModels(data);
+            setLoadedModelsData(data);
         } catch (err) {
             console.error('Error loading loaded models:', err);
         } finally {
@@ -59,7 +72,16 @@ const Models = () => {
         return `${seconds.toFixed(2)} s`;
     };
 
-    const loadedModelNames = Object.keys(loadedModels);
+    const loadedModelNames = loadedModelsData?.models ? Object.keys(loadedModelsData.models) : [];
+
+    // Get GPU memory info (use first GPU if available)
+    const gpuMemory = loadedModelsData?.system?.gpu
+        ? Object.values(loadedModelsData.system.gpu)[0]?.memory
+        : null;
+    const memoryAvailable = gpuMemory ? gpuMemory[1] : 0; // total
+    const memoryUsed = gpuMemory ? gpuMemory[0] : 0; // used
+    const torchAllocated = loadedModelsData?.torch?.allocated || 0;
+    const torchReserved = loadedModelsData?.torch?.reserved || 0;
 
     return (
         <Box p={8} maxW="7xl" mx="auto" bg="gray.900" minH="100vh">
@@ -99,6 +121,44 @@ const Models = () => {
                     </Button>
                 </HStack>
 
+                {/* Memory Statistics */}
+                <Box
+                    w="100%"
+                    p={6}
+                    bg="gray.800"
+                    borderRadius="lg"
+                    border="1px solid"
+                    borderColor="gray.700"
+                >
+                    <Heading size="md" color="white" mb={4}>Memory Statistics</Heading>
+                    <SimpleGrid columns={{ base: 1, md: 2, lg: 4 }} gap={4}>
+                        <Box>
+                            <Text fontSize="sm" color="gray.400" mb={1}>Memory Available</Text>
+                            <Text fontSize="lg" color="green.300" fontWeight="bold">
+                                {formatMemory(memoryAvailable)}
+                            </Text>
+                        </Box>
+                        <Box>
+                            <Text fontSize="sm" color="gray.400" mb={1}>Memory Used</Text>
+                            <Text fontSize="lg" color="yellow.300" fontWeight="bold">
+                                {formatMemory(memoryUsed)}
+                            </Text>
+                        </Box>
+                        <Box>
+                            <Text fontSize="sm" color="gray.400" mb={1}>PyTorch Allocated</Text>
+                            <Text fontSize="lg" color="blue.300" fontWeight="bold">
+                                {formatMemory(torchAllocated)}
+                            </Text>
+                        </Box>
+                        <Box>
+                            <Text fontSize="sm" color="gray.400" mb={1}>PyTorch Reserved</Text>
+                            <Text fontSize="lg" color="purple.300" fontWeight="bold">
+                                {formatMemory(torchReserved)}
+                            </Text>
+                        </Box>
+                    </SimpleGrid>
+                </Box>
+
                 {isLoadingLoaded ? (
                     <Box w="100%" p={8} textAlign="center">
                         <Spinner size="lg" color="green.500" />
@@ -120,7 +180,7 @@ const Models = () => {
                 ) : (
                     <SimpleGrid columns={{ base: 1, md: 2, lg: 3 }} gap={4} w="100%">
                         {loadedModelNames.map((name) => {
-                            const model = loadedModels[name];
+                            const model = loadedModelsData!.models[name];
                             return (
                                 <Box
                                     key={name}
