@@ -4,13 +4,13 @@ import importlib
 import traceback
 from dataclasses import dataclass
 from typing import Optional
-import multiprocessing as mp
 import sys
 # import importlib_resources
 
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask.json.provider import DefaultJSONProvider
+from assai.tools import system_monitor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))
@@ -107,7 +107,6 @@ class ASSAI:
         self.socketio.emit(kind, message)
         logprint(kind, message)
 
-
     def __init__(self):
         print(STATIC_FOLDER)
         self.app = Flask(__name__, static_folder=STATIC_FOLDER)
@@ -122,13 +121,7 @@ class ASSAI:
             if hasattr(module, 'routes'):
                 module.routes(self, None)
 
-        from voir.instruments.cpu import cpu_monitor
-        from voir.instruments.gpu import select_backend, gpu_monitor
-
-        self.cpu_fn = cpu_monitor()
-        select_backend()
-        self.gpu_fn = gpu_monitor()
-        self.n_cpu = mp.cpu_count()
+        self.observe_system = system_monitor()
 
         # WebSocket connection handler
         @self.socketio.on('connect')
@@ -195,9 +188,7 @@ class ASSAI:
         @self.app.route("/telemetry")
         def telemetry() -> Telemetry:
             """Use voir to fetch system usage (GPU & CPU & RAM)"""
-            cpu = self.cpu_fn()
-            cpu["load"] = cpu["load"] / self.n_cpu
-            return {"cpu": cpu, "gpu": self.gpu_fn()}
+            return self.observe_system()
 
 
 def main():

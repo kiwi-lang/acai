@@ -39,14 +39,63 @@ def pil_to_base64_png(img):
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
+_observe_util = None
+
+def system_monitor():
+    global _observe_util
+    if _observe_util is not None:
+        return _observe_util
+
+    import multiprocessing as mp
+
+    from voir.instruments.cpu import cpu_monitor
+    from voir.instruments.gpu import select_backend, gpu_monitor
+
+    cpu_fn = cpu_monitor()
+    select_backend()
+    gpu_fn = gpu_monitor()
+    n_cpu = mp.cpu_count()
+
+    def observe():
+        cpu = cpu_fn()
+        cpu["load"] = cpu["load"] / n_cpu
+        return {"cpu": cpu, "gpu": gpu_fn(), "time": time.time()}
+
+    _observe_util = observe
+    return observe
+
+
 @dataclass
-class ModelCache:
+class ModelCacheEntry:
     model: any
     lock: threading.Lock
+    before: any = None
+    after: any = None
+
+    def memory(self):
+        mem = -1
+
+        if self.after and self.before:
+            mem = 0
+
+            for idx, before in self.before["gpu"].items():
+                after = self.after["gpu"][idx]
+
+                bused = before["memory"][0]
+                aused = after["memory"][0]
+
+                mem += aused - bused
+        
+        return mem
+
+    def time(self):
+        if self.after and self.before:
+            return (self.after["time"] - self.before["time"])
+        return -1
 
 
 class ThreadSafeModel:
-    def __init__(self, cached_entry: ModelCache):
+    def __init__(self, cached_entry: ModelCacheEntry):
         self.entry = cached_entry
 
     def __call__(self, *args, **kwargs):
@@ -54,24 +103,48 @@ class ThreadSafeModel:
             return self.entry.model(*args, **kwargs)
 
 
-cached_pipeline = {}
+class ModelCache:
+    def __init__(self):
+        self.cache = dict()
+        self.lock = threading.Lock()
+        self.observe = system_monitor()
+
+    def load_model(self, key, fun, *args, **kwargs):
+        cache_entry = self.cache.setdefault(key, ModelCacheEntry(None, threading.Lock()))
+
+        with cache_entry.lock:
+            if cache_entry.model is None:
+                # Force loading one model at a time
+                with self.lock:
+                    cache_entry.before = self.observe()
+                    cache_entry.model = fun(*args, **kwargs)
+                    cache_entry.after = self.observe()
+
+        return ThreadSafeModel(cache_entry)
+
+    def remove(self, item):
+        self.cache.pop(item)
+
+    def __json__(self):
+        return {
+            name: {
+                "memory_usage": entry.memory(),
+                "load_time":  entry.time(),
+            }
+            for name, entry in self.cache.items()
+        }
+
+
+live_models = ModelCache()
 
 
 def cached(key):
-    global cached_pipeline
-
+    global live_models
+    
     def decorator(fun):
         def _(*args, **kwargs):
-            cache_entry = cached_pipeline.setdefault(key, ModelCache(None, threading.Lock()))
-
-            with cache_entry.lock:
-                if cache_entry.model is None:
-                    cache_entry.model = fun(*args, **kwargs)
-
-            return ThreadSafeModel(cache_entry)
-
+            return live_models.load_model(key, fun, *args, **kwargs)
         return _
-
     return decorator
 
 

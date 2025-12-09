@@ -19,6 +19,7 @@ from huggingface_hub import scan_cache_dir
 from huggingface_hub import HfApi
 
 from assai.tools import namespaced_route, capture_progress_thread, pil_to_base64_png, cached, websocket_pusher
+from assai.tools import live_models
 
 
 def routes(app: ASSAI, db):
@@ -36,7 +37,7 @@ def routes(app: ASSAI, db):
         card = api.model_info(repo_id=name)
         d = asdict(card)
         return d
-    
+
     @route("/list")
     def available():
         cache_info: HFCacheInfo = scan_cache_dir()
@@ -52,3 +53,13 @@ def routes(app: ASSAI, db):
                 repos.append(repo)
 
         return {"repos": repos}
+
+    @route("/loaded/models/list")
+    def loaded():
+        return live_models.__json__()
+
+    @route("/loaded/models/remove/<string:name>", methods=['DELETE'])
+    def remove_model(name):
+        live_models.remove(name)
+        return {"success": True, "message": f"Model {name} removed"}
+

@@ -300,6 +300,17 @@ class AssAI_API {
   async getHuggingFaceModelInfo(name: string): Promise<any> {
     return this.request(`/huggingface/info/${encodeURIComponent(name)}`);
   }
+
+  // Loaded models endpoints
+  async getLoadedModels(): Promise<Record<string, { memory_usage: number; load_time: number }>> {
+    return this.request('/huggingface/loaded/models/list');
+  }
+
+  async removeLoadedModel(name: string): Promise<{ success: boolean; message: string }> {
+    return this.request(`/huggingface/loaded/models/remove/${encodeURIComponent(name)}`, {
+      method: 'DELETE',
+    });
+  }
 }
 
 // Text2Image generation parameters interface
