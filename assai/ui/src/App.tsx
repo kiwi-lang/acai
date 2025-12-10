@@ -15,7 +15,7 @@ import ApiTester from './components/ApiTester';
 import Models from './components/Models';
 import Text2Image from './components/Text2Image';
 import Text2Video from './components/Text2Video';
-import Text2Mesh from './components/Text2Mesh';
+import Image2Mesh from './components/Image2Mesh';
 import Text2Speech from './components/Text2Speech';
 import Text2Text from './components/Text2Text';
 import Speech2Text from './components/Speech2Text';
@@ -52,7 +52,7 @@ function App() {
               <Route path="/chat/:conversationId" element={<Home />} />
               <Route path="/text2image" element={<Text2Image />} />
               <Route path="/text2video" element={<Text2Video />} />
-              <Route path="/text2mesh" element={<Text2Mesh />} />
+              <Route path="/image2mesh" element={<Image2Mesh />} />
               <Route path="/text2speech" element={<Text2Speech />} />
               <Route path="/text2text" element={<Text2Text />} />
               <Route path="/text2audio" element={<TaskPlaceholder taskName="Text to Audio" />} />

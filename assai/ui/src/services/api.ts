@@ -157,7 +157,7 @@ class AssAI_API {
   // Takes a single Message, returns Message response
   async runModel(
     message: Message,
-    modelType: 'text2text' | 'text2image' | 'text2video' | 'text2mesh' | 'text2speech' | 'speech2text',
+    modelType: 'text2text' | 'text2image' | 'text2video' | 'image2mesh' | 'text2speech' | 'speech2text',
     params?: Record<string, any>,
     model?: string,
     sessionId?: string,
@@ -301,28 +301,28 @@ class AssAI_API {
     return this.runModel(msg, 'speech2text', params, model, sessionId, actionId);
   }
 
-  // Text2Mesh endpoint - uses unified Message format
+  // Image2Mesh endpoint - uses unified Message format
   async generateMesh(
-    prompt: string,
+    imageDataUri: string,
     params?: MeshGenerationParams,
     model?: string,
     sessionId?: string,
     actionId?: number,
     message?: Message
   ): Promise<{ message: Message }> {
-    // Build message if not provided
+    // Use provided message if it has image content, otherwise build from imageDataUri
     const msg: Message = message || {
       id: Date.now(),
       role: 'user',
       content: {
-        kind: 'text',
-        encoding: 'utf8',
-        data: prompt
+        kind: 'image',
+        encoding: 'data_url',
+        data: imageDataUri
       },
       timestamp: new Date().toISOString()
     };
 
-    return this.runModel(msg, 'text2mesh', params, model, sessionId, actionId);
+    return this.runModel(msg, 'image2mesh', params, model, sessionId, actionId);
   }
 
   // Telemetry endpoint
@@ -391,7 +391,7 @@ export interface VideoGenerationParams {
   seed?: number;
 }
 
-// Text2Mesh generation parameters interface
+// Image2Mesh generation parameters interface
 export interface MeshGenerationParams {
   guidance_scale?: number;
   num_inference_steps?: number;

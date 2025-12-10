@@ -1,6 +1,24 @@
 assai
 =====
 
+* Test for AI model in inference 
+
+   * Depth Estimation
+   * Key point detection
+   * Object Detection
+   * Image Segmentation
+   * Text to image
+   * (Text + Image) to Video
+   * Text to 3D
+   * Image to 3D
+   * Video to Video
+   * Translation
+   * Text Generation
+   * Text to speech
+   * Text to audio
+   * Graph Machine Learning
+
+
 
 ```mermaid
 flowchart TD

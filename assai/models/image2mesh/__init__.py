@@ -17,6 +17,7 @@ from datetime import datetime
 
 from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher
 from assai.tools.input import Input, Message, Conversation, text as text_input
+from PIL import Image
 
 
 def routes(app: ASSAI, db):
@@ -24,23 +25,23 @@ def routes(app: ASSAI, db):
     # We need something to handle keeping models in VRAM/RAM
     # to reduce latency but also a way to move them if we need more VRAM/RAM
     #
-    route = namespaced_route(app, '/text2mesh')
+    route = namespaced_route(app, '/image2mesh')
     default_model = "tencent/Hunyuan3D-2"
 
     @route("/model/download")
     @route("/model/download/<string:name>")
-    def download_model_t2m(name=default_model):
+    def download_model_i2m(name=default_model):
         """Download a new model"""
         # Need to spawn a long term running process
         # to start the download and have a way to measure progress as well
         # and resume previous downloads
 
     @route("/model/delete/<string:name>")
-    def delete_model_t2m(name):
+    def delete_model_i2m(name):
         """Delete a local model"""
 
     @route("/model/list")
-    def list_model_t2m():
+    def list_model_i2m():
         """List local models the user can choose from"""
         return [
             default_model,
@@ -50,7 +51,7 @@ def routes(app: ASSAI, db):
 
     @route("/model/settings")
     @route("/model/settings/<string:name>")
-    def model_settings_t2m(name=default_model):
+    def model_settings_i2m(name=default_model):
         return {
             "guidance_scale": {
                 "type": float,
@@ -74,7 +75,7 @@ def routes(app: ASSAI, db):
 
     @route("/model/run", methods=['POST'])
     @route("/model/run/<string:model>", methods=['POST'])
-    def run_t2m(model=default_model):
+    def run_i2m(model=default_model):
         """Execute the model from the provided input using Message format"""
 
         data = request.get_json()
@@ -90,22 +91,32 @@ def routes(app: ASSAI, db):
             return {"error": "Message must be from user"}, 400
 
         content_input = message.get("content", {})
-        if content_input.get("kind") != "text":
-            return {"error": "Text2Mesh expects text input"}, 400
+        if content_input.get("kind") != "image":
+            return {"error": "Image2Mesh expects image input"}, 400
 
-        prompt = content_input.get("data", "")
+        # Extract image from data URL
+        image_data_url = content_input.get("data", "")
+        if not image_data_url.startswith("data:image"):
+            return {"error": "Invalid image data URL"}, 400
+
+        # Convert data URL to PIL Image
+        header, b64 = image_data_url.split(",", 1)
+        image_bytes = base64.b64decode(b64)
+        image = Image.open(BytesIO(image_bytes)).convert("RGB")
 
         pusher = websocket_pusher(app, action_id)
 
-        @cached("t2m", name=model)
+        @cached("i2m", name=model)
         def load():
             from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
 
             with capture_progress_thread(pusher, action_id):
                 # Determine subfolder based on model
                 subfolder = "hunyuan3d-dit-v2-0"
+
                 if "mini" in model.lower():
                     subfolder = "hunyuan3d-dit-v2-mini"
+
                 elif "mv" in model.lower():
                     subfolder = "hunyuan3d-dit-v2-mv"
 
@@ -132,8 +143,9 @@ def routes(app: ASSAI, db):
         pipe = load()
 
         with capture_progress_thread(pusher, action_id):
-            # Generate mesh from text prompt
-            mesh = pipe(prompt, **generation_args)[0]
+            # Generate mesh from image
+            # Hunyuan3D-DiT accepts image parameter for image-to-3D generation
+            mesh = pipe(image=image, **generation_args)[0]
 
         # Convert mesh to GLTF format
         with tempfile.NamedTemporaryFile(suffix='.glb', delete=False) as tmp_file:

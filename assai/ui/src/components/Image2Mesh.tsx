@@ -5,7 +5,7 @@ import { Message } from '../services/types';
 import { assaiAPI, MeshGenerationParams } from '../services/api';
 import { useWebSocket } from '../contexts/WebSocketContext';
 
-const Text2Mesh = () => {
+const Image2Mesh = () => {
     const { sessionId } = useWebSocket();
 
     // Generation parameters with defaults matching backend
@@ -24,10 +24,13 @@ const Text2Mesh = () => {
     };
 
     const handleSendMessage = async (userMessage: Message, actionId: number): Promise<{ message: Message }> => {
+        // Extract image data URL from message
+        const imageDataUrl = typeof userMessage.content === 'object' && userMessage.content.kind === 'image'
+            ? userMessage.content.data
+            : '';
+
         return await assaiAPI.generateMesh(
-            typeof userMessage.content === 'object' && userMessage.content.kind === 'text'
-                ? userMessage.content.data
-                : '',
+            imageDataUrl,
             generationParams,
             undefined,
             sessionId ?? undefined,
@@ -116,19 +119,14 @@ const Text2Mesh = () => {
     );
 
     const config: ChatComponentConfig = {
-        title: 'Text to 3D Mesh',
-        description: 'Describe the 3D model you want to generate, and I\'ll create it for you. Each prompt will generate a new 3D mesh.',
-        allowedInputTypes: ['text'],
+        title: 'Image to 3D Mesh',
+        description: 'Upload an image and I\'ll generate a 3D model from it. Each image will generate a new 3D mesh.',
+        allowedInputTypes: ['image'],
         expectedOutputType: 'mesh',
-        placeholder: 'Describe the 3D model you want to generate...',
-        emptyStateTitle: 'Text to 3D Mesh',
-        emptyStateDescription: 'Describe the 3D model you want to generate, and I\'ll create it for you. Each prompt will generate a new 3D mesh.',
-        emptyStateExamples: [
-            'A cute cat',
-            'A vintage car',
-            'A modern chair',
-            'A fantasy sword',
-        ],
+        placeholder: 'Upload an image to generate a 3D model...',
+        emptyStateTitle: 'Image to 3D Mesh',
+        emptyStateDescription: 'Upload an image and I\'ll generate a 3D model from it. Each image will generate a new 3D mesh.',
+        emptyStateExamples: [],
         onSendMessage: handleSendMessage,
         settingsPanel,
         defaultShowSettings: true,
@@ -137,5 +135,5 @@ const Text2Mesh = () => {
     return <ChatComponent config={config} />;
 };
 
-export default Text2Mesh;
+export default Image2Mesh;
 
