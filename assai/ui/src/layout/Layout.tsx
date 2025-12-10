@@ -54,6 +54,22 @@ const Text2ImageIcon = () => (
   </svg>
 );
 
+const Text2VideoIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <rect x="2" y="6" width="20" height="12" rx="2" ry="2" />
+    <polygon points="10 12 16 9 16 15 10 12" />
+  </svg>
+);
+
+const Text2MeshIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M12 2L2 7l10 5 10-5-10-5z" />
+    <path d="M2 17l10 5 10-5" />
+    <path d="M2 12l10 5 10-5" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" />
+  </svg>
+);
+
 const Text2SpeechIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
@@ -100,6 +116,8 @@ const HuggingFaceIcon = () => (
 const taskTypes = [
   { id: 'text2text', name: 'Text to Text', path: '/text2text', icon: Text2TextIcon, color: 'blue' },
   { id: 'text2image', name: 'Text to Image', path: '/text2image', icon: Text2ImageIcon, color: 'purple' },
+  { id: 'text2video', name: 'Text to Video', path: '/text2video', icon: Text2VideoIcon, color: 'orange' },
+  { id: 'text2mesh', name: 'Text to 3D', path: '/text2mesh', icon: Text2MeshIcon, color: 'cyan' },
   { id: 'text2speech', name: 'Text to Speech', path: '/text2speech', icon: Text2SpeechIcon, color: 'green' },
   { id: 'speech2text', name: 'Speech to Text', path: '/speech2text', icon: Speech2TextIcon, color: 'pink' },
 

@@ -3,7 +3,7 @@
 
 // Input format (matches backend assai.tools.input.Input)
 export interface Input {
-    kind: 'text' | 'image' | 'audio' | 'video';
+    kind: 'text' | 'image' | 'audio' | 'video' | 'mesh';
     encoding: string;
     data: string;
 }
@@ -21,10 +21,12 @@ export interface Message {
     isGenerating?: boolean;
     retryPrompt?: string; // For retry functionality
     // UI display extensions (extracted from Input for convenience)
-    type?: 'text' | 'image' | 'audio';
+    type?: 'text' | 'image' | 'audio' | 'video' | 'mesh';
     imageUrl?: string;
     imageUrls?: string[];
     audioUrl?: string;
+    videoUrl?: string;
+    meshUrl?: string;
 }
 
 // Conversation format (matches backend assai.tools.input.Conversation)

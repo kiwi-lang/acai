@@ -8,7 +8,7 @@ from io import BytesIO
 from threading import Lock, RLock
 import threading
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import gc
 
 import torch
@@ -16,7 +16,8 @@ from diffusers import FluxPipeline
 from flask import request
 from contextlib import contextmanager
 import torchcompat.core as accelerator
-
+from PIL import Image
+from cantilever.core.statstream import StatStream
 
 
 
@@ -34,10 +35,24 @@ def namespaced_route(app, namespace):
     return route
 
 
-def pil_to_base64_png(img):
+def pil_to_base64_png(img: Image):
     buffer = BytesIO()
     img.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def video_to_base64(video):
+    with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_file:
+        temp_video_path = tmp_file.name
+
+        export_to_video(video_frames, temp_video_path, fps=24)
+
+        # Read the video file and convert to base64
+        with open(temp_video_path, "rb") as fp:
+            video_data = fp.read()
+
+        # Encode to base64
+        return base64.b64encode(video_data).decode('ascii')
 
 
 _observe_util = None
@@ -73,6 +88,17 @@ class ModelCacheEntry:
     before: any = None
     after: any = None
     last_used: float = None
+    model_info: any = None
+
+    load_time_stat: StatStream = field(default_factory=StatStream)
+    mem_stat: StatStream = field(default_factory=StatStream)
+
+    def state_dict(self):
+        return {
+            "load_time_stat": self.load_time_stat.state_dict(),
+            "mem_stat": self.mem_stat.state_dict(),
+            "model_info": model_info
+        }
 
     def memory(self):
         mem = -1
@@ -121,8 +147,9 @@ class ModelCache:
         self.lock = threading.Lock()
         self.observe = system_monitor()
 
-    def load_model(self, key, fun, *args, **kwargs):
+    def load_model(self, key, fun, *args, model_info=None, **kwargs):
         cache_entry = self.cache.setdefault(key, ModelCacheEntry(None, threading.Lock()))
+        cache_entry.model_info = model_info
 
         with cache_entry.lock:
             if cache_entry.model is None:
@@ -132,6 +159,8 @@ class ModelCache:
                     cache_entry.before = self.observe()
                     cache_entry.model = fun(*args, **kwargs)
                     cache_entry.after = self.observe()
+                    cache_entry.load_time_stat.update(cache_entry.time())
+                    cache_entry.mem_stat.update(cache_entry.memory())
 
         return ThreadSafeModel(cache_entry)
 
@@ -149,12 +178,12 @@ class ModelCache:
 live_models = ModelCache()
 
 
-def cached(key):
+def cached(key, **model_info):
     global live_models
     
     def decorator(fun):
         def _(*args, **kwargs):
-            return live_models.load_model(key, fun, *args, **kwargs)
+            return live_models.load_model(key, fun, *args, model_info=model_info, **kwargs)
         return _
     return decorator
 
@@ -256,6 +285,14 @@ def stdout_pusher(file, action_id):
             print(chanel, {"id": action_id, "thread_id": thread_id, "line": line}, file=file)
         return push
     return channel_push
+
+
+@contextmanager
+def websocket_log_capture(app, action_id):
+    pusher_fatory = websocket_pusher(app, action_id)
+
+    with capture_progress_thread(pusher_factory, action_id):
+        yield
 
 
 @contextmanager

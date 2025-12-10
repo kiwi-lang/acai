@@ -27,7 +27,7 @@ const XIcon = () => (
 );
 
 export type ChatInputType = 'text' | 'image' | 'audio';
-export type ChatOutputType = 'text' | 'image' | 'audio';
+export type ChatOutputType = 'text' | 'image' | 'audio' | 'video' | 'mesh';
 
 export interface ChatComponentConfig {
     title: string;
@@ -174,7 +174,7 @@ const ChatComponent = ({ config }: ChatComponentProps) => {
             role: 'user',
             content: input,
             timestamp: new Date().toISOString(),
-            type: (input.kind === 'video' ? 'text' : input.kind) as 'text' | 'image' | 'audio', // UI extension (video not supported in UI yet)
+            type: input.kind as 'text' | 'image' | 'audio' | 'video', // UI extension
         };
         setMessages(prev => [...prev, userMessage]);
 

@@ -157,7 +157,7 @@ class AssAI_API {
   // Takes a single Message, returns Message response
   async runModel(
     message: Message,
-    modelType: 'text2text' | 'text2image' | 'text2speech' | 'speech2text',
+    modelType: 'text2text' | 'text2image' | 'text2video' | 'text2mesh' | 'text2speech' | 'speech2text',
     params?: Record<string, any>,
     model?: string,
     sessionId?: string,
@@ -203,6 +203,30 @@ class AssAI_API {
     };
 
     return this.runModel(msg, 'text2image', params, model, sessionId, actionId);
+  }
+
+  // Text2Video endpoint - uses unified Message format
+  async generateVideo(
+    prompt: string,
+    params?: VideoGenerationParams,
+    model?: string,
+    sessionId?: string,
+    actionId?: number,
+    message?: Message
+  ): Promise<{ message: Message }> {
+    // Build message if not provided
+    const msg: Message = message || {
+      id: Date.now(),
+      role: 'user',
+      content: {
+        kind: 'text',
+        encoding: 'utf8',
+        data: prompt
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    return this.runModel(msg, 'text2video', params, model, sessionId, actionId);
   }
 
   // Text2Speech endpoint - uses unified Message format
@@ -277,6 +301,30 @@ class AssAI_API {
     return this.runModel(msg, 'speech2text', params, model, sessionId, actionId);
   }
 
+  // Text2Mesh endpoint - uses unified Message format
+  async generateMesh(
+    prompt: string,
+    params?: MeshGenerationParams,
+    model?: string,
+    sessionId?: string,
+    actionId?: number,
+    message?: Message
+  ): Promise<{ message: Message }> {
+    // Build message if not provided
+    const msg: Message = message || {
+      id: Date.now(),
+      role: 'user',
+      content: {
+        kind: 'text',
+        encoding: 'utf8',
+        data: prompt
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    return this.runModel(msg, 'text2mesh', params, model, sessionId, actionId);
+  }
+
   // Telemetry endpoint
   async getTelemetry(signal?: AbortSignal): Promise<{
     cpu: { memory: [number, number]; load: number };
@@ -331,6 +379,22 @@ export interface ImageGenerationParams {
   guidance_scale?: number;
   num_inference_steps?: number;
   max_sequence_length?: number;
+  seed?: number;
+}
+
+// Text2Video generation parameters interface
+export interface VideoGenerationParams {
+  height?: number;
+  width?: number;
+  num_frames?: number;
+  num_inference_steps?: number;
+  seed?: number;
+}
+
+// Text2Mesh generation parameters interface
+export interface MeshGenerationParams {
+  guidance_scale?: number;
+  num_inference_steps?: number;
   seed?: number;
 }
 

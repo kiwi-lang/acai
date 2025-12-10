@@ -42,17 +42,30 @@ if __name__ == "__main__":
             "importlib_resources",
             "flask",
             "flask-socketio",
-            "diffusers",
-            "transformers",
             "accelerate",
             "protobuf", # WHY
-            "sentencepiece",
             "torchcompat",
             "voir",
             "nvidia-ml-py",
             "datasets",
+
+            # Audio
             "librosa", # Audio
             "torchaudio",
+
+            # Text
+            "transformers",
+            "sentencepiece",
+
+            # Image
+            "diffusers",
+
+            # Video
+            "kernels",
+            "opencv-python"
+            "imageio",
+            "imageio-ffmpeg"
+            "av",
         ],
         package_data={
             "assai.data": [

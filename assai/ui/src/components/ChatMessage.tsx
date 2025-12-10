@@ -1,6 +1,7 @@
 import { Box, HStack, VStack, Text, Button, Spinner } from '@chakra-ui/react';
 import { useEffect, useRef } from 'react';
 import { Message } from '../services/types';
+import MeshViewer from './MeshViewer';
 
 interface ChatMessageProps {
     message: Message;
@@ -91,6 +92,8 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                         let imageUrl: string | undefined;
                         let imageUrls: string[] | undefined;
                         let audioUrl: string | undefined;
+                        let videoUrl: string | undefined;
+                        let meshUrl: string | undefined;
 
                         if (typeof message.content === 'string') {
                             // Legacy format - content is string
@@ -108,6 +111,10 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                                 imageUrls = [input.data];
                             } else if (input.kind === 'audio') {
                                 audioUrl = input.data;
+                            } else if (input.kind === 'video') {
+                                videoUrl = input.data;
+                            } else if (input.kind === 'mesh') {
+                                meshUrl = input.data;
                             }
                         }
 
@@ -115,6 +122,7 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                         if (message.imageUrl) imageUrl = message.imageUrl;
                         if (message.imageUrls) imageUrls = message.imageUrls;
                         if (message.audioUrl) audioUrl = message.audioUrl;
+                        if (message.meshUrl) meshUrl = message.meshUrl;
 
                         return (
                             <>
@@ -216,6 +224,104 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                                         >
                                             Your browser does not support the audio element.
                                         </audio>
+                                    </Box>
+                                )}
+                                {/* Video Content */}
+                                {videoUrl && (
+                                    <Box
+                                        mt={2}
+                                        w="100%"
+                                        borderRadius="md"
+                                        overflow="hidden"
+                                        border="1px solid"
+                                        borderColor="gray.700"
+                                        bg="gray.800"
+                                        p={2}
+                                    >
+                                        <Box
+                                            borderRadius="md"
+                                            overflow="hidden"
+                                            display="flex"
+                                            justifyContent="center"
+                                            alignItems="center"
+                                            bg="gray.900"
+                                        >
+                                            <video
+                                                controls
+                                                preload="metadata"
+                                                src={videoUrl}
+                                                style={{
+                                                    maxWidth: '100%',
+                                                    height: 'auto',
+                                                    display: 'block',
+                                                    maxHeight: '600px',
+                                                    objectFit: 'contain'
+                                                }}
+                                                onError={(e) => {
+                                                    console.error('Video load error:', e);
+                                                    const video = e.currentTarget;
+                                                    console.error('Video error details:', {
+                                                        error: video.error,
+                                                        networkState: video.networkState,
+                                                        readyState: video.readyState,
+                                                        src: video.src.substring(0, 100) + '...'
+                                                    });
+                                                }}
+                                            >
+                                                Your browser does not support the video element.
+                                            </video>
+                                        </Box>
+                                        <HStack justify="flex-end" mt={2}>
+                                            <Button
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => {
+                                                    const link = document.createElement('a');
+                                                    link.href = videoUrl;
+                                                    link.download = `generated-video-${Date.now()}.mp4`;
+                                                    link.click();
+                                                }}
+                                                padding="5px"
+                                                color="gray.200"
+                                                borderColor="gray.600"
+                                                _hover={{ bg: 'gray.700', borderColor: 'gray.500' }}
+                                            >
+                                                Download
+                                            </Button>
+                                        </HStack>
+                                    </Box>
+                                )}
+                                {/* Mesh/3D Model Content */}
+                                {meshUrl && (
+                                    <Box
+                                        mt={2}
+                                        w="100%"
+                                        borderRadius="md"
+                                        overflow="hidden"
+                                        border="1px solid"
+                                        borderColor="gray.700"
+                                        bg="gray.800"
+                                        p={2}
+                                    >
+                                        <MeshViewer glbUrl={meshUrl} height="500px" />
+                                        <HStack justify="flex-end" mt={2}>
+                                            <Button
+                                                size="xs"
+                                                variant="outline"
+                                                onClick={() => {
+                                                    const link = document.createElement('a');
+                                                    link.href = meshUrl;
+                                                    link.download = `generated-mesh-${Date.now()}.glb`;
+                                                    link.click();
+                                                }}
+                                                padding="5px"
+                                                color="gray.200"
+                                                borderColor="gray.600"
+                                                _hover={{ bg: 'gray.700', borderColor: 'gray.500' }}
+                                            >
+                                                Download GLB
+                                            </Button>
+                                        </HStack>
                                     </Box>
                                 )}
                             </>
