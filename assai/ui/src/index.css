@@ -80,6 +80,28 @@ input,
 
 .flowchart {
   max-width: none !important;
-  width: 100% !important;   /* optional */
-  height: 100% !important;  /* optional */
+  width: 100% !important;
+  /* optional */
+  height: 100% !important;
+  /* optional */
+}
+
+/* Range input styling for MeshViewer */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #805AD5;
+  cursor: pointer;
+}
+
+input[type="range"]::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #805AD5;
+  cursor: pointer;
+  border: none;
 }

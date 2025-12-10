@@ -3,21 +3,27 @@ assai
 
 * Test for AI model in inference 
 
-   * Depth Estimation
-   * Key point detection
-   * Object Detection
-   * Image Segmentation
-   * Text to image
-   * (Text + Image) to Video
-   * Text to 3D
-   * Image to 3D
-   * Video to Video
-   * Translation
-   * Text Generation
-   * Text to speech
-   * Text to audio
-   * Graph Machine Learning
+Generative AI
+   - [X] Text to Text      (Regular LLM)
+   - [X] Text to image     (Diffusion)
+   - [X] Text to Video     ()
 
+Vision
+   - [ ] Depth Estimation
+   - [ ] Key point detection
+   - [ ] Object Detection
+   - [ ] Image Segmentation
+
+3D
+   - [X] Image to Mesh     ()
+
+Audio
+   - [X] Text to Speech    (TTS)
+   - [X] Speech to Text    (Whisper)
+   - [ ] Text to audio
+
+Graph
+   - [ ] Graph Machine Learning
 
 
 ```mermaid

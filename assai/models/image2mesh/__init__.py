@@ -109,22 +109,20 @@ def routes(app: ASSAI, db):
         @cached("i2m", name=model)
         def load():
             from hy3dgen.shapegen import Hunyuan3DDiTFlowMatchingPipeline
+            from hy3dgen.texgen import Hunyuan3DPaintPipeline
 
             with capture_progress_thread(pusher, action_id):
-                # Determine subfolder based on model
-                subfolder = "hunyuan3d-dit-v2-0"
-
-                if "mini" in model.lower():
-                    subfolder = "hunyuan3d-dit-v2-mini"
-
-                elif "mv" in model.lower():
-                    subfolder = "hunyuan3d-dit-v2-mv"
-
-                pipe = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
+                pipe_1 = Hunyuan3DDiTFlowMatchingPipeline.from_pretrained(
                     model,
-                    subfolder=subfolder,
                     torch_dtype=torch.bfloat16
                 )
+                pipe_2 = Hunyuan3DPaintPipeline.from_pretrained('tencent/Hunyuan3D-2')
+
+                def pipe(*args, pipe_1_kwargs, **kwargs):
+                    mesh = pipe_1(*args, **pipe_1_kwargs, **kwargs)[0]
+                    # mesh = pipe_2(mesh, *args, **kwargs)
+                    return mesh
+
                 return pipe
 
         def seed():
@@ -145,7 +143,7 @@ def routes(app: ASSAI, db):
         with capture_progress_thread(pusher, action_id):
             # Generate mesh from image
             # Hunyuan3D-DiT accepts image parameter for image-to-3D generation
-            mesh = pipe(image=image, **generation_args)[0]
+            mesh = pipe(image=image, pipe_1_kwargs=generation_args)
 
         # Convert mesh to GLTF format
         with tempfile.NamedTemporaryFile(suffix='.glb', delete=False) as tmp_file:
