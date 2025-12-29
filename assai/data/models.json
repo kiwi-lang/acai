@@ -1,14 +1,47 @@
 {
-  "t2i": {
+  "t2i_Qwen Qwen-Image": {
+    "load_time_stat": {
+      "sum": 784.6850392818451,
+      "sum_sqr": 201591.4978875395,
+      "first_obs": 31.989132404327393,
+      "min": 31.989132404327393,
+      "max": 293.50269198417664,
+      "current_count": 5,
+      "current_obs": 255.26560473442078,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": -164823.05078125,
+      "sum_sqr": 8849111334.620193,
+      "first_obs": 111171.55859375,
+      "min": 56035.96875,
+      "max": 111171.55859375,
+      "current_count": 5,
+      "current_obs": -55135.58984375,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": -184.4125406742096,
+      "sum_sqr": 11892.219065598503,
+      "first_obs": 110.36234521865845,
+      "min": 47.36838173866272,
+      "max": 114.68399810791016,
+      "current_count": 5,
+      "current_obs": -62.99396347999573,
+      "drop_obs": 0
+    },
+    "model_info": {}
+  },
+  "t2i_HiDream-ai HiDream-I1-Fast": {
     "load_time_stat": {
       "sum": 0.0,
       "sum_sqr": 0.0,
       "first_obs": 0.0,
       "min": Infinity,
       "max": -Infinity,
-      "current_count": 1,
-      "current_obs": 161.31830978393555,
-      "drop_obs": 10
+      "current_count": 0,
+      "current_obs": 0.0,
+      "drop_obs": 0
     },
     "mem_stat": {
       "sum": 0.0,
@@ -16,9 +49,9 @@
       "first_obs": 0.0,
       "min": Infinity,
       "max": -Infinity,
-      "current_count": 1,
-      "current_obs": 33147.38671875,
-      "drop_obs": 10
+      "current_count": 0,
+      "current_obs": 0.0,
+      "drop_obs": 0
     },
     "inference_stat": {
       "sum": 0.0,
@@ -26,9 +59,108 @@
       "first_obs": 0.0,
       "min": Infinity,
       "max": -Infinity,
+      "current_count": 0,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "model_info": {}
+  },
+  "t2i_lodestones Chroma1-Base": {
+    "load_time_stat": {
+      "sum": 8.550777673721313,
+      "sum_sqr": 178.61604412348248,
+      "first_obs": 19.234131574630737,
+      "min": 12.531586408615112,
+      "max": 29.80697727203369,
+      "current_count": 4,
+      "current_obs": -6.702545166015625,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": 7834.41015625,
+      "sum_sqr": 48998676.00349426,
+      "first_obs": 49268.06640625,
+      "min": 49268.06640625,
+      "max": 56227.85546875,
+      "current_count": 4,
+      "current_obs": 6959.7890625,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 556.0041949748993,
+      "min": 556.0041949748993,
+      "max": 556.0041949748993,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "model_info": {}
+  },
+  "t2i_purplesmartai pony-v7-base": {
+    "load_time_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 168.5304675102234,
+      "min": 168.5304675102234,
+      "max": 168.5304675102234,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 33256.55859375,
+      "min": 33256.55859375,
+      "max": 33256.55859375,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 280.68561482429504,
+      "min": 280.68561482429504,
+      "max": 280.68561482429504,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "model_info": {}
+  },
+  "t2i_black-forest-labs FLUX.1-dev": {
+    "load_time_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 15.676977396011353,
+      "min": 15.676977396011353,
+      "max": 15.676977396011353,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 67020.08203125,
+      "min": 67020.08203125,
+      "max": 67020.08203125,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": 0.9147055149078369,
+      "sum_sqr": 0.8366861790028111,
+      "first_obs": 270.473308801651,
+      "min": 270.473308801651,
+      "max": 271.38801431655884,
       "current_count": 2,
-      "current_obs": 92.92331886291504,
-      "drop_obs": 10
+      "current_obs": 0.9147055149078369,
+      "drop_obs": 0
     },
     "model_info": {}
   }

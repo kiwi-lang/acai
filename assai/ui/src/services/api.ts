@@ -353,6 +353,24 @@ class AssAI_API {
   async getTelemetry(signal?: AbortSignal): Promise<{
     cpu: { memory: [number, number]; load: number };
     gpu: Record<string, { memory: [number, number]; load: number; temp: number; power: number }>;
+    network?: {
+      bytes_recv: number;
+      bytes_sent: number;
+      packets_recv: number;
+      packets_sent: number;
+      errin: number;
+      errout: number;
+      dropin: number;
+      dropout: number;
+    };
+    disk?: {
+      busy_time: number;
+      read_bytes: number;
+      read_count: number;
+      read_time: number;
+      write_count: number;
+      write_time: number;
+    };
   }> {
     return this.request('/telemetry', { signal });
   }
@@ -398,6 +416,11 @@ class AssAI_API {
   // Text2Text model endpoints
   async listText2TextModels(): Promise<string[]> {
     return this.request<string[]>('/text2text/model/list');
+  }
+
+  // Text2Image model endpoints
+  async listText2ImageModels(): Promise<string[]> {
+    return this.request<string[]>('/text2image/model/list');
   }
 }
 

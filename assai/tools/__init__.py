@@ -13,8 +13,10 @@ import gc
 from contextlib import contextmanager
 import json
 from pathlib import Path
-
+import pkgutil
+import importlib
 import importlib_resources
+
 import torch
 from diffusers import FluxPipeline
 from flask import request
@@ -22,6 +24,48 @@ import torchcompat.core as accelerator
 from PIL import Image
 from cantilever.core.statstream import StatStream
 
+
+class ModelModule:
+    def __init__(self, model_module, default):
+        self.model_module = model_module
+        self.default = default
+
+    def __getattr__(self, attr):
+        try:
+            return getattr(self.model_module, attr)
+        except AttributeError:
+            return getattr(self.default, attr)
+
+
+class ModelModules:
+    def __init__(self, plugins, default):
+        self.plugins = plugins
+        self.default = default
+
+    def __getitem__(self, item):
+        return ModelModule(self.plugins.get(item, self.default), self.default) 
+
+    def __call__(self, model_id):
+        return ModelModule(self.plugins.get(model_id, self.default), self.default)
+
+    def keys(self):
+        return self.plugins.keys()
+
+
+def load_model_override(module, default) -> ModelModules:
+    path = module.__path__
+    name = module.__name__
+
+    plugins = {}
+
+    for _, module_name, _ in pkgutil.iter_modules(path, name + "."):
+        mod = importlib.import_module(module_name)
+
+        if hasattr(mod, "model_id"):
+            for model_id in mod.model_id:
+                plugins[model_id] = mod
+    
+    return ModelModules(plugins, default)
 
 
 def namespaced_route(app, namespace):
@@ -107,18 +151,20 @@ def system_monitor():
     from voir.instruments.cpu import cpu_monitor
     from voir.instruments.network import network_monitor
     from voir.instruments.gpu import select_backend, gpu_monitor
+    from voir.instruments.io import io_monitor
 
     cpu_fn = cpu_monitor()
     select_backend()
     gpu_fn = gpu_monitor()
     n_cpu = mp.cpu_count()
     network_fn = network_monitor()
+    io_fn = io_monitor()
 
     def observe() -> SystemMetric:
         cpu = cpu_fn()
         cpu["load"] = cpu["load"] / n_cpu
-        return {"cpu": cpu, "gpu": gpu_fn(), "time": time.time(), "network": network_fn()}
-
+        return {"cpu": cpu, "gpu": gpu_fn(), "time": time.time(), "network": network_fn(), "disk": io_fn()}
+ 
     _observe_util = observe
     return observe
 
@@ -133,9 +179,15 @@ class ModelCacheEntry:
     model_info: any = None
     last_inference_time: float = 0
 
-    load_time_stat: StatStream = field(default_factory=StatStream)
-    mem_stat: StatStream = field(default_factory=StatStream)
-    inference_stat: StatStream = field(default_factory=StatStream)
+    load_time_stat: StatStream = field(default_factory=lambda: StatStream(drop_first_obs=0))
+    mem_stat: StatStream = field(default_factory=lambda: StatStream(drop_first_obs=0))
+    inference_stat: StatStream = field(default_factory=lambda: StatStream(drop_first_obs=0))
+
+    def load_state_dict(self, state):
+        self.model_info = state["model_info"]
+        self.load_time_stat = StatStream.from_dict(state["load_time_stat"])
+        self.mem_stat = StatStream.from_dict(state["mem_stat"])
+        self.inference_stat =StatStream.from_dict( state["inference_stat"])
 
     def state_dict(self):
         return {
@@ -143,7 +195,7 @@ class ModelCacheEntry:
             "mem_stat": self.mem_stat.state_dict(),
             "inference_stat": self.inference_stat.state_dict(),
             "model_info": self.model_info
-        }
+        } 
 
     def memory(self):
         mem = -1
@@ -212,22 +264,29 @@ class ModelCache:
         self.lock = threading.Lock()
         self.observe = system_monitor()
         self.file = data_path / "models.json"
+        self.primaries = dict()
+        self.stats = {}
 
         if self.file.exists():
             with open(self.file, "r", encoding="utf-8") as file:
-                data = json.load(file)
+                self.stats = json.load(file)
 
     def save(self):
         tmp = str(self.file) + ".tmp"
 
+        self.stats.update(self.state_dict())
+
         with open(tmp, "w") as file:
-            json.dump(self.state_dict(), file, indent=2)
+            json.dump(self.stats, file, indent=2)
 
         Path(tmp).replace(self.file)
 
     def load_model(self, key, fun, *args, model_info=None, **kwargs):
         cache_entry = self.cache.setdefault(key, ModelCacheEntry(None, threading.Lock()))
         cache_entry.model_info = model_info
+
+        if key in self.stats:
+            cache_entry.load_state_dict(self.stats[key])
 
         with cache_entry.lock:
             if cache_entry.model is None:
@@ -266,6 +325,15 @@ def cached(*keys, **model_info):
     global live_models
 
     key = "_".join(keys)
+
+    # 
+    #  Support eviction of previous model
+    # 
+    if item := live_models.primaries.get(keys[0]):
+        print(f"Eviction of model {item}")
+        live_models.remove(item)
+  
+    live_models.primaries[key[0]] = key
     
     def decorator(fun):
         def _(*args, **kwargs):

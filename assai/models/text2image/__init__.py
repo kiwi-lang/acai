@@ -9,29 +9,34 @@ from threading import Lock
 import threading
 from datetime import datetime
 from contextlib import contextmanager
+import traceback
 
 import torch
 from flask import request
 import torchcompat.core as accelerator
 from torchvision.transforms.functional import to_pil_image
 
-from assai.tools import namespaced_route, capture_progress_thread, pil_to_base64_png, cached, websocket_pusher
+from assai.tools import namespaced_route, capture_progress_thread, pil_to_base64_png, cached, websocket_pusher, load_model_override
 from assai.tools.input import Input, Message, Conversation, text as text_input
 
-import assai.models.text2image.flux as flux
-import assai.models.text2image.pony as pony
-import assai.models.text2image.chroma as chroma
-import assai.models.text2image.qwen as qwen
+#
+# Default handling of Huggingface models
+#
 import assai.models.text2image.generic as generic
 
 
+
 def routes(app: ASSAI, db):
+
     #
     # We need something to handle keeping models in VRAM/RAM
     # to reduce latency but also a way to move them if we need more VRAM/RAM
     #
     route = namespaced_route(app, '/text2image')
     default_model = "black-forest-labs/FLUX.1-dev"
+
+    import assai.models.text2image
+    models = load_model_override(assai.models.text2image, generic)
 
     @route("/model/download")
     @route("/model/download/<string:name>")
@@ -48,9 +53,7 @@ def routes(app: ASSAI, db):
     @route("/model/list")
     def list_model_t2i():
         """List local models the user can choose from"""
-        return [
-            default_model,
-        ]
+        return sorted(list(set(models.keys())))
 
     @route("/model/settings")
     @route("/model/settings/<string:name>")
@@ -87,19 +90,19 @@ def routes(app: ASSAI, db):
             "num_images_per_prompt": {
                 "type": int,
                 "min": 1,
-                "max": None,
-                "default": 1
+                "max": 10,
+                "default": 4
             },
             "generator": {
                 "type": int,
                 "min": None,
                 "max": None,
                 "default": 256
-            }
+            },
         }
 
     @route("/model/run", methods=['POST'])
-    @route("/model/run/<string:model>", methods=['POST'])
+    @route("/model/run/<path:model>", methods=['POST'])
     def run_t2i(model=default_model):
         """Execute the model from the provided input using Message format"""
 
@@ -120,16 +123,14 @@ def routes(app: ASSAI, db):
             return {"error": "Text2Image expects text input"}, 400
 
         prompt = content_input.get("data", "")
-
         pusher = websocket_pusher(app, action_id)
 
-        @cached("t2i")
+        model_module = models[model]
+
+        @cached("t2i", model.replace("/", " "))
         def load(): 
             with capture_progress_thread(pusher, action_id):
-                # return qwen.load()
-                # return chroma.load()
-                # return pony.load()
-                return flux.load()
+                return model_module.load(model)
  
         def seed():
             if seed := data.pop("seed"):
@@ -142,7 +143,7 @@ def routes(app: ASSAI, db):
             "guidance_scale": 3.5,
             "num_inference_steps": 50,
             "max_sequence_length": 512,
-            "num_images_per_prompt": 5,
+            "num_images_per_prompt": 4,
             "generator": torch.Generator(accelerator.device_type).manual_seed(seed())
         }
 
@@ -150,21 +151,15 @@ def routes(app: ASSAI, db):
 
         pipe = load()
 
+        latent_extractor = model_module.on_step_end(app, action_id, generation_args)
+
         def on_step_end(pipe, step, timestep, callback_kwargs):
-            latents = callback_kwargs["latents"]
-
-            height, width = generation_args["height"], generation_args["width"]
- 
-            with torch.no_grad():
-                latents = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
-                latents = (latents / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
-                image = pipe.vae.decode(latents, return_dict=False)[0]
-                pil = pipe.image_processor.postprocess(image, output_type="pil")
-                # pil = [to_pil_image(img) for img in images]
-                image_data_url = [f"data:image/png;base64,{pil_to_base64_png(p)}" for p in pil]
-
-                app.message("preview", {"id": action_id, "thread_id": 0, "images": image_data_url})
-            return callback_kwargs
+            try:
+                latent_extractor(pipe, step, timestep, callback_kwargs)
+            except:
+                traceback.print_exc()
+            finally:
+                return callback_kwargs
 
         with capture_progress_thread(pusher, action_id):
             output = pipe(prompt,
