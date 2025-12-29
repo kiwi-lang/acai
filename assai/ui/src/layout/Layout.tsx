@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { IconButton, Box, VStack, HStack, Text, Button } from '@chakra-ui/react';
 import { assaiAPI } from '../services/api';
 import { Conversation } from '../services/types';
+import { ColorModeButton } from "../components/ui/color-mode"
 import TelemetryDisplay from '../components/TelemetryDisplay';
 import './Layout.css';
 
@@ -70,6 +71,16 @@ const Image2MeshIcon = () => (
   </svg>
 );
 
+const DepthEstimationIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+    <circle cx="8.5" cy="8.5" r="1.5" />
+    <polyline points="21 15 16 10 5 21" />
+    <path d="M12 8v8M8 12h8" />
+    <path d="M16 8l-4 4-4-4" />
+  </svg>
+);
+
 const Text2SpeechIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
@@ -118,6 +129,7 @@ const taskTypes = [
   { id: 'text2image', name: 'Text to Image', path: '/text2image', icon: Text2ImageIcon, color: 'purple' },
   { id: 'text2video', name: 'Text to Video', path: '/text2video', icon: Text2VideoIcon, color: 'orange' },
   { id: 'image2mesh', name: 'Image to 3D', path: '/image2mesh', icon: Image2MeshIcon, color: 'cyan' },
+  { id: 'depth-estimation', name: 'Depth Estimation', path: '/depth-estimation', icon: DepthEstimationIcon, color: 'teal' },
   { id: 'text2speech', name: 'Text to Speech', path: '/text2speech', icon: Text2SpeechIcon, color: 'green' },
   { id: 'speech2text', name: 'Speech to Text', path: '/speech2text', icon: Speech2TextIcon, color: 'pink' },
 
@@ -220,6 +232,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         <Box p={4} borderBottom="1px solid" borderColor="gray.700">
           <Link to="/" style={{ textDecoration: 'none' }} onClick={closeMobileMenu}>
             <HStack gap={2}>
+              <ColorModeButton />
               <Text fontSize="xl" fontWeight="bold" color="white">
                 AS
               </Text>

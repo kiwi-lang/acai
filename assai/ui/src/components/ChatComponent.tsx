@@ -44,6 +44,7 @@ export interface ChatComponentConfig {
     showSettings?: boolean;
     defaultShowSettings?: boolean;
     customInput?: ReactNode; // Custom input component (e.g., for audio recording)
+    modelSelector?: ReactNode; // Model selector component (e.g., dropdown for model selection)
 }
 
 interface ChatComponentProps {
@@ -92,6 +93,28 @@ const ChatComponent = ({ config }: ChatComponentProps) => {
         }));
     }, []);
 
+    const handlePreview = useCallback((data: { id: number; thread_id?: number; images?: string[] }) => {
+        // Find the message with matching action_id and update with preview images
+        setMessages(prev => prev.map(msg => {
+            if (msg.action_id === data.id && msg.isGenerating && data.images && data.images.length > 0) {
+                // Update the message with preview images
+                // These will be replaced by the final image when generation completes
+                return {
+                    ...msg,
+                    imageUrls: data.images,
+                    imageUrl: data.images[0],
+                    // Also update content for consistency
+                    content: {
+                        kind: 'image',
+                        encoding: 'data_url',
+                        data: data.images[0]
+                    }
+                };
+            }
+            return msg;
+        }));
+    }, []);
+
     useEffect(() => {
         document.title = `${config.title} - ASSAI`;
 
@@ -105,14 +128,19 @@ const ChatComponent = ({ config }: ChatComponentProps) => {
         socket.on('stdout', handleStdout);
         socket.on('stderr', handleStderr);
 
+        // Set up preview listener for text2image preview updates
+        socket.off('preview', handlePreview);
+        socket.on('preview', handlePreview);
+
         // Cleanup on unmount
         return () => {
             if (socket) {
                 socket.off('stdout', handleStdout);
                 socket.off('stderr', handleStderr);
+                socket.off('preview', handlePreview);
             }
         };
-    }, [socket, handleStdout, handleStderr]);
+    }, [socket, handleStdout, handleStderr, handlePreview]);
 
     useEffect(() => {
         // Scroll to bottom when new messages arrive, but don't steal focus
@@ -390,6 +418,12 @@ const ChatComponent = ({ config }: ChatComponentProps) => {
 
                     {/* Input Area */}
                     <Box position="relative" borderTop="1px solid" borderColor="gray.700">
+                        {/* Model Selector */}
+                        {config.modelSelector && (
+                            <Box px={4} py={2} borderBottom="1px solid" borderColor="gray.700">
+                                {config.modelSelector}
+                            </Box>
+                        )}
                         {config.customInput ? (
                             config.customInput
                         ) : (
@@ -405,7 +439,7 @@ const ChatComponent = ({ config }: ChatComponentProps) => {
                                 aria-label="Toggle settings"
                                 position="absolute"
                                 right={4}
-                                top="50%"
+                                top={config.modelSelector ? "calc(50% + 20px)" : "50%"}
                                 transform="translateY(-50%)"
                                 size="sm"
                                 variant="ghost"

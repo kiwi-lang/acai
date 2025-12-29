@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { VStack, Input, Button, HStack, Text } from '@chakra-ui/react';
 import ChatComponent, { ChatComponentConfig } from './ChatComponent';
 import { Message } from '../services/types';
@@ -7,6 +7,11 @@ import { useWebSocket } from '../contexts/WebSocketContext';
 
 const Text2Text = () => {
     const { sessionId } = useWebSocket();
+    const [availableModels, setAvailableModels] = useState<string[]>([]);
+    const [selectedModel, setSelectedModel] = useState<string | null>(null);
+    const [customModel, setCustomModel] = useState<string>('');
+    const [useCustomModel, setUseCustomModel] = useState<boolean>(false);
+    const [isLoadingModels, setIsLoadingModels] = useState<boolean>(true);
 
     // Generation parameters with defaults matching backend
     const [generationParams, setGenerationParams] = useState<TextGenerationParams>({
@@ -17,6 +22,25 @@ const Text2Text = () => {
         repetition_penalty: 1.0,
         do_sample: true,
     });
+
+    // Fetch available models on mount
+    useEffect(() => {
+        const fetchModels = async () => {
+            try {
+                setIsLoadingModels(true);
+                const models = await assaiAPI.listText2TextModels();
+                setAvailableModels(models);
+                if (models.length > 0 && !selectedModel) {
+                    setSelectedModel(models[0]);
+                }
+            } catch (error) {
+                console.error('Failed to fetch models:', error);
+            } finally {
+                setIsLoadingModels(false);
+            }
+        };
+        fetchModels();
+    }, []);
 
     const resetToDefaults = () => {
         setGenerationParams({
@@ -30,12 +54,17 @@ const Text2Text = () => {
     };
 
     const handleSendMessage = async (userMessage: Message, actionId: number): Promise<{ message: Message }> => {
+        // Determine which model to use
+        const modelToUse = useCustomModel && customModel.trim()
+            ? customModel.trim()
+            : selectedModel || undefined;
+
         return await assaiAPI.generateText(
             typeof userMessage.content === 'object' && userMessage.content.kind === 'text'
                 ? userMessage.content.data
                 : '',
             generationParams,
-            undefined,
+            modelToUse,
             sessionId ?? undefined,
             actionId,
             userMessage
@@ -183,6 +212,61 @@ const Text2Text = () => {
         </VStack>
     );
 
+    // Model selector component
+    const modelSelector = (
+        <HStack gap={3} align="center" w="100%" maxW="48rem" mx="auto">
+            <Text fontSize="sm" fontWeight="medium" color="gray.300" minW="fit-content">
+                Model:
+            </Text>
+            <select
+                value={useCustomModel ? 'custom' : (selectedModel || '')}
+                onChange={(e: React.ChangeEvent<HTMLSelectElement>) => {
+                    if (e.target.value === 'custom') {
+                        setUseCustomModel(true);
+                    } else {
+                        setUseCustomModel(false);
+                        setSelectedModel(e.target.value);
+                    }
+                }}
+                disabled={isLoadingModels}
+                style={{
+                    flex: 1,
+                    maxWidth: '300px',
+                    padding: '6px 12px',
+                    borderRadius: '6px',
+                    border: '1px solid #4A5568',
+                    fontSize: '14px',
+                    backgroundColor: '#2D3748',
+                    color: '#E2E8F0',
+                    cursor: isLoadingModels ? 'not-allowed' : 'pointer',
+                }}
+            >
+                {availableModels.map((model) => (
+                    <option key={model} value={model} style={{ backgroundColor: '#1a202c', color: '#e2e8f0' }}>
+                        {model}
+                    </option>
+                ))}
+                <option value="custom" style={{ backgroundColor: '#1a202c', color: '#e2e8f0' }}>
+                    Custom Model...
+                </option>
+            </select>
+            {useCustomModel && (
+                <Input
+                    placeholder="Enter model name (e.g., mistralai/Mistral-7B-Instruct-v0.2)"
+                    value={customModel}
+                    onChange={(e) => setCustomModel(e.target.value)}
+                    size="sm"
+                    bg="gray.800"
+                    borderColor="gray.600"
+                    color="gray.100"
+                    _focus={{ borderColor: 'blue.500', bg: 'gray.800' }}
+                    flex={1}
+                    maxW="400px"
+                />
+            )}
+        </HStack>
+    );
+
     const config: ChatComponentConfig = {
         title: 'Text to Text',
         description: 'Have a conversation with an AI language model. Ask questions, get answers, and explore AI-generated text.',
@@ -200,6 +284,7 @@ const Text2Text = () => {
         onSendMessage: handleSendMessage,
         settingsPanel,
         defaultShowSettings: true,
+        modelSelector,
     };
 
     return <ChatComponent config={config} />;

@@ -105,7 +105,7 @@ class CustomJSONProvider(DefaultJSONProvider):
 class ASSAI:
     def message(self, kind, message):
         self.socketio.emit(kind, message)
-        logprint(kind, message)
+        # logprint(kind, message)
 
     def __init__(self):
         print(STATIC_FOLDER)

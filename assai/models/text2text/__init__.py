@@ -17,6 +17,43 @@ from assai.tools.input import Input, Message, Conversation, text as text_input
 from datetime import datetime
 
 
+def huggingface_run(model, device):
+    def load():
+        # Use transformers pipeline for text generation
+        pipe = pipeline(
+            "text-generation",
+            model=model,
+            device=device,
+            torch_dtype=torch.float8_e4m3fn
+        )
+        return pipe
+        
+    return load
+
+
+
+def tensorrt_run(model, device):
+    from tensorrt_llm import LLM, SamplingParams
+
+    def load():
+        llm = LLM(
+            model="nvidia/Llama-4-Scout-17B-16E-Instruct-FP8", 
+            attn_backend="FLASHINFER", 
+            backend="pytorch", 
+            tensor_parallel_size=1
+        )
+
+        def run(prompt: str):
+            sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
+            return llm.generate(prompt, sampling_params)
+
+        return run
+
+    return load
+    
+
+
+
 def routes(app: ASSAI, db):
     #
     # We need something to handle keeping models in VRAM/RAM
@@ -26,14 +63,14 @@ def routes(app: ASSAI, db):
     default_model = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"  # Default conversational model
 
     @route("/model/download")
-    @route("/model/download/<string:name>")
+    @route("/model/download/<path:name>")
     def download_model_t2t(name=default_model):
         """Download a new model"""
         # Need to spawn a long term running process
         # to start the download and have a way to measure progress as well
         # and resume previous downloads
 
-    @route("/model/delete/<string:name>")
+    @route("/model/delete/<path:name>")
     def delete_model_t2t(name):
         """Delete a local model"""
 
@@ -42,13 +79,15 @@ def routes(app: ASSAI, db):
         """List local models the user can choose from"""
         return [
             default_model,
-            "gpt2",
-            "gpt2-medium",
-            "gpt2-large",
+            # "meta-llama/Llama-4-Scout-17B-16E",
+            "nvidia/Llama-4-Scout-17B-16E-Instruct-FP8",
+            "nvidia/Llama-4-Scout-17B-16E-Instruct-NVFP4",
+            # "gpt2-medium",
+            # "gpt2-large",
         ]
 
     @route("/model/settings")
-    @route("/model/settings/<string:name>")
+    @route("/model/settings/<path:name>")
     def model_settings_t2t(name=default_model):
         return {
             "max_length": {
@@ -94,7 +133,7 @@ def routes(app: ASSAI, db):
         }
 
     @route("/model/run", methods=['POST'])
-    @route("/model/run/<string:model>", methods=['POST'])
+    @route("/model/run/<path:model>", methods=['POST'])
     def run_t2t(model=default_model):
         """Execute the model from the provided input using Message format"""
 
@@ -102,6 +141,8 @@ def routes(app: ASSAI, db):
         message = data.pop("message", {})
         session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
+
+        device = 0 if accelerator.device_type == "cuda" else -1
 
         # Validate message
         if not message:
@@ -115,27 +156,12 @@ def routes(app: ASSAI, db):
             return {"error": "Text2Text expects text input"}, 400
 
         prompt = content_input.get("data", "")
-
-        pusher = websocket_pusher(app, action_id)
-
-        @cached("t2t")
+        
+        
+        @cached("t2t", model, name=model)
         def load():
-            with capture_progress_thread(pusher, action_id):
-                print(f"[T2T] Loading text generation model: {model}", flush=True)
-                sys.stdout.flush()
-                # Use transformers pipeline for text generation
-                device = 0 if accelerator.device_type == "cuda" else -1
-                print(f"[T2T] Using device: {device}", flush=True)
-                sys.stdout.flush()
-                pipe = pipeline(
-                    "text-generation",
-                    model=model,
-                    device=device,
-                    torch_dtype=torch.float16 if accelerator.device_type == "cuda" else torch.float32
-                )
-                print("[T2T] Model loaded successfully", flush=True)
-                sys.stdout.flush()
-                return pipe
+            loader = tensorrt_run(model, device)
+            return loader()
 
         generation_args = {
             "max_new_tokens": 50,
@@ -148,28 +174,21 @@ def routes(app: ASSAI, db):
 
         # Update with any provided parameters
         generation_args.update({k: v for k, v in data.items() if k in generation_args})
-
-        pipe = load()
-
+        
+        pusher = websocket_pusher(app, action_id)
         with capture_progress_thread(pusher, action_id):
-            print(f"[T2T] Starting text generation for prompt: {prompt[:50]}...", flush=True)
-            print(f"[T2T] Action ID: {action_id}", flush=True)
-            sys.stdout.flush()
+            pipe = load()
 
-            # Use prompt directly (conversation history can be managed via session_id if needed)
             full_prompt = prompt
 
-            print("[T2T] Generating text...", flush=True)
-            sys.stdout.flush()
-
-            # Generate text
-            outputs = pipe(
-                full_prompt,
-                **generation_args
-            )
-
-            print("[T2T] Text generation complete", flush=True)
-            sys.stdout.flush()
+            try:
+                # Generate text
+                outputs = pipe(
+                    full_prompt,
+                    **generation_args
+                )
+            except Exception as e:
+                return {"error": str(e)}
 
             # Extract generated text
             if isinstance(outputs, list) and len(outputs) > 0:

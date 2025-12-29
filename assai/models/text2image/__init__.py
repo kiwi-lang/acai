@@ -7,16 +7,22 @@ import base64
 from io import BytesIO
 from threading import Lock
 import threading
+from datetime import datetime
+from contextlib import contextmanager
 
 import torch
-from diffusers import FluxPipeline
 from flask import request
-from contextlib import contextmanager
 import torchcompat.core as accelerator
+from torchvision.transforms.functional import to_pil_image
 
 from assai.tools import namespaced_route, capture_progress_thread, pil_to_base64_png, cached, websocket_pusher
 from assai.tools.input import Input, Message, Conversation, text as text_input
-from datetime import datetime
+
+import assai.models.text2image.flux as flux
+import assai.models.text2image.pony as pony
+import assai.models.text2image.chroma as chroma
+import assai.models.text2image.qwen as qwen
+import assai.models.text2image.generic as generic
 
 
 def routes(app: ASSAI, db):
@@ -118,16 +124,13 @@ def routes(app: ASSAI, db):
         pusher = websocket_pusher(app, action_id)
 
         @cached("t2i")
-        def load():
+        def load(): 
             with capture_progress_thread(pusher, action_id):
-                pipe = FluxPipeline.from_pretrained(
-                    model,
-                    torch_dtype=torch.bfloat16,
-                    device_map="cuda"
-                )
-                return pipe
-
-
+                # return qwen.load()
+                # return chroma.load()
+                # return pony.load()
+                return flux.load()
+ 
         def seed():
             if seed := data.pop("seed"):
                 return seed
@@ -147,10 +150,26 @@ def routes(app: ASSAI, db):
 
         pipe = load()
 
+        def on_step_end(pipe, step, timestep, callback_kwargs):
+            latents = callback_kwargs["latents"]
+
+            height, width = generation_args["height"], generation_args["width"]
+ 
+            with torch.no_grad():
+                latents = pipe._unpack_latents(latents, height, width, pipe.vae_scale_factor)
+                latents = (latents / pipe.vae.config.scaling_factor) + pipe.vae.config.shift_factor
+                image = pipe.vae.decode(latents, return_dict=False)[0]
+                pil = pipe.image_processor.postprocess(image, output_type="pil")
+                # pil = [to_pil_image(img) for img in images]
+                image_data_url = [f"data:image/png;base64,{pil_to_base64_png(p)}" for p in pil]
+
+                app.message("preview", {"id": action_id, "thread_id": 0, "images": image_data_url})
+            return callback_kwargs
+
         with capture_progress_thread(pusher, action_id):
-            output: FluxPipelineOutput = pipe(prompt,
-                # callback_on_step_end_tensor_inputs=[],
-                # callback_on_step_end=self.on_step,
+            output = pipe(prompt,
+                callback_on_step_end_tensor_inputs = ["latents"],
+                callback_on_step_end=on_step_end,
                 **generation_args
             )
 

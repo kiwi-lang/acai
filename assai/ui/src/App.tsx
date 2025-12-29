@@ -16,10 +16,12 @@ import Models from './components/Models';
 import Text2Image from './components/Text2Image';
 import Text2Video from './components/Text2Video';
 import Image2Mesh from './components/Image2Mesh';
+import DepthEstimation from './components/DepthEstimation';
 import Text2Speech from './components/Text2Speech';
 import Text2Text from './components/Text2Text';
 import Speech2Text from './components/Speech2Text';
 import HuggingFaceModels from './components/HuggingFaceModels';
+import { ColorModeProvider } from "./components/ui/color-mode"
 import './App.css';
 
 // Create the theme system for Chakra UI v3 with dark mode as default
@@ -44,6 +46,7 @@ const TaskPlaceholder = ({ taskName }: { taskName: string }) => {
 function App() {
   return (
     <ChakraProvider value={system}>
+      <ColorModeProvider>
       <WebSocketProvider>
         <Router>
           <Layout>
@@ -53,6 +56,7 @@ function App() {
               <Route path="/text2image" element={<Text2Image />} />
               <Route path="/text2video" element={<Text2Video />} />
               <Route path="/image2mesh" element={<Image2Mesh />} />
+              <Route path="/depth-estimation" element={<DepthEstimation />} />
               <Route path="/text2speech" element={<Text2Speech />} />
               <Route path="/text2text" element={<Text2Text />} />
               <Route path="/text2audio" element={<TaskPlaceholder taskName="Text to Audio" />} />
@@ -65,6 +69,7 @@ function App() {
           </Layout>
         </Router>
       </WebSocketProvider>
+      </ColorModeProvider>
     </ChakraProvider>
   );
 }

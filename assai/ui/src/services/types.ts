@@ -1,11 +1,43 @@
 // Type definitions for ASSAI API
 // Base format matches backend assai.tools.input exactly
 
+// Graph data structure
+export interface GraphNode {
+    id: string;
+    label?: string;
+    features?: number[];
+    properties?: Record<string, any>;
+    x?: number; // For layout
+    y?: number; // For layout
+    z?: number; // For 3D layout
+    color?: string;
+    size?: number;
+}
+
+export interface GraphEdge {
+    source: string;
+    target: string;
+    weight?: number;
+    properties?: Record<string, any>;
+    color?: string;
+    width?: number;
+}
+
+export interface GraphData {
+    nodes: GraphNode[];
+    edges: GraphEdge[];
+    metadata?: {
+        type?: string;
+        predictions?: Record<string, any>;
+        layout?: string;
+    };
+}
+
 // Input format (matches backend assai.tools.input.Input)
 export interface Input {
-    kind: 'text' | 'image' | 'audio' | 'video' | 'mesh';
+    kind: 'text' | 'image' | 'audio' | 'video' | 'mesh' | 'graph';
     encoding: string;
-    data: string;
+    data: string; // JSON string for graph, base64 for images/audio/video, etc.
 }
 
 // Message format (matches backend assai.tools.input.Message)
@@ -21,12 +53,13 @@ export interface Message {
     isGenerating?: boolean;
     retryPrompt?: string; // For retry functionality
     // UI display extensions (extracted from Input for convenience)
-    type?: 'text' | 'image' | 'audio' | 'video' | 'mesh';
+    type?: 'text' | 'image' | 'audio' | 'video' | 'mesh' | 'graph';
     imageUrl?: string;
     imageUrls?: string[];
     audioUrl?: string;
     videoUrl?: string;
     meshUrl?: string;
+    graphData?: GraphData;
 }
 
 // Conversation format (matches backend assai.tools.input.Conversation)

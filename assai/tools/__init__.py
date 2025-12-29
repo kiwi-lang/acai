@@ -10,11 +10,14 @@ import threading
 from collections import defaultdict
 from dataclasses import dataclass, field
 import gc
+from contextlib import contextmanager
+import json
+from pathlib import Path
 
+import importlib_resources
 import torch
 from diffusers import FluxPipeline
 from flask import request
-from contextlib import contextmanager
 import torchcompat.core as accelerator
 from PIL import Image
 from cantilever.core.statstream import StatStream
@@ -57,6 +60,43 @@ def video_to_base64(video):
 
 _observe_util = None
 
+
+@dataclass
+class SystemMetric:
+    time: float
+
+    @dataclass
+    class CPUMetric:
+        load: float
+        memory: list
+
+    @dataclass
+    class GPUMetric:
+        @dataclass
+        class GPUItem:
+            load: float
+            memory: list
+            power: float
+            temperature: float
+    
+        gpus: dict[str, GPUItem]
+        
+    @dataclass
+    class NetworkMetric:
+        bytes_sent: int
+        bytes_recv: int  
+        packets_sent: int
+        packets_recv: int  
+        errin: int
+        errout: int  
+        dropin: int
+        dropout: int  
+
+    cpu: CPUMetric
+    gpu: GPUMetric
+    netowrk: NetworkMetric
+
+
 def system_monitor():
     global _observe_util
     if _observe_util is not None:
@@ -65,17 +105,19 @@ def system_monitor():
     import multiprocessing as mp
 
     from voir.instruments.cpu import cpu_monitor
+    from voir.instruments.network import network_monitor
     from voir.instruments.gpu import select_backend, gpu_monitor
 
     cpu_fn = cpu_monitor()
     select_backend()
     gpu_fn = gpu_monitor()
     n_cpu = mp.cpu_count()
+    network_fn = network_monitor()
 
-    def observe():
+    def observe() -> SystemMetric:
         cpu = cpu_fn()
         cpu["load"] = cpu["load"] / n_cpu
-        return {"cpu": cpu, "gpu": gpu_fn(), "time": time.time()}
+        return {"cpu": cpu, "gpu": gpu_fn(), "time": time.time(), "network": network_fn()}
 
     _observe_util = observe
     return observe
@@ -89,15 +131,18 @@ class ModelCacheEntry:
     after: any = None
     last_used: float = None
     model_info: any = None
+    last_inference_time: float = 0
 
     load_time_stat: StatStream = field(default_factory=StatStream)
     mem_stat: StatStream = field(default_factory=StatStream)
+    inference_stat: StatStream = field(default_factory=StatStream)
 
     def state_dict(self):
         return {
             "load_time_stat": self.load_time_stat.state_dict(),
             "mem_stat": self.mem_stat.state_dict(),
-            "model_info": model_info
+            "inference_stat": self.inference_stat.state_dict(),
+            "model_info": self.model_info
         }
 
     def memory(self):
@@ -116,7 +161,17 @@ class ModelCacheEntry:
         
         return mem
 
-    def time(self):
+    @contextmanager
+    def inference(self):
+        s = time.time()
+        yield
+        e = time.time()
+
+        elapsed = e - s
+        self.last_inference_time = elapsed
+        self.inference_stat.update(elapsed)
+
+    def load_time(self):
         if self.after and self.before:
             return (self.after["time"] - self.before["time"])
         return -1
@@ -124,19 +179,29 @@ class ModelCacheEntry:
     def __json__(self):
         return {
             "memory_usage": self.memory(),
-            "load_time":  self.time(),
+            "load_time":  self.load_time(),
             "last_used": self.last_used,  
+            "last_inference_time": self.last_inference_time
         }
 
 
 class ThreadSafeModel:
-    def __init__(self, cached_entry: ModelCacheEntry):
+    def __init__(self, cached_entry: ModelCacheEntry, cb):
         self.entry = cached_entry
+        self.cb = cb
 
     def __call__(self, *args, **kwargs):
         with self.entry.lock:
             self.entry.last_used = time.time()
-            return self.entry.model(*args, **kwargs)
+            with self.entry.inference():
+                results = self.entry.model(*args, **kwargs)
+
+        self.cb()
+        return results
+
+
+
+data_path = importlib_resources.files("assai.data")
 
 
 class ModelCache:
@@ -146,6 +211,19 @@ class ModelCache:
         self.cache = dict()
         self.lock = threading.Lock()
         self.observe = system_monitor()
+        self.file = data_path / "models.json"
+
+        if self.file.exists():
+            with open(self.file, "r", encoding="utf-8") as file:
+                data = json.load(file)
+
+    def save(self):
+        tmp = str(self.file) + ".tmp"
+
+        with open(tmp, "w") as file:
+            json.dump(self.state_dict(), file, indent=2)
+
+        Path(tmp).replace(self.file)
 
     def load_model(self, key, fun, *args, model_info=None, **kwargs):
         cache_entry = self.cache.setdefault(key, ModelCacheEntry(None, threading.Lock()))
@@ -159,10 +237,11 @@ class ModelCache:
                     cache_entry.before = self.observe()
                     cache_entry.model = fun(*args, **kwargs)
                     cache_entry.after = self.observe()
-                    cache_entry.load_time_stat.update(cache_entry.time())
+                    cache_entry.load_time_stat.update(cache_entry.load_time())
                     cache_entry.mem_stat.update(cache_entry.memory())
 
-        return ThreadSafeModel(cache_entry)
+        self.save()
+        return ThreadSafeModel(cache_entry, self.save)
 
     def remove(self, item):
         self.cache.pop(item)
@@ -174,12 +253,19 @@ class ModelCache:
             name: entry.__json__() for name, entry in self.cache.items()
         }
 
+    def state_dict(self):
+        return {
+            name: entry.state_dict() for name, entry in self.cache.items()
+        }
+
 
 live_models = ModelCache()
 
 
-def cached(key, **model_info):
+def cached(*keys, **model_info):
     global live_models
+
+    key = "_".join(keys)
     
     def decorator(fun):
         def _(*args, **kwargs):
@@ -310,12 +396,18 @@ def capture_progress_thread(pusher_factory, action_id=0):
             sys.stderr = StreamRouter(push=pusher_factory("stderr"))
             was_replaced = True
 
-    yield
+    try:
+        yield
 
-    if was_replaced:
-        with socket_io_lock:
-            sys.stdout = old_out
-            sys.stderr = old_err
+    except:
+        import traceback
+        traceback.print_exc()
+        raise
+    finally:
+        if was_replaced:
+            with socket_io_lock:
+                sys.stdout = old_out
+                sys.stderr = old_err
 
 
 def test_routing_stream():

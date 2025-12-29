@@ -1,0 +1,35 @@
+{
+  "t2i": {
+    "load_time_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 0.0,
+      "min": Infinity,
+      "max": -Infinity,
+      "current_count": 1,
+      "current_obs": 161.31830978393555,
+      "drop_obs": 10
+    },
+    "mem_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 0.0,
+      "min": Infinity,
+      "max": -Infinity,
+      "current_count": 1,
+      "current_obs": 33147.38671875,
+      "drop_obs": 10
+    },
+    "inference_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 0.0,
+      "min": Infinity,
+      "max": -Infinity,
+      "current_count": 2,
+      "current_obs": 92.92331886291504,
+      "drop_obs": 10
+    },
+    "model_info": {}
+  }
+}

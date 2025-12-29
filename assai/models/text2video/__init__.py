@@ -18,9 +18,17 @@ from datetime import datetime
 from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher
 from assai.tools.input import Input, Message, Conversation, text as text_input
 
+import assai.models.text2video.hunyuan as hunyuan
+import assai.models.text2video.wan2 as wan2
+
+# pip install "huggingface_hub[cli]"
+
+# python generate.py  --task t2v-A14B --size 1280*720 --ckpt_dir ./Wan2.2-T2V-A14B --offload_model True --convert_model_dtype --prompt "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage."
 
 
 #  --no-build-isolation --no-deps -v --force-reinstall
+
+
 
 
 def routes(app: ASSAI, db):
@@ -39,6 +47,8 @@ def routes(app: ASSAI, db):
         # to start the download and have a way to measure progress as well
         # and resume previous downloads
 
+        # huggingface-cli download Wan-AI/Wan2.2-T2V-A14B
+
     @route("/model/delete/<string:name>")
     def delete_model_t2v(name):
         """Delete a local model"""
@@ -48,6 +58,7 @@ def routes(app: ASSAI, db):
         """List local models the user can choose from"""
         return [
             default_model,
+            "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
         ]
 
     @route("/model/settings")
@@ -113,19 +124,9 @@ def routes(app: ASSAI, db):
 
         @cached("t2v", name=model)
         def load():
-            from diffusers import HunyuanVideoPipeline
-            from diffusers import HunyuanVideo15Pipeline
-
-            dtype = torch.bfloat16
-
             with capture_progress_thread(pusher, action_id):
-                # pipe = HunyuanVideoPipeline.from_pretrained(default_model, torch_dtype=torch.bfloat16)
-                # pipe.enable_model_cpu_offload()
-                # pipe.vae.enable_tiling()
-                pipe = HunyuanVideo15Pipeline.from_pretrained("hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v", torch_dtype=dtype)
-                pipe.enable_model_cpu_offload()
-                pipe.vae.enable_tiling()
-                return pipe
+                return wan2.load()
+                # return hunyuan.load()
 
         def seed():
             if seed := data.pop("seed", None):
@@ -158,15 +159,15 @@ def routes(app: ASSAI, db):
         import tempfile
 
         # Use a temporary file to avoid conflicts
-        # with tempfile.NamedTemporaryFile(suffix='.mp4', delete=False) as tmp_file:
-        # temp_video_path = tmp_file.name
-        temp_video_path = "/home/delaunao/workspace/assai/assai/data/video.mp4"
+        with tempfile.NamedTemporaryFile(suffix='.mp4') as tmp_file:
+            temp_video_path = tmp_file.name
+            # temp_video_path = "/home/delaunao/workspace/assai/assai/data/video.mp4"
 
-        export_to_video(video, temp_video_path, fps=24)
+            export_to_video(video, temp_video_path, fps=24)
 
-        # Read the video file and convert to base64
-        with open(temp_video_path, "rb") as fp:
-            video_data = fp.read()
+            # Read the video file and convert to base64
+            with open(temp_video_path, "rb") as fp:
+                video_data = fp.read()
 
         # Encode to base64
         video_base64 = base64.b64encode(video_data).decode('ascii')

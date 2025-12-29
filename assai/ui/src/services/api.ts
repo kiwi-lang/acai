@@ -157,7 +157,7 @@ class AssAI_API {
   // Takes a single Message, returns Message response
   async runModel(
     message: Message,
-    modelType: 'text2text' | 'text2image' | 'text2video' | 'image2mesh' | 'text2speech' | 'speech2text',
+    modelType: 'text2text' | 'text2image' | 'text2video' | 'image2mesh' | 'text2speech' | 'speech2text' | 'depth_estimation',
     params?: Record<string, any>,
     model?: string,
     sessionId?: string,
@@ -325,6 +325,30 @@ class AssAI_API {
     return this.runModel(msg, 'image2mesh', params, model, sessionId, actionId);
   }
 
+  // DepthEstimation endpoint - uses unified Message format
+  async estimateDepth(
+    imageDataUri: string,
+    params?: DepthEstimationParams,
+    model?: string,
+    sessionId?: string,
+    actionId?: number,
+    message?: Message
+  ): Promise<{ message: Message }> {
+    // Use provided message if it has image content, otherwise build from imageDataUri
+    const msg: Message = message || {
+      id: Date.now(),
+      role: 'user',
+      content: {
+        kind: 'image',
+        encoding: 'data_url',
+        data: imageDataUri
+      },
+      timestamp: new Date().toISOString()
+    };
+
+    return this.runModel(msg, 'depth_estimation', params, model, sessionId, actionId);
+  }
+
   // Telemetry endpoint
   async getTelemetry(signal?: AbortSignal): Promise<{
     cpu: { memory: [number, number]; load: number };
@@ -369,6 +393,11 @@ class AssAI_API {
     return this.request(`/huggingface/loaded/models/remove/${encodeURIComponent(name)}`, {
       method: 'DELETE',
     });
+  }
+
+  // Text2Text model endpoints
+  async listText2TextModels(): Promise<string[]> {
+    return this.request<string[]>('/text2text/model/list');
   }
 }
 
@@ -420,6 +449,11 @@ export interface TextGenerationParams {
 export interface SpeechRecognitionParams {
   language?: string | null;
   task?: 'transcribe' | 'translate';
+}
+
+// DepthEstimation parameters interface
+export interface DepthEstimationParams {
+  colormap?: 'jet' | 'viridis' | 'plasma' | 'inferno' | 'magma' | 'turbo';
 }
 
 // Export a singleton instance
