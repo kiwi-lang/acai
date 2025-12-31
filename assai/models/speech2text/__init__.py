@@ -117,20 +117,14 @@ def routes(app: ASSAI, db):
         @cached("s2t")
         def load():
             with capture_progress_thread(pusher, action_id):
-                print(f"[S2T] Loading ASR model: {model}", flush=True)
-                sys.stdout.flush()
-                # Use transformers pipeline for automatic speech recognition
                 device = 0 if accelerator.device_type == "cuda" else -1
-                print(f"[S2T] Using device: {device}", flush=True)
-                sys.stdout.flush()
+
                 pipe = pipeline(
                     "automatic-speech-recognition",
                     model=model,
-                    device=device,
-                    torch_dtype=torch.bfloat16 if accelerator.device_type == "cuda" else torch.float32
+                    device_map=device,
+                    dtype=torch.bfloat16
                 )
-                print("[S2T] Model loaded successfully", flush=True)
-                sys.stdout.flush()
                 return pipe
 
         generation_args = {

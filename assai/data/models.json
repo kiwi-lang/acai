@@ -233,5 +233,71 @@
     "model_info": {
       "name": "llama.cpp/Scout"
     }
+  },
+  "s2t": {
+    "load_time_stat": {
+      "sum": 0.13323426246643066,
+      "sum_sqr": 0.017751368694973735,
+      "first_obs": 17.52490735054016,
+      "min": 17.52490735054016,
+      "max": 17.658141613006592,
+      "current_count": 2,
+      "current_obs": 0.13323426246643066,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": -869.45703125,
+      "sum_sqr": 755955.5291900635,
+      "first_obs": 4241.1328125,
+      "min": 3371.67578125,
+      "max": 4241.1328125,
+      "current_count": 2,
+      "current_obs": -869.45703125,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": -0.0895240306854248,
+      "sum_sqr": 0.008014552070164882,
+      "first_obs": 1.334101915359497,
+      "min": 1.2445778846740723,
+      "max": 1.334101915359497,
+      "current_count": 2,
+      "current_obs": -0.0895240306854248,
+      "drop_obs": 0
+    },
+    "model_info": {}
+  },
+  "t2s": {
+    "load_time_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 4.4558141231536865,
+      "min": 4.4558141231536865,
+      "max": 4.4558141231536865,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 214.15234375,
+      "min": 214.15234375,
+      "max": 214.15234375,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 0.5783393383026123,
+      "min": 0.5783393383026123,
+      "max": 0.5783393383026123,
+      "current_count": 1,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "model_info": {}
   }
 }
