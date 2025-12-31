@@ -375,6 +375,44 @@ class AssAI_API {
     return this.request('/telemetry', { signal });
   }
 
+  // Model settings endpoints - task-specific
+  async getModelSettingsSpec(
+    taskType: 'text2image' | 'text2text' | 'text2video' | 'image2mesh' | 'text2speech' | 'speech2text' | 'depth_estimation',
+    modelName?: string
+  ): Promise<Record<string, { type: 'int' | 'float'; min?: number | null; max?: number | null; default: number }>> {
+    const endpoint = modelName
+      ? `/${taskType}/model/settings/${encodeURIComponent(modelName)}`
+      : `/${taskType}/model/settings`;
+    return this.request(endpoint);
+  }
+
+  async getModelSettings(
+    taskType: 'text2image' | 'text2text' | 'text2video' | 'image2mesh' | 'text2speech' | 'speech2text' | 'depth_estimation',
+    modelName?: string
+  ): Promise<Record<string, number>> {
+    try {
+      const endpoint = modelName
+        ? `/${taskType}/model/settings/${encodeURIComponent(modelName)}/values`
+        : `/${taskType}/model/settings/values`;
+      return await this.request<Record<string, number>>(endpoint);
+    } catch (error) {
+      // If endpoint doesn't exist or returns 404, return empty object
+      return {};
+    }
+  }
+
+  async saveModelSettings(
+    taskType: 'text2image' | 'text2text' | 'text2video' | 'image2mesh' | 'text2speech' | 'speech2text' | 'depth_estimation',
+    modelName: string,
+    settings: Record<string, number>
+  ): Promise<void> {
+    const endpoint = `/${taskType}/model/settings/${encodeURIComponent(modelName)}/values`;
+    return this.request(endpoint, {
+      method: 'POST',
+      body: JSON.stringify(settings),
+    });
+  }
+
   // Hugging Face endpoints
   async getHuggingFaceCache(): Promise<any> {
     return this.request('/huggingface/list');

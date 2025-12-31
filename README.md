@@ -142,3 +142,11 @@ Models
 # Wan-AI/Wan2.2-TI2V-5B            : Text | Image to Video
 # 
 
+
+# https://www.reddit.com/r/StableDiffusion/comments/1q08ro5/qwenimage2512_released_on_huggingface/
+
+Unsloth
+<!-- 
+BF16 & FP8 by Comfy-Org https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/diffusion_models
+GGUF's: https://huggingface.co/unsloth/Qwen-Image-2512-GGUF
+4-step Turbo lora: https://huggingface.co/Wuli-art/Qwen-Image-2512-Turbo-LoRA -->

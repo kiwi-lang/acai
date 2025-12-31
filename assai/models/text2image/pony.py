@@ -35,3 +35,29 @@ def load(model_name):
     )
 
     return pipe
+
+
+
+def on_step_end(app, action_id, generation_args):
+    from assai.tools import pil_to_base64_png
+
+    def _(pipe, step, timestep, callback_kwargs):
+        latents = callback_kwargs["latents"]
+
+        height, width = generation_args["height"], generation_args["width"]
+
+        with torch.no_grad():
+            needs_upcasting = pipe.vae.dtype == torch.float16 and pipe.vae.config.force_upcast
+
+            if needs_upcasting:
+                pipe.upcast_vae()
+                latents = latents.to(next(iter(pipe.vae.post_quant_conv.parameters())).dtype)
+
+            image = pipe.vae.decode(latents / pipe.vae.config.scaling_factor, return_dict=False)[0]
+            pil = pipe.image_processor.postprocess(image, output_type="pil")
+
+            image_data_url = [f"data:image/png;base64,{pil_to_base64_png(p)}" for p in pil]
+
+            app.message("preview", {"id": action_id, "thread_id": 0, "images": image_data_url})
+    
+    return _

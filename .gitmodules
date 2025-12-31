@@ -1,0 +1,3 @@
+[submodule "assai/unsloth/ComfyUI"]
+	path = assai/unsloth/ComfyUI
+	url = https://github.com/comfyanonymous/ComfyUI.git

@@ -56,51 +56,65 @@ def routes(app: ASSAI, db):
         return sorted(list(set(models.keys())))
 
     @route("/model/settings")
-    @route("/model/settings/<string:name>")
+    @route("/model/settings/<path:name>")
     def model_settings_t2i(name=default_model):
-        return {
-            "height": {
+        return [
+            {
+                "name": "height",
                 "type": int,
                 "min": 32,
                 "max": None,
                 "default": 256
             },
-            "width": {
+            {
+                "name": "width",
                 "type": int,
                 "min": 32,
                 "max": None,
                 "default": 256
             },
-            "guidance_scale": {
+            {
+                "name": "guidance_scale",
                 "type": float,
                 "default": 2.5
             },
-            "num_inference_steps": {
+            {
+                "name": "num_inference_steps",
                 "type": int,
                 "min": 1,
                 "max": None,
-                "default": 25
+                "default": 50
             },
-            "max_sequence_length": {
+            {
+                "name": "max_sequence_length",
                 "type": int,
                 "min": None,
                 "max": 512,
                 "default": 512
             },
-            "num_images_per_prompt": {
+            {
+                "name": "num_images_per_prompt",
                 "type": int,
                 "min": 1,
                 "max": 10,
                 "default": 4
             },
-            "generator": {
+            # {
+            #     "name": "generator",
+            #     "type": int,
+            #     "min": None,
+            #     "max": None,
+            #     "default": 256
+            # },
+            {
+                "name": "seed",
                 "type": int,
                 "min": None,
                 "max": None,
-                "default": 256
+                "default": 0
             },
-        }
-
+        ]
+ 
     @route("/model/run", methods=['POST'])
     @route("/model/run/<path:model>", methods=['POST'])
     def run_t2i(model=default_model):
@@ -110,7 +124,8 @@ def routes(app: ASSAI, db):
         message = data.pop("message", {})
         session_id = data.pop("session_id", None)
         action_id = data.pop("action_id", 0)
-
+        print(data)
+ 
         # Validate message
         if not message:
             return {"error": "No message provided"}, 400
@@ -133,7 +148,7 @@ def routes(app: ASSAI, db):
                 return model_module.load(model)
  
         def seed():
-            if seed := data.pop("seed"):
+            if seed := data.pop("seed", None):
                 return seed
             return int(time.time() * 1000)
 

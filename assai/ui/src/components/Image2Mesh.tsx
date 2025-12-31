@@ -1,27 +1,38 @@
-import { useState } from 'react';
-import { VStack, Input, Button, HStack, Text } from '@chakra-ui/react';
+import { useState, useEffect } from 'react';
+import { Text } from '@chakra-ui/react';
 import ChatComponent, { ChatComponentConfig } from './ChatComponent';
+import ModelSettingsForm, { SettingInputFieldSpec } from './ModelSettingsForm';
 import { Message } from '../services/types';
-import { assaiAPI, MeshGenerationParams } from '../services/api';
+import { assaiAPI } from '../services/api';
 import { useWebSocket } from '../contexts/WebSocketContext';
 
 const Image2Mesh = () => {
     const { sessionId } = useWebSocket();
+    const [settingsSpec, setSettingsSpec] = useState<SettingInputFieldSpec[] | null>(null);
+    const [isLoadingSpec, setIsLoadingSpec] = useState<boolean>(true);
 
-    // Generation parameters with defaults matching backend
-    const [generationParams, setGenerationParams] = useState<MeshGenerationParams>({
-        guidance_scale: 3.0,
-        num_inference_steps: 50,
-        seed: 0,
-    });
+    let settings: any = {}
+    function setSetting(key: string, value: any) {
+        settings[key] = value
+    }
 
-    const resetToDefaults = () => {
-        setGenerationParams({
-            guidance_scale: 3.0,
-            num_inference_steps: 50,
-            seed: 0,
-        });
-    };
+    // Fetch settings spec on mount
+    useEffect(() => {
+        const fetchSpec = async () => {
+            try {
+                setIsLoadingSpec(true);
+                const spec = await assaiAPI.getModelSettingsSpec('image2mesh');
+                setSettingsSpec(spec);
+            } catch (error) {
+                console.error('Failed to fetch settings spec:', error);
+                setSettingsSpec(null);
+            } finally {
+                setIsLoadingSpec(false);
+            }
+        };
+
+        fetchSpec();
+    }, []);
 
     const handleSendMessage = async (userMessage: Message, actionId: number): Promise<{ message: Message }> => {
         // Extract image data URL from message
@@ -31,7 +42,7 @@ const Image2Mesh = () => {
 
         return await assaiAPI.generateMesh(
             imageDataUrl,
-            generationParams,
+            settings, // Use settings from ModelSettingsForm
             undefined,
             sessionId ?? undefined,
             actionId,
@@ -39,84 +50,14 @@ const Image2Mesh = () => {
         );
     };
 
-    const settingsPanel = (
-        <VStack gap={4} align="stretch">
-            {/* Guidance Scale */}
-            <VStack align="flex-start" gap={1}>
-                <Text fontSize="sm" fontWeight="medium" color="gray.300">
-                    Guidance Scale: {generationParams.guidance_scale?.toFixed(1)}
-                </Text>
-                <Input
-                    type="number"
-                    value={generationParams.guidance_scale}
-                    onChange={(e) => {
-                        const value = parseFloat(e.target.value) || 3.0;
-                        setGenerationParams(prev => ({ ...prev, guidance_scale: value }));
-                    }}
-                    min={1.0}
-                    max={10.0}
-                    step={0.1}
-                    size="sm"
-                    bg="gray.700"
-                    borderColor="gray.600"
-                    color="gray.100"
-                    _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
-                />
-            </VStack>
-
-            {/* Inference Steps */}
-            <VStack align="flex-start" gap={1}>
-                <Text fontSize="sm" fontWeight="medium" color="gray.300">Inference Steps</Text>
-                <Input
-                    type="number"
-                    value={generationParams.num_inference_steps}
-                    onChange={(e) => {
-                        const value = parseInt(e.target.value) || 50;
-                        setGenerationParams(prev => ({ ...prev, num_inference_steps: value }));
-                    }}
-                    min={1}
-                    max={100}
-                    size="sm"
-                    bg="gray.700"
-                    borderColor="gray.600"
-                    color="gray.100"
-                    _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
-                />
-            </VStack>
-
-            {/* Seed */}
-            <VStack align="flex-start" gap={1}>
-                <Text fontSize="sm" fontWeight="medium" color="gray.300">Seed (0 = random)</Text>
-                <Input
-                    type="number"
-                    value={generationParams.seed}
-                    onChange={(e) => {
-                        const value = parseInt(e.target.value) || 0;
-                        setGenerationParams(prev => ({ ...prev, seed: value }));
-                    }}
-                    min={0}
-                    max={2147483647}
-                    size="sm"
-                    bg="gray.700"
-                    borderColor="gray.600"
-                    color="gray.100"
-                    _focus={{ borderColor: 'purple.500', bg: 'gray.700' }}
-                />
-            </VStack>
-
-            <Button
-                size="sm"
-                variant="outline"
-                onClick={resetToDefaults}
-                w="100%"
-                color="gray.200"
-                borderColor="gray.600"
-                _hover={{ bg: 'gray.700', borderColor: 'gray.500' }}
-            >
-                Reset to Defaults
-            </Button>
-        </VStack>
-    );
+    const settingsPanel = settingsSpec ? (
+        <ModelSettingsForm
+            spec={settingsSpec}
+            onSettingsChange={setSetting}
+        />
+    ) : isLoadingSpec ? (
+        <Text fontSize="sm" color="gray.400" p={4}>Loading settings...</Text>
+    ) : null;
 
     const config: ChatComponentConfig = {
         title: 'Image to 3D Mesh',
