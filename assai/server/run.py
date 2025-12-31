@@ -142,6 +142,16 @@ class ASSAI:
                 print(f'Client joined session: {session_id}')
                 return {'status': 'joined', 'session_id': session_id}
 
+        @self.socketio.on('request_telemetry')
+        def handle_request_telemetry():
+            """Handle telemetry request via websocket"""
+            try:
+                telemetry_data = self.observe_system()
+                emit('telemetry', telemetry_data)
+            except Exception as e:
+                print(f'Error fetching telemetry: {e}')
+                emit('telemetry_error', {'error': str(e)})
+
         @self.app.route("/")
         def main():
             pass

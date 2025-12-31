@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Box, HStack, Text, VStack, IconButton, Input } from '@chakra-ui/react';
 import { Tooltip } from './ui/tooltip';
-import { assaiAPI } from '../services/api';
+import { useWebSocket } from '../contexts/WebSocketContext';
 
 interface TelemetryData {
     cpu: {
@@ -273,10 +273,11 @@ const PlayIcon = () => (
 );
 
 const TelemetryDisplay = () => {
+    const { socket, isConnected } = useWebSocket();
     const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [isPaused, setIsPaused] = useState(false);
-    const [intervalSeconds, setIntervalSeconds] = useState<number>(10);
+    const [intervalSeconds, setIntervalSeconds] = useState<number>(1);
     const [fillGraphs, setFillGraphs] = useState<boolean>(true);
     const [cpuHistory, setCpuHistory] = useState<number[]>([]);
     const [gpuHistory, setGpuHistory] = useState<number[]>([]);
@@ -287,141 +288,151 @@ const TelemetryDisplay = () => {
     const [diskWriteTimeHistory, setDiskWriteTimeHistory] = useState<number[]>([]);
     const [sparklineWidth, setSparklineWidth] = useState<number>(200);
     const intervalRef = useRef<NodeJS.Timeout | null>(null);
-    const abortControllerRef = useRef<AbortController | null>(null);
     const isFetchingRef = useRef<boolean>(false);
     const prevNetworkRef = useRef<{ bytes_sent: number; bytes_recv: number; time: number } | null>(null);
     const prevDiskRef = useRef<{ read_time: number; write_time: number; time: number } | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const maxHistoryLength = 60;
 
-    // Memoize fetchTelemetry to prevent recreation on every render
-    const fetchTelemetry = useCallback(async () => {
-        if (isFetchingRef.current) return;
+    // Process telemetry data and update state
+    const processTelemetryData = useCallback((data: TelemetryData) => {
+        setTelemetry(data);
+        setError(null);
 
-        // Abort any previous request
-        if (abortControllerRef.current) {
-            abortControllerRef.current.abort();
-        }
+        // Update history
+        const cpuLoad = data.cpu.load * 100;
+        setCpuHistory(prev => {
+            const updated = [...prev, cpuLoad];
+            return updated.slice(-maxHistoryLength);
+        });
 
-        // Create new abort controller for this request
-        const controller = new AbortController();
-        abortControllerRef.current = controller;
-        isFetchingRef.current = true;
+        // Get first GPU
+        const gpuEntries = Object.entries(data.gpu);
+        const firstGpu = gpuEntries.length > 0 ? gpuEntries[0][1] : null;
 
-        try {
-            const data: TelemetryData = await assaiAPI.getTelemetry(controller.signal);
-
-            if (controller.signal.aborted) return;
-
-            setTelemetry(data);
-            setError(null);
-
-            // Update history
-            const cpuLoad = data.cpu.load * 100;
-            setCpuHistory(prev => {
-                const updated = [...prev, cpuLoad];
+        if (firstGpu) {
+            const gpuLoad = firstGpu.load * 100;
+            setGpuHistory(prev => {
+                const updated = [...prev, gpuLoad];
                 return updated.slice(-maxHistoryLength);
             });
 
-            // Get first GPU
-            const gpuEntries = Object.entries(data.gpu);
-            const firstGpu = gpuEntries.length > 0 ? gpuEntries[0][1] : null;
+            const gpuMemoryPercent = (firstGpu.memory[0] / firstGpu.memory[1]) * 100;
+            setGpuMemoryHistory(prev => {
+                const updated = [...prev, gpuMemoryPercent];
+                return updated.slice(-maxHistoryLength);
+            });
+        }
 
-            if (firstGpu) {
-                const gpuLoad = firstGpu.load * 100;
-                setGpuHistory(prev => {
-                    const updated = [...prev, gpuLoad];
-                    return updated.slice(-maxHistoryLength);
-                });
+        // Update network history
+        if (data.network) {
+            const currentTime = Date.now() / 1000; // Convert to seconds
+            const prev = prevNetworkRef.current;
 
-                const gpuMemoryPercent = (firstGpu.memory[0] / firstGpu.memory[1]) * 100;
-                setGpuMemoryHistory(prev => {
-                    const updated = [...prev, gpuMemoryPercent];
-                    return updated.slice(-maxHistoryLength);
-                });
-            }
+            if (prev) {
+                const timeDelta = currentTime - prev.time;
+                if (timeDelta > 0) {
+                    // Calculate rates in bytes per second
+                    const uploadRate = (data.network.bytes_sent - prev.bytes_sent) / timeDelta;
+                    const downloadRate = (data.network.bytes_recv - prev.bytes_recv) / timeDelta;
 
-            // Update network history
-            if (data.network) {
-                const currentTime = Date.now() / 1000; // Convert to seconds
-                const prev = prevNetworkRef.current;
-
-                if (prev) {
-                    const timeDelta = currentTime - prev.time;
-                    if (timeDelta > 0) {
-                        // Calculate rates in bytes per second
-                        const uploadRate = (data.network.bytes_sent - prev.bytes_sent) / timeDelta;
-                        const downloadRate = (data.network.bytes_recv - prev.bytes_recv) / timeDelta;
-
-                        // Convert to MB/s for display (but store as bytes/s for consistency)
-                        setNetworkUploadHistory(prevHistory => {
-                            const updated = [...prevHistory, uploadRate / (1024 * 1024)]; // MB/s
-                            return updated.slice(-maxHistoryLength);
-                        });
-                        setNetworkDownloadHistory(prevHistory => {
-                            const updated = [...prevHistory, downloadRate / (1024 * 1024)]; // MB/s
-                            return updated.slice(-maxHistoryLength);
-                        });
-                    }
+                    // Convert to MB/s for display (but store as bytes/s for consistency)
+                    setNetworkUploadHistory(prevHistory => {
+                        const updated = [...prevHistory, uploadRate / (1024 * 1024)]; // MB/s
+                        return updated.slice(-maxHistoryLength);
+                    });
+                    setNetworkDownloadHistory(prevHistory => {
+                        const updated = [...prevHistory, downloadRate / (1024 * 1024)]; // MB/s
+                        return updated.slice(-maxHistoryLength);
+                    });
                 }
-
-                prevNetworkRef.current = {
-                    bytes_sent: data.network.bytes_sent,
-                    bytes_recv: data.network.bytes_recv,
-                    time: currentTime
-                };
             }
 
-            // Update disk history
-            if (data.disk) {
-                const currentTime = Date.now() / 1000; // Convert to seconds
-                const prev = prevDiskRef.current;
+            prevNetworkRef.current = {
+                bytes_sent: data.network.bytes_sent,
+                bytes_recv: data.network.bytes_recv,
+                time: currentTime
+            };
+        }
 
-                // Calculate read and write time rates
-                if (prev) {
-                    const timeDelta = currentTime - prev.time;
-                    if (timeDelta > 0) {
-                        // Calculate rates: (current - previous) / time_delta
-                        const readTimeRate = (data.disk.read_time - prev.read_time) / timeDelta;
-                        const writeTimeRate = (data.disk.write_time - prev.write_time) / timeDelta;
+        // Update disk history
+        if (data.disk) {
+            const currentTime = Date.now() / 1000; // Convert to seconds
+            const prev = prevDiskRef.current;
 
-                        setDiskReadTimeHistory(prevHistory => {
-                            const updated = [...prevHistory, readTimeRate];
-                            return updated.slice(-maxHistoryLength);
-                        });
-                        setDiskWriteTimeHistory(prevHistory => {
-                            const updated = [...prevHistory, writeTimeRate];
-                            return updated.slice(-maxHistoryLength);
-                        });
-                    }
+            // Calculate read and write time rates
+            if (prev) {
+                const timeDelta = currentTime - prev.time;
+                if (timeDelta > 0) {
+                    // Calculate rates: (current - previous) / time_delta
+                    const readTimeRate = (data.disk.read_time - prev.read_time) / timeDelta;
+                    const writeTimeRate = (data.disk.write_time - prev.write_time) / timeDelta;
+
+                    setDiskReadTimeHistory(prevHistory => {
+                        const updated = [...prevHistory, readTimeRate];
+                        return updated.slice(-maxHistoryLength);
+                    });
+                    setDiskWriteTimeHistory(prevHistory => {
+                        const updated = [...prevHistory, writeTimeRate];
+                        return updated.slice(-maxHistoryLength);
+                    });
                 }
+            }
 
-                prevDiskRef.current = {
-                    read_time: data.disk.read_time,
-                    write_time: data.disk.write_time,
-                    time: currentTime
-                };
-            }
-        } catch (err) {
-            if (controller.signal.aborted) return;
-
-            const errorMessage = err instanceof Error ? err.message : 'Failed to load';
-            // Don't log abort errors as they're expected when requests are cancelled
-            if (!controller.signal.aborted) {
-                console.error('Failed to fetch telemetry:', err);
-            }
-            setError(errorMessage);
-            // Don't clear telemetry on error - keep showing last known values
-        } finally {
-            isFetchingRef.current = false;
-            // Clear the abort controller reference if this was the current request
-            if (abortControllerRef.current === controller) {
-                abortControllerRef.current = null;
-            }
+            prevDiskRef.current = {
+                read_time: data.disk.read_time,
+                write_time: data.disk.write_time,
+                time: currentTime
+            };
         }
     }, [maxHistoryLength]);
 
+    // Memoize fetchTelemetry to prevent recreation on every render
+    const fetchTelemetry = useCallback(() => {
+        if (isFetchingRef.current || !socket || !isConnected) return;
+
+        isFetchingRef.current = true;
+        // Request telemetry via websocket
+        socket.emit('request_telemetry');
+    }, [socket, isConnected]);
+
+    // Set up websocket listeners for telemetry
     useEffect(() => {
+        if (!socket || !isConnected) {
+            return;
+        }
+
+        // Handle telemetry data received via websocket
+        const handleTelemetry = (data: TelemetryData) => {
+            isFetchingRef.current = false;
+            processTelemetryData(data);
+        };
+
+        // Handle telemetry errors received via websocket
+        const handleTelemetryError = (errorData: { error: string }) => {
+            isFetchingRef.current = false;
+            const errorMessage = errorData.error || 'Failed to load telemetry';
+            console.error('Failed to fetch telemetry:', errorMessage);
+            setError(errorMessage);
+            // Don't clear telemetry on error - keep showing last known values
+        };
+
+        // Register websocket listeners
+        socket.on('telemetry', handleTelemetry);
+        socket.on('telemetry_error', handleTelemetryError);
+
+        return () => {
+            socket.off('telemetry', handleTelemetry);
+            socket.off('telemetry_error', handleTelemetryError);
+        };
+    }, [socket, isConnected, processTelemetryData]);
+
+    useEffect(() => {
+        // Only proceed if websocket is connected
+        if (!isConnected || !socket) {
+            return;
+        }
+
         // Fetch immediately if not paused
         if (!isPaused) {
             fetchTelemetry();
@@ -441,12 +452,6 @@ const TelemetryDisplay = () => {
         }
 
         return () => {
-            // Synchronously clean up to prevent React Refresh from hanging
-            // Abort any pending request immediately
-            if (abortControllerRef.current) {
-                abortControllerRef.current.abort();
-                abortControllerRef.current = null;
-            }
             // Clear interval immediately
             if (intervalRef.current) {
                 clearInterval(intervalRef.current);
@@ -455,7 +460,7 @@ const TelemetryDisplay = () => {
             // Reset fetching flag
             isFetchingRef.current = false;
         };
-    }, [isPaused, intervalSeconds, fetchTelemetry]);
+    }, [isPaused, intervalSeconds, fetchTelemetry, isConnected, socket]);
 
     // Update sparkline width based on container size
     useEffect(() => {
