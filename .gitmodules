@@ -1,3 +1,6 @@
 [submodule "assai/unsloth/ComfyUI"]
 	path = assai/unsloth/ComfyUI
 	url = https://github.com/comfyanonymous/ComfyUI.git
+[submodule "dependencies/llama.cpp"]
+	path = dependencies/llama.cpp
+	url = https://github.com/ggml-org/llama.cpp
