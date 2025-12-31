@@ -163,5 +163,75 @@
       "drop_obs": 0
     },
     "model_info": {}
+  },
+  "t2t_llama.cpp/Scout": {
+    "load_time_stat": {
+      "sum": 5.344441890716553,
+      "sum_sqr": 14.302386595028906,
+      "first_obs": 3.1043622493743896,
+      "min": 3.1022732257843018,
+      "max": 5.784691333770752,
+      "current_count": 5,
+      "current_obs": 2.6679983139038086,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": 6223.55859375,
+      "sum_sqr": 20379440.353134155,
+      "first_obs": 6588.83203125,
+      "min": 6574.5234375,
+      "max": 10386.0703125,
+      "current_count": 5,
+      "current_obs": 3797.23828125,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": -6.42872953414917,
+      "sum_sqr": 24.357638317433043,
+      "first_obs": 9.30055832862854,
+      "min": 5.8014068603515625,
+      "max": 9.813440084457397,
+      "current_count": 4,
+      "current_obs": -3.4991514682769775,
+      "drop_obs": 0
+    },
+    "model_info": {
+      "name": "llama.cpp/Scout"
+    }
+  },
+  "t2t_llama.cpp Scout": {
+    "load_time_stat": {
+      "sum": 4.995751142501831,
+      "sum_sqr": 120.62514713535091,
+      "first_obs": 5.777076721191406,
+      "min": 0.0026772022247314453,
+      "max": 15.071542263031006,
+      "current_count": 7,
+      "current_obs": 0.8352882862091064,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": -10783.3125,
+      "sum_sqr": 109361691.11056519,
+      "first_obs": 10394.609375,
+      "min": 0.0,
+      "max": 11085.09765625,
+      "current_count": 7,
+      "current_obs": -38.6953125,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": -128.4103434085846,
+      "sum_sqr": 5464.923252182083,
+      "first_obs": 44.956559896469116,
+      "min": 0.6067078113555908,
+      "max": 44.956559896469116,
+      "current_count": 5,
+      "current_obs": -44.30437350273132,
+      "drop_obs": 0
+    },
+    "model_info": {
+      "name": "llama.cpp/Scout"
+    }
   }
 }

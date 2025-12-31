@@ -144,8 +144,7 @@ def routes(app: ASSAI, db):
 
         @cached("t2i", model.replace("/", " "))
         def load(): 
-            with capture_progress_thread(pusher, action_id):
-                return model_module.load(model)
+            return model_module.load(model)
  
         def seed():
             if seed := data.pop("seed", None):
@@ -164,19 +163,19 @@ def routes(app: ASSAI, db):
 
         generation_args.update(data)
 
-        pipe = load()
-
-        latent_extractor = model_module.on_step_end(app, action_id, generation_args)
-
-        def on_step_end(pipe, step, timestep, callback_kwargs):
-            try:
-                latent_extractor(pipe, step, timestep, callback_kwargs)
-            except:
-                traceback.print_exc()
-            finally:
-                return callback_kwargs
-
         with capture_progress_thread(pusher, action_id):
+            pipe = load()
+
+            latent_extractor = model_module.on_step_end(app, action_id, generation_args)
+
+            def on_step_end(pipe, step, timestep, callback_kwargs):
+                try:
+                    latent_extractor(pipe, step, timestep, callback_kwargs)
+                except:
+                    traceback.print_exc()
+                finally:
+                    return callback_kwargs
+                    
             output = pipe(prompt,
                 callback_on_step_end_tensor_inputs = ["latents"],
                 callback_on_step_end=on_step_end,

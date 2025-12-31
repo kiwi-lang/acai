@@ -10,48 +10,14 @@ import torch
 from flask import request
 from contextlib import contextmanager
 import torchcompat.core as accelerator
-from transformers import pipeline
 
-from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher
+
+from assai.tools import namespaced_route, capture_progress_thread, cached, websocket_pusher, load_model_override
 from assai.tools.input import Input, Message, Conversation, text as text_input
 from datetime import datetime
 
 
-def huggingface_run(model, device):
-    def load():
-        # Use transformers pipeline for text generation
-        pipe = pipeline(
-            "text-generation",
-            model=model,
-            device=device,
-            torch_dtype=torch.float8_e4m3fn
-        )
-        return pipe
-        
-    return load
-
-
-
-def tensorrt_run(model, device):
-    from tensorrt_llm import LLM, SamplingParams
-
-    def load():
-        llm = LLM(
-            model="nvidia/Llama-4-Scout-17B-16E-Instruct-FP8", 
-            attn_backend="FLASHINFER", 
-            backend="pytorch", 
-            tensor_parallel_size=1
-        )
-
-        def run(prompt: str):
-            sampling_params = SamplingParams(temperature=0.8, top_p=0.95)
-            return llm.generate(prompt, sampling_params)
-
-        return run
-
-    return load
-    
-
+import assai.models.text2text.generic as generic
 
 
 def routes(app: ASSAI, db):
@@ -61,6 +27,9 @@ def routes(app: ASSAI, db):
     #
     route = namespaced_route(app, '/text2text')
     default_model = "mistralai/Mistral-Small-3.1-24B-Instruct-2503"  # Default conversational model
+
+    import assai.models.text2text
+    models = load_model_override(assai.models.text2text, generic)
 
     @route("/model/download")
     @route("/model/download/<path:name>")
@@ -77,60 +46,60 @@ def routes(app: ASSAI, db):
     @route("/model/list")
     def list_model_t2t():
         """List local models the user can choose from"""
-        return [
-            default_model,
-            # "meta-llama/Llama-4-Scout-17B-16E",
-            "nvidia/Llama-4-Scout-17B-16E-Instruct-FP8",
-            "nvidia/Llama-4-Scout-17B-16E-Instruct-NVFP4",
-            # "gpt2-medium",
-            # "gpt2-large",
-        ]
+        return sorted(list(set(models.keys())))
 
     @route("/model/settings")
     @route("/model/settings/<path:name>")
     def model_settings_t2t(name=default_model):
-        return {
-            "max_length": {
+        return [
+            {
+                "name": "max_length",
                 "type": int,
                 "min": 1,
                 "max": 2048,
                 "default": 100
             },
-            "max_new_tokens": {
+            {
+                "name": "max_new_tokens",
                 "type": int,
                 "min": 1,
                 "max": 2048,
                 "default": 2048
             },
-            "temperature": {
+            {
+                "name": "temperature",
                 "type": float,
                 "min": 0.0,
                 "max": 2.0,
                 "default": 0.7
             },
-            "top_p": {
+            {
+                "name": "top_p",
                 "type": float,
                 "min": 0.0,
                 "max": 1.0,
                 "default": 0.9
             },
-            "top_k": {
+            {
+                "name": "top_k",
                 "type": int,
                 "min": 0,
                 "max": 100,
                 "default": 50
             },
-            "repetition_penalty": {
+            {
+                "name": "repetition_penalty",
                 "type": float,
                 "min": 0.0,
                 "max": 2.0,
                 "default": 1.0
             },
-            "do_sample": {
+            {
+                "name": "do_sample",
                 "type": bool,
                 "default": True
             },
-        }
+        ]
 
     @route("/model/run", methods=['POST'])
     @route("/model/run/<path:model>", methods=['POST'])
@@ -156,12 +125,12 @@ def routes(app: ASSAI, db):
             return {"error": "Text2Text expects text input"}, 400
 
         prompt = content_input.get("data", "")
-        
-        
-        @cached("t2t", model, name=model)
+
+        model_module = models[model]
+
+        @cached("t2t", model.replace("/", " "), name=model)
         def load():
-            loader = tensorrt_run(model, device)
-            return loader()
+            return model_module.load(model)
 
         generation_args = {
             "max_new_tokens": 50,
@@ -174,7 +143,7 @@ def routes(app: ASSAI, db):
 
         # Update with any provided parameters
         generation_args.update({k: v for k, v in data.items() if k in generation_args})
-        
+
         pusher = websocket_pusher(app, action_id)
         with capture_progress_thread(pusher, action_id):
             pipe = load()
@@ -182,6 +151,17 @@ def routes(app: ASSAI, db):
             full_prompt = prompt
 
             try:
+                # Check if this is a llamacpp model (supports streaming)
+                model_module_name = model_module.__name__ if hasattr(model_module, '__name__') else ""
+                is_llamacpp = "llamacpp" in model_module_name.lower() or "llama.cpp" in str(model).lower()
+
+                # Enable streaming by default for llamacpp models
+                # User can disable by passing stream=False in generation_args
+                stream_enabled = generation_args.pop("stream", is_llamacpp)
+
+                if stream_enabled:
+                    generation_args["stream"] = True
+
                 # Generate text
                 outputs = pipe(
                     full_prompt,
@@ -190,27 +170,70 @@ def routes(app: ASSAI, db):
             except Exception as e:
                 return {"error": str(e)}
 
-            # Extract generated text
-            if isinstance(outputs, list) and len(outputs) > 0:
-                generated_text = outputs[0].get("generated_text", "")
-                # Remove the prompt from the generated text
-                if generated_text.startswith(full_prompt):
-                    generated_text = generated_text[len(full_prompt):].strip()
+            # Check if output is a generator (streaming mode)
+            import inspect
+            is_generator = inspect.isgenerator(outputs) or hasattr(outputs, '__iter__') and not isinstance(outputs, (str, list, dict))
+
+            if is_generator:
+                # Handle streaming response
+                accumulated_text = ""
+                message_id = int(time.time() * 1000)
+
+                try:
+                    for chunk in outputs:
+                        if chunk:
+                            accumulated_text += chunk
+                            # Send incremental update via websocket using preview channel
+                            app.message("preview", {
+                                "id": action_id,
+                                "thread_id": 0,
+                                "text": accumulated_text,
+                                "is_complete": False
+                            })
+
+                    # Send final complete message
+                    app.message("preview", {
+                        "id": action_id,
+                        "thread_id": 0,
+                        "text": accumulated_text,
+                        "is_complete": True
+                    })
+
+                    # Return final message
+                    response_input: Input = text_input(accumulated_text)
+                    response_message: Message = {
+                        "id": message_id,
+                        "action_id": action_id,
+                        "role": "assistant",
+                        "content": response_input,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                    return {"message": response_message}
+                except Exception as e:
+                    return {"error": f"Streaming error: {str(e)}"}
             else:
-                generated_text = str(outputs)
+                # Handle non-streaming response
+                # Extract generated text
+                if isinstance(outputs, list) and len(outputs) > 0:
+                    generated_text = outputs[0].get("generated_text", "")
+                    # Remove the prompt from the generated text
+                    if generated_text.startswith(full_prompt):
+                        generated_text = generated_text[len(full_prompt):].strip()
+                else:
+                    generated_text = str(outputs)
 
-            # Return Message format
-            response_input: Input = text_input(generated_text)
+                # Return Message format
+                response_input: Input = text_input(generated_text)
 
-            response_message: Message = {
-                "id": int(time.time() * 1000),
-                "action_id": action_id,
-                "role": "assistant",
-                "content": response_input,
-                "timestamp": datetime.now().isoformat()
-            }
+                response_message: Message = {
+                    "id": int(time.time() * 1000),
+                    "action_id": action_id,
+                    "role": "assistant",
+                    "content": response_input,
+                    "timestamp": datetime.now().isoformat()
+                }
 
-            return {"message": response_message}
+                return {"message": response_message}
 
 if __name__ == "__main__":
     routes(None)

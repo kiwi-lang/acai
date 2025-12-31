@@ -93,23 +93,39 @@ const ChatComponent = ({ config }: ChatComponentProps) => {
         }));
     }, []);
 
-    const handlePreview = useCallback((data: { id: number; thread_id?: number; images?: string[] }) => {
-        // Find the message with matching action_id and update with preview images
+    const handlePreview = useCallback((data: { id: number; thread_id?: number; images?: string[]; text?: string; is_complete?: boolean }) => {
+        // Find the message with matching action_id and update with preview content
         setMessages(prev => prev.map(msg => {
-            if (msg.action_id === data.id && msg.isGenerating && data.images && data.images.length > 0) {
-                // Update the message with preview images
-                // These will be replaced by the final image when generation completes
-                return {
-                    ...msg,
-                    imageUrls: data.images,
-                    imageUrl: data.images[0],
-                    // Also update content for consistency
-                    content: {
-                        kind: 'image',
-                        encoding: 'data_url',
-                        data: data.images[0]
-                    }
-                };
+            if (msg.action_id === data.id && msg.isGenerating) {
+                // Handle text streaming (text2text)
+                if (data.text !== undefined) {
+                    return {
+                        ...msg,
+                        content: {
+                            kind: 'text',
+                            encoding: 'utf8',
+                            data: data.text
+                        },
+                        isGenerating: !data.is_complete
+                    };
+                }
+
+                // Handle image previews (text2image)
+                if (data.images && data.images.length > 0) {
+                    // Update the message with preview images
+                    // These will be replaced by the final image when generation completes
+                    return {
+                        ...msg,
+                        imageUrls: data.images,
+                        imageUrl: data.images[0],
+                        // Also update content for consistency
+                        content: {
+                            kind: 'image',
+                            encoding: 'data_url',
+                            data: data.images[0]
+                        }
+                    };
+                }
             }
             return msg;
         }));
@@ -128,7 +144,7 @@ const ChatComponent = ({ config }: ChatComponentProps) => {
         socket.on('stdout', handleStdout);
         socket.on('stderr', handleStderr);
 
-        // Set up preview listener for text2image preview updates
+        // Set up preview listener for text2image preview updates and text2text streaming
         socket.off('preview', handlePreview);
         socket.on('preview', handlePreview);
 

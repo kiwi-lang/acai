@@ -5,7 +5,7 @@
 
 cmake llama.cpp -B llama.cpp/build -DBUILD_SHARED_LIBS=OFF -DGGML_CUDA=ON -DLLAMA_CURL=ON
 
-cmake --build llama.cpp/build --config Release -j --clean-first --target llama-cli llama-gguf-split
+cmake --build llama.cpp/build --config Release -j --clean-first --target llama-cli llama-server llama-gguf-split
 
 # cp llama.cpp/build/bin/llama-* llama.cpp
 
