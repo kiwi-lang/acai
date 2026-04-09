@@ -1,43 +1,5 @@
-from __future__ import annotations
-from dataclasses import dataclass
+"""MCP (Model Context Protocol) tool exposure for agents.
 
-
-from assai.tools import namespaced_route
-
-
-@dataclass
-class Input:
-    origin: str
-    destination: str
-    date: str
-
-    @staticmethod
-    def __mcp__(self):
-        return {
-            "type": "object",
-            "properties": {
-                "origin": { "type": "string", "description": "Departure city" },
-                "destination": { "type": "string", "description": "Arrival city" },
-                "date": { "type": "string", "format": "date", "description": "Travel date" }
-            },
-            "required": ["origin", "destination", "date"]  
-        }
-
-
-def routes(app: ASSAI, db):
-    route = namespaced_route(app, '/mcp')
-    
-    @route("list")
-    def list_function():
-        return [
-            {
-                "name": "my_tool",
-                "description": "do XYZ",
-                "inputSchema": Input.__mcp__()
-            }
-        ]
-
-    @route("my_tool")
-    def my_tool_route(input: Input);
-        """Do XYZ"""
-        pass
+Provides MCP-compatible tool definitions that workers can use
+to interact with external systems (file I/O, shell, git, etc.).
+"""

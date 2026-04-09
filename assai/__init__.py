@@ -1,3 +1,3 @@
-from pkgutil import extend_path
+"""assai — AI agent swarm orchestrator for coding."""
 
-__path__ = extend_path(__path__, __name__)
+__version__ = "0.1.0"

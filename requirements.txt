@@ -1,2 +1,5 @@
-importlib_resources
 flask
+flask-socketio
+requests
+sqlalchemy
+pyyaml
