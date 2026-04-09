@@ -3,6 +3,37 @@
 export interface AgentMessage {
     role: 'user' | 'assistant';
     content: string;
+    isStreaming?: boolean;
+    taskId?: string;
+}
+
+export interface StreamChunk {
+    task_id: string;
+    token: string;
+    index: number;
+}
+
+export interface Capabilities {
+    telemetry: boolean;
+}
+
+export interface TelemetryData {
+    cpu: {
+        load: number;
+        memory: number[];
+    };
+    gpu: Record<string, {
+        load: number;
+        memory: number[];
+        power: number;
+        temperature: number;
+    }>;
+    network: {
+        bytes_sent: number;
+        bytes_recv: number;
+    };
+    disk: Record<string, any>;
+    time: number;
 }
 
 export interface Task {

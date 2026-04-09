@@ -1,227 +1,280 @@
-"""Worker — pops work items from the queue and executes them.
+"""Worker Flask app — executes LLM completions and tool calls.
 
-Work items are either ``llm_complete`` (send messages to an LLM) or
-``tool_call`` (run a shell command, read a file, etc.).
+The worker exposes:
 
-The worker is lazy about the LLM server: it keeps it alive as long as
-nothing needs the GPU, and only kills it when a ``gpu=1`` tool comes in.
-When the next ``llm_complete`` arrives the server is started again.
+* ``POST /llm/complete`` — call the LLM (streaming, emits chunks via SocketIO).
+* Tool registry blueprint at ``/tools`` (``GET /tools/list``, ``POST /tools/call``).
+* ``GET /worker/status`` — capabilities + LLM server status.
+* Telemetry via SocketIO (``request_telemetry`` → ``telemetry``).
 
-Batching: when the first item popped is ``llm_complete``, the worker
-peeks for more ``llm_complete`` items so related work runs back-to-back
-and benefits from KV-cache locality.
-
-Tools are discovered through the :class:`~assai.tools.registry.ToolRegistry`.
-The built-in tools (shell, filesystem) are loaded by default; additional
-tools can be registered at runtime or via plugins.
+A background thread polls the orchestrator for work, dispatches to
+its own HTTP endpoints, and pushes results back.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import shlex
-import subprocess
+import threading
 import time
 from typing import TYPE_CHECKING
 
-from assai.agents.llm import create_llm
-from assai.queue.work import TaskStatus
+import requests as http
+from flask import Blueprint, Flask, jsonify, request as flask_request
+from flask_socketio import SocketIO
+
+from assai.agents.llm import LLMServer, OpenAICompatibleLLM, create_llm
+from assai.tools.builtins import registry as builtin_registry
 from assai.tools.registry import ToolRegistry
-from assai.tools.builtins import registry as _builtin_registry
 
 if TYPE_CHECKING:
-    from assai.agents.llm import LLM
     from assai.core.config import AssaiConfig
-    from assai.queue.work import Task, WorkQueue
 
 log = logging.getLogger(__name__)
 
 
-class Worker:
-    """Dispatch loop that pops work items and executes them."""
+# ------------------------------------------------------------------
+# Worker blueprint
+# ------------------------------------------------------------------
+
+def create_worker_blueprint(
+    config: AssaiConfig,
+    socketio: SocketIO | None = None,
+    prefix: str = "/worker",
+) -> tuple[Blueprint, LLMServer, ToolRegistry]:
+    """Build the worker Flask blueprint.
+
+    Returns ``(bp, llm_server, registry)``.
+    """
+    bp = Blueprint("worker", __name__, url_prefix=prefix)
+
+    llm_server = LLMServer(config.llm)
+    registry = ToolRegistry()
+    registry.merge(builtin_registry)
+
+    # ------------------------------------------------------------------
+    # POST /llm/complete
+    # ------------------------------------------------------------------
+
+    @bp.route("/llm/complete", methods=["POST"])
+    def llm_complete():
+        body = flask_request.get_json(silent=True) or {}
+        messages = body.get("messages", [])
+        tools = body.get("tools")
+        task_id = body.get("task_id", "")
+
+        if not llm_server.is_running() and llm_server.managed:
+            llm_server.start()
+
+        llm = create_llm(config.llm)
+
+        accumulated = []
+        idx = 0
+        for token in llm.stream(messages, tools=tools):
+            accumulated.append(token)
+            if socketio is not None:
+                socketio.emit("chunk", {
+                    "task_id": task_id,
+                    "token": token,
+                    "index": idx,
+                })
+            idx += 1
+
+        full_text = "".join(accumulated)
+        if socketio is not None:
+            socketio.emit("stream_end", {"task_id": task_id})
+
+        return jsonify({"result": full_text})
+
+    # ------------------------------------------------------------------
+    # GET /worker/status
+    # ------------------------------------------------------------------
+
+    @bp.route("/status", methods=["GET"])
+    def worker_status():
+        return jsonify({
+            "telemetry": True,
+            "tools": [td.qualified_name for td in registry.all_tools()],
+            "namespaces": registry.namespaces(),
+            "llm_running": llm_server.is_running(),
+            "llm_pid": llm_server.pid,
+            "llm_model": config.llm.model,
+            "llm_backend": config.llm.backend,
+        })
+
+    return bp, llm_server, registry
+
+
+# ------------------------------------------------------------------
+# Background poller
+# ------------------------------------------------------------------
+
+class WorkerPoller:
+    """Polls the orchestrator for work and dispatches to local endpoints."""
 
     def __init__(
         self,
         config: AssaiConfig,
-        queue: WorkQueue,
-        tasks_dir: str | None = None,
-        namespaces: list[str] | None = None,
+        orchestrator_url: str,
+        worker_url: str,
+        llm_server: LLMServer,
+        registry: ToolRegistry,
     ):
         self.config = config
-        self.queue = queue
-        self.tasks_dir = tasks_dir or config.worker.tasks_dir
-
-        self._llm_proc: subprocess.Popen | None = None
-        self._llm_client: LLM | None = None
-
-        self.registry = ToolRegistry()
-        self.registry.merge(_builtin_registry)
-
-        self._namespaces = namespaces
-
-    # ------------------------------------------------------------------
-    # Tool access
-    # ------------------------------------------------------------------
-
-    def mcp_definitions(self) -> list[dict]:
-        """Return MCP tool definitions for the currently exposed namespaces."""
-        return self.registry.mcp_definitions(self._namespaces)
-
-    # ------------------------------------------------------------------
-    # Main loop
-    # ------------------------------------------------------------------
+        self.orchestrator_url = orchestrator_url.rstrip("/")
+        self.worker_url = worker_url.rstrip("/")
+        self.llm_server = llm_server
+        self.registry = registry
+        self._stop = threading.Event()
 
     def run(self):
-        """Block forever, popping and executing work items."""
-        while True:
-            batch = self._pop_batch()
-            if not batch:
-                time.sleep(self.config.queue.poll_interval)
-                continue
-            for task in batch:
-                self._dispatch(task)
+        while not self._stop.is_set():
+            try:
+                self._poll_once()
+            except Exception:
+                log.exception("poller error")
+            time.sleep(self.config.queue.poll_interval)
 
-    # ------------------------------------------------------------------
-    # Dispatch
-    # ------------------------------------------------------------------
+    def stop(self):
+        self._stop.set()
 
-    def _dispatch(self, task: Task):
-        self.queue.update(task.id, status=TaskStatus.IN_PROGRESS)
+    def _poll_once(self):
         try:
-            if task.kind == "llm_complete":
-                self._ensure_llm()
-                self._run_llm(task)
-            elif task.kind == "tool_call":
-                self._run_tool(task)
-            else:
-                raise ValueError(f"unknown task kind: {task.kind}")
+            resp = http.get(f"{self.orchestrator_url}/work/pop", timeout=10)
+        except http.ConnectionError:
+            return
 
-            self.queue.update(task.id, status=TaskStatus.COMPLETED)
+        if resp.status_code == 204:
+            return
+        if resp.status_code != 200:
+            log.warning("work/pop returned %d", resp.status_code)
+            return
+
+        work = resp.json()
+        task_id = work.get("task_id", "")
+        kind = work.get("kind", "")
+
+        if kind == "llm_complete":
+            result = self._dispatch_llm(work)
+        elif kind == "tool_call":
+            result = self._dispatch_tool(work)
+        else:
+            log.warning("unknown work kind: %s", kind)
+            return
+
+        self._push_result(task_id, kind, result, work)
+
+    def _dispatch_llm(self, work: dict) -> str:
+        if not self.llm_server.is_running() and self.llm_server.managed:
+            self.llm_server.start()
+
+        try:
+            resp = http.post(
+                f"{self.worker_url}/llm/complete",
+                json={
+                    "messages": work.get("messages", []),
+                    "tools": work.get("tools"),
+                    "task_id": work.get("task_id", ""),
+                },
+                timeout=600,
+            )
+            return resp.json().get("result", "")
         except Exception as exc:
-            log.exception("task %s failed", task.id)
-            if task.retries + 1 < task.max_retries:
-                self.queue.update(
-                    task.id, status=TaskStatus.READY,
-                    retries=task.retries + 1,
-                    error_log=f"retry {task.retries + 1}: {exc}",
-                )
-            else:
-                self.queue.update(
-                    task.id, status=TaskStatus.FAILED,
-                    error_log=str(exc),
-                )
+            log.exception("LLM dispatch failed")
+            return f"Error: {exc}"
 
-    # ------------------------------------------------------------------
-    # Batching
-    # ------------------------------------------------------------------
-
-    def _pop_batch(self) -> list[Task]:
-        """Pop one item, or batch multiple llm_complete items."""
-        first = self.queue.pop(status=TaskStatus.READY)
-        if first is None:
-            return []
-        if first.kind != "llm_complete":
-            return [first]
-
-        batch = [first]
-        while True:
-            more = self.queue.pop(status=TaskStatus.READY)
-            if more is None:
-                break
-            if more.kind == "llm_complete":
-                batch.append(more)
-            else:
-                break
-        return batch
-
-    # ------------------------------------------------------------------
-    # LLM execution
-    # ------------------------------------------------------------------
-
-    def _run_llm(self, task: Task):
-        messages = self._read_payload(task)
-        result = self._llm_client.complete(messages)
-        self._write_result(task.id, result)
-
-    # ------------------------------------------------------------------
-    # Tool execution (registry-driven)
-    # ------------------------------------------------------------------
-
-    def _run_tool(self, task: Task):
-        payload = self._read_payload(task)
-        tool_name = payload.get("tool", "")
-        args = payload.get("args", {})
+    def _dispatch_tool(self, work: dict) -> str:
+        tool_name = work.get("tool", "")
+        args = work.get("args", {})
 
         td = self.registry.get(tool_name)
-        if td is None:
-            result = json.dumps({"error": f"unknown tool: {tool_name}"})
-        else:
-            if td.gpu:
-                self._kill_llm()
-            try:
-                result = self.registry.call(tool_name, args)
-            except Exception as exc:
-                result = json.dumps({"error": str(exc)})
+        if td is not None and td.gpu and self.llm_server.is_running():
+            self.llm_server.stop()
 
-        self._write_result(task.id, result)
-
-    # ------------------------------------------------------------------
-    # Lazy LLM lifecycle
-    # ------------------------------------------------------------------
-
-    def _ensure_llm(self):
-        """Start the LLM server if we manage it and it's not running."""
-        cmd = self.config.llm.server_command
-        if cmd and self._llm_proc is None:
-            log.info("starting LLM server: %s", cmd)
-            self._llm_proc = subprocess.Popen(
-                shlex.split(cmd),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+        try:
+            resp = http.post(
+                f"{self.worker_url}/tools/call",
+                json={"tool": tool_name, "args": args},
+                timeout=self.config.worker.timeout,
             )
-            self._wait_healthy()
-        if self._llm_client is None:
-            self._llm_client = create_llm(self.config.llm)
+            return resp.json().get("result", "")
+        except Exception as exc:
+            log.exception("tool dispatch failed")
+            return json.dumps({"error": str(exc)})
 
-    def _kill_llm(self):
-        """Kill the LLM server to free GPU.  No-op if we don't manage it."""
-        if self._llm_proc is not None:
-            log.info("killing LLM server (pid %d) for GPU work", self._llm_proc.pid)
-            self._llm_proc.terminate()
-            self._llm_proc.wait(timeout=30)
-            self._llm_proc = None
-            self._llm_client = None
+    def _push_result(self, task_id: str, kind: str, result: str, work: dict):
+        try:
+            http.post(
+                f"{self.orchestrator_url}/work/result/{task_id}",
+                json={
+                    "result": result,
+                    "kind": kind,
+                    "project": work.get("project", "_default"),
+                    "raw": result,
+                },
+                timeout=30,
+            )
+        except Exception:
+            log.exception("failed to push result for %s", task_id)
 
-    def _wait_healthy(self, retries: int = 60, interval: float = 2.0):
-        """Poll the LLM health endpoint until it responds."""
-        import requests as _req
 
-        url = f"{self.config.llm.endpoint}/health"
-        for _ in range(retries):
+# ------------------------------------------------------------------
+# Full worker app factory
+# ------------------------------------------------------------------
+
+def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None):
+    """Create a standalone worker Flask app.
+
+    Returns ``(app, socketio, poller, llm_server)``.
+    """
+    app = Flask(__name__)
+
+    if socketio is None:
+        socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+    else:
+        socketio.init_app(app)
+
+    bp, llm_server, registry = create_worker_blueprint(config, socketio)
+    tool_bp = registry.blueprint(url_prefix="/tools")
+    app.register_blueprint(bp)
+    app.register_blueprint(tool_bp)
+
+    _setup_telemetry(socketio)
+
+    worker_url = f"http://127.0.0.1:{config.worker.port}/worker"
+    poller = WorkerPoller(
+        config=config,
+        orchestrator_url=config.worker.orchestrator_url,
+        worker_url=worker_url,
+        llm_server=llm_server,
+        registry=registry,
+    )
+
+    return app, socketio, poller, llm_server
+
+
+# ------------------------------------------------------------------
+# Telemetry
+# ------------------------------------------------------------------
+
+def _setup_telemetry(socketio: SocketIO):
+    """Register telemetry SocketIO handlers."""
+    _observer = None
+
+    @socketio.on("request_telemetry")
+    def handle_request_telemetry():
+        nonlocal _observer
+        if _observer is None:
             try:
-                r = _req.get(url, timeout=5)
-                if r.status_code < 500:
-                    return
-            except _req.ConnectionError:
-                pass
-            time.sleep(interval)
-        log.warning("LLM server did not become healthy after %d attempts", retries)
+                from assai.tools.system_monitor import system_monitor
+                _observer = system_monitor()
+            except Exception:
+                log.debug("system_monitor not available")
+                socketio.emit("telemetry_error", {"error": "not available"})
+                return
 
-    # ------------------------------------------------------------------
-    # File I/O helpers
-    # ------------------------------------------------------------------
-
-    def _read_payload(self, task: Task):
-        """Read the task payload from spec_path (JSON)."""
-        with open(task.spec_path) as f:
-            return json.load(f)
-
-    def _write_result(self, task_id: str, result: str):
-        task_dir = os.path.join(self.tasks_dir, task_id)
-        os.makedirs(task_dir, exist_ok=True)
-        path = os.path.join(task_dir, "result.json")
-        with open(path, "w") as f:
-            f.write(result)
-        self.queue.update(task_id, result_path=path)
+        try:
+            data = _observer()
+            socketio.emit("telemetry", data)
+        except Exception as exc:
+            socketio.emit("telemetry_error", {"error": str(exc)})

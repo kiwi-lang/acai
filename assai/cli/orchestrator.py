@@ -1,35 +1,43 @@
-"""Run the orchestrator (work-item chaining loop)."""
+"""Run the orchestrator Flask server (queue + project state)."""
 
 from __future__ import annotations
 
-import logging
+from dataclasses import dataclass
 
+from argklass import argument
 from argklass.command import Command
 
 from assai.cli import CommonArguments, setup
 
-log = logging.getLogger(__name__)
+
+@dataclass
+class OrchestratorArguments(CommonArguments):
+    host: str   = argument(default="0.0.0.0", help="bind address")
+    port: int   = argument(default=5050, help="listen port")
+    prefix: str = argument(default="/agent", help="URL prefix for routes")
+    debug: bool = argument(default=False, help="enable Flask debug mode")
 
 
 class Orchestrator(Command):
-    """Run the orchestrator (work-item chaining loop)."""
+    """Run the orchestrator Flask server (queue + project state)."""
 
     name = "orchestrator"
 
-    Arguments = CommonArguments
+    Arguments = OrchestratorArguments
 
     @staticmethod
     def execute(args) -> int:
-        config, queue = setup(args)
+        config, _ = setup(args)
 
-        from assai.agents.server import Orchestrator as Orc
+        from flask import Flask
+        from assai.agents.server import routes
 
-        orc = Orc(config, queue)
-        log.info(
-            "orchestrator started  (db=%s  poll=%ds)",
-            config.queue.url, config.queue.poll_interval,
-        )
-        orc.run()
+        app = Flask(__name__)
+        app, socketio, *_ = routes(app, config, prefix=args.prefix)
+
+        print(f"Orchestrator on http://{args.host}:{args.port}{args.prefix}")
+        socketio.run(app, host=args.host, port=args.port, debug=args.debug)
         return 0
+
 
 COMMANDS = Orchestrator

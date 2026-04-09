@@ -1,11 +1,11 @@
-import { useState, useEffect, useRef, KeyboardEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, KeyboardEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
     Box, VStack, HStack, Text, Heading, Badge, Textarea, IconButton, Spinner,
 } from '@chakra-ui/react';
 import { getProject, converse, getHistory, listTasks, createTask, updateTask } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
-import type { Project, Task, AgentMessage } from '../services/types';
+import type { Project, Task, AgentMessage, StreamChunk } from '../services/types';
 
 const SendIcon = () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -101,7 +101,7 @@ const KanbanColumn = ({ label, tasks, color }: { label: string; tasks: Task[]; c
 const ProjectView = () => {
     const { name } = useParams<{ name: string }>();
     const navigate = useNavigate();
-    const { tasks: wsTasks, isConnected } = useAgentSocket();
+    const { tasks: wsTasks, isConnected, onChunk, onStreamEnd } = useAgentSocket();
 
     const [project, setProject] = useState<Project | null>(null);
     const [tasks, setTasks] = useState<Task[]>([]);
@@ -111,12 +111,13 @@ const ProjectView = () => {
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const activeTaskRef = useRef<string | null>(null);
 
     useEffect(() => {
         if (!name) return;
         document.title = `${name} - ASSAI`;
         getProject(name).then(setProject).catch(() => navigate('/projects'));
-        getHistory().then(setMessages).catch(() => {});
+        getHistory(name).then(setMessages).catch(() => {});
     }, [name, navigate]);
 
     useEffect(() => {
@@ -131,9 +132,41 @@ const ProjectView = () => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }, [messages]);
 
+    const handleChunk = useCallback((chunk: StreamChunk) => {
+        if (chunk.task_id !== activeTaskRef.current) return;
+        setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.isStreaming && last.taskId === chunk.task_id) {
+                copy[copy.length - 1] = { ...last, content: last.content + chunk.token };
+            }
+            return copy;
+        });
+    }, []);
+
+    const handleStreamEnd = useCallback((data: { task_id: string }) => {
+        if (data.task_id !== activeTaskRef.current) return;
+        setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.isStreaming && last.taskId === data.task_id) {
+                copy[copy.length - 1] = { ...last, isStreaming: false };
+            }
+            return copy;
+        });
+        activeTaskRef.current = null;
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => {
+        const unsub1 = onChunk(handleChunk);
+        const unsub2 = onStreamEnd(handleStreamEnd);
+        return () => { unsub1(); unsub2(); };
+    }, [onChunk, onStreamEnd, handleChunk, handleStreamEnd]);
+
     const handleSend = async () => {
         const text = input.trim();
-        if (!text || isLoading) return;
+        if (!text || isLoading || !name) return;
 
         setInput('');
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
@@ -142,12 +175,15 @@ const ProjectView = () => {
         setIsLoading(true);
 
         try {
-            const response = await converse(text);
-            setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+            const taskId = await converse(text, name);
+            activeTaskRef.current = taskId;
+            setMessages(prev => [
+                ...prev,
+                { role: 'assistant', content: '', isStreaming: true, taskId },
+            ]);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
-        } finally {
             setIsLoading(false);
         }
     };
@@ -250,10 +286,15 @@ const ProjectView = () => {
                                     </Text>
                                     <Text fontSize="sm" color="gray.200" whiteSpace="pre-wrap" wordBreak="break-word" lineHeight="1.5">
                                         {msg.content}
+                                        {msg.isStreaming && (
+                                            <Box as="span" display="inline-block" w="2px" h="0.9em"
+                                                bg="green.400" ml={0.5}
+                                                animation="blink 1s step-start infinite" />
+                                        )}
                                     </Text>
                                 </Box>
                             ))}
-                            {isLoading && (
+                            {isLoading && !messages.some(m => m.isStreaming) && (
                                 <HStack alignSelf="flex-start" gap={2} p={2}>
                                     <Spinner size="xs" color="green.300" />
                                     <Text fontSize="xs" color="gray.400">Thinking...</Text>

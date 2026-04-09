@@ -17,22 +17,22 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     return response.json();
 }
 
-// Conversation
-export async function converse(message: string): Promise<string> {
-    const data = await request<{ response: string }>('/converse', {
+// Conversation (async — returns task_id, response streamed via WS)
+export async function converse(message: string, project = '_default'): Promise<string> {
+    const data = await request<{ task_id: string }>('/converse', {
         method: 'POST',
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({ message, project }),
     });
-    return data.response;
+    return data.task_id;
 }
 
-export async function getHistory(): Promise<AgentMessage[]> {
-    const data = await request<{ messages: AgentMessage[] }>('/history');
+export async function getHistory(project = '_default'): Promise<AgentMessage[]> {
+    const data = await request<{ messages: AgentMessage[] }>(`/history?project=${encodeURIComponent(project)}`);
     return data.messages;
 }
 
-export async function clearHistory(): Promise<void> {
-    await request('/history', { method: 'DELETE' });
+export async function clearHistory(project = '_default'): Promise<void> {
+    await request(`/history?project=${encodeURIComponent(project)}`, { method: 'DELETE' });
 }
 
 // Tasks

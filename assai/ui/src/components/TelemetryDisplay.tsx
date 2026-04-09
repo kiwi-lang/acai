@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { Box, HStack, Text, VStack, IconButton, Input } from '@chakra-ui/react';
 import { Tooltip } from './ui/tooltip';
-import { useWebSocket } from '../contexts/WebSocketContext';
+import { useAgentSocket } from '../contexts/WebSocketContext';
 
 interface TelemetryData {
     cpu: {
@@ -273,7 +273,7 @@ const PlayIcon = () => (
 );
 
 const TelemetryDisplay = () => {
-    const { socket, isConnected } = useWebSocket();
+    const { socket, isConnected } = useAgentSocket();
     const [telemetry, setTelemetry] = useState<TelemetryData | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [isPaused, setIsPaused] = useState(false);

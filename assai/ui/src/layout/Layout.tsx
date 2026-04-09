@@ -2,6 +2,8 @@ import { FC, ReactNode, useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { IconButton, Box, VStack, HStack, Text, Button } from '@chakra-ui/react';
 import { ColorModeButton } from '../components/ui/color-mode';
+import { useAgentSocket } from '../contexts/WebSocketContext';
+import TelemetryDisplay from '../components/TelemetryDisplay';
 import './Layout.css';
 
 const HamburgerIcon = () => (
@@ -63,6 +65,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const { capabilities } = useAgentSocket();
 
   const handleNewChat = () => {
     navigate('/');
@@ -198,11 +201,15 @@ const Layout: FC<LayoutProps> = ({ children }) => {
           </VStack>
         </Box>
 
-        {/* Footer */}
+        {/* Footer — telemetry or version */}
         <Box p={4} borderTop="1px solid" borderColor="gray.700">
-          <Text fontSize="xs" color="gray.500" textAlign="center">
-            assai v0.1.0
-          </Text>
+          {capabilities?.telemetry ? (
+            <TelemetryDisplay />
+          ) : (
+            <Text fontSize="xs" color="gray.500" textAlign="center">
+              assai v0.1.0
+            </Text>
+          )}
         </Box>
       </Box>
 

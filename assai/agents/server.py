@@ -1,17 +1,12 @@
-"""HTTP interface for the agent system.
+"""Orchestrator HTTP server — owns the work queue and project state.
 
-Two ways to use this module:
+The orchestrator is a Flask + SocketIO app that:
 
-1. **Integrate into an existing Flask app**::
-
-       from assai.agents.server import routes
-       routes(app)                          # uses default config
-       routes(app, config=my_config)        # custom config
-
-2. **Run standalone**::
-
-       python -m assai.agents.server
-       python -m assai.agents.server -c config.yaml --port 5050
+* Accepts user conversation messages (async — queues work, returns task_id).
+* Serves ``GET /work/pop`` so workers can pull prepared work.
+* Accepts ``POST /work/result/<task_id>`` to receive completed results.
+* Relays streaming chunks from the worker to UI clients via WebSocket.
+* Manages projects, specs, git worktrees, and the task CRUD API.
 """
 
 from __future__ import annotations
@@ -28,7 +23,7 @@ from flask_socketio import SocketIO
 from assai.agents.converse import ConverseAgent
 from assai.agents.llm import create_llm
 from assai.agents.scribe import ScribeAgent
-from assai.agents.worker import Worker
+from assai.chat import ChatStore
 from assai.config import AssaiConfig, load_config
 from assai.events import EventBus
 from assai.projects import Project, ProjectStore, scaffold, clone
@@ -37,9 +32,14 @@ from assai.tracker.git import GitTracker
 
 log = logging.getLogger(__name__)
 
+CONVERSE_SYSTEM = (
+    "You are ASSAI, an AI agent helping the user plan and build software projects. "
+    "Answer questions, suggest plans, and create tasks when asked.\n\n{spec_section}"
+)
+
 
 # ------------------------------------------------------------------
-# Orchestrator — watches completed items and chains the next work
+# Orchestrator — watches completed items and chains tool calls
 # ------------------------------------------------------------------
 
 class Orchestrator:
@@ -57,7 +57,6 @@ class Orchestrator:
         self.tasks_dir = tasks_dir or config.worker.tasks_dir
 
     def run(self):
-        """Block forever, polling for completed items to chain."""
         while True:
             self._poll()
             time.sleep(self.config.queue.poll_interval)
@@ -72,7 +71,6 @@ class Orchestrator:
             self._maybe_chain(task)
 
     def _maybe_chain(self, task):
-        """If the LLM result contains tool_calls, create work items."""
         try:
             with open(task.result_path) as f:
                 raw = f.read()
@@ -90,7 +88,6 @@ class Orchestrator:
         if not tool_calls or not isinstance(tool_calls, list):
             return
 
-        # Already chained — check if follow-ups exist for this task
         existing = self.queue.list()
         chained_ids = {
             t.id for t in existing
@@ -127,7 +124,6 @@ class Orchestrator:
             tool_task_ids.append(tool_task.id)
 
         if tool_task_ids:
-            # Read original messages, append assistant message + placeholders
             try:
                 with open(task.spec_path) as f:
                     original_messages = json.load(f)
@@ -152,8 +148,6 @@ class Orchestrator:
                 depends_on=tool_task_ids,
             )
             self.queue.update(followup.id, status=TaskStatus.READY)
-
-            # Mark the original task as fully chained so we don't re-process
             self.queue.update(task.id, status="chained")
 
     def _write_payload(self, parent_id: str, suffix: str, payload) -> str:
@@ -166,81 +160,157 @@ class Orchestrator:
 
 
 # ------------------------------------------------------------------
-# Blueprint
+# Helper
+# ------------------------------------------------------------------
+
+def _task_json(task):
+    return {
+        "id":           task.id,
+        "kind":         task.kind,
+        "gpu":          task.gpu,
+        "title":        task.title,
+        "description":  task.description,
+        "status":       task.status,
+        "priority":     task.priority,
+        "spec_path":    task.spec_path,
+        "context_path": task.context_path,
+        "result_path":  task.result_path,
+        "worktree":     task.worktree,
+        "retries":      task.retries,
+        "max_retries":  task.max_retries,
+        "created_at":   str(task.created_at) if task.created_at else "",
+        "updated_at":   str(task.updated_at) if task.updated_at else "",
+        "assigned_to":  task.assigned_to,
+        "depends_on":   task.depends_on,
+        "error_log":    task.error_log,
+    }
+
+
+# ------------------------------------------------------------------
+# Blueprint factory
 # ------------------------------------------------------------------
 
 def create_blueprint(config: AssaiConfig | None = None,
-                     prefix: str = "/agent") -> Blueprint:
-    """Build a Flask Blueprint with all agent routes."""
+                     prefix: str = "/agent"):
+    """Build the orchestrator Flask Blueprint.
+
+    Returns ``(bp, queue, events, chat, config)`` so the caller can
+    compose with SocketIO and worker blueprints.
+    """
     if config is None:
         config = AssaiConfig()
 
     bp = Blueprint("agent", __name__, url_prefix=prefix)
 
-    llm    = create_llm(config.llm)
     events = EventBus()
     queue  = WorkQueue(config.queue.url)
     git    = GitTracker(config.git.repo_path, config.git.worktree_dir)
 
-    converse = ConverseAgent("converse", config, events, llm)
-    ScribeAgent("scribe", config, events, llm, git=git)
+    projects_dir = os.path.join(config.workspace, "projects")
+    projects = ProjectStore(projects_dir)
+    chat = ChatStore(projects_dir)
 
-    # -- start worker + orchestrator in background threads -------------
-    worker = Worker(config, queue)
-    orchestrator = Orchestrator(config, queue)
-
-    threading.Thread(target=worker.run, daemon=True, name="worker").start()
-    threading.Thread(target=orchestrator.run, daemon=True, name="orchestrator").start()
-
-    # -- helpers --------------------------------------------------------
-
-    def _task_json(task):
-        return {
-            "id":           task.id,
-            "kind":         task.kind,
-            "gpu":          task.gpu,
-            "title":        task.title,
-            "description":  task.description,
-            "status":       task.status,
-            "priority":     task.priority,
-            "spec_path":    task.spec_path,
-            "context_path": task.context_path,
-            "result_path":  task.result_path,
-            "worktree":     task.worktree,
-            "retries":      task.retries,
-            "max_retries":  task.max_retries,
-            "created_at":   str(task.created_at) if task.created_at else "",
-            "updated_at":   str(task.updated_at) if task.updated_at else "",
-            "assigned_to":  task.assigned_to,
-            "depends_on":   task.depends_on,
-            "error_log":    task.error_log,
-        }
+    # Start orchestrator chaining loop in background
+    orc = Orchestrator(config, queue)
+    threading.Thread(target=orc.run, daemon=True, name="orchestrator").start()
 
     # ==================================================================
-    # Conversation
+    # Conversation (async — queues work, returns task_id)
     # ==================================================================
 
     @bp.route("/converse", methods=["POST"])
     def agent_converse():
         data = request.get_json(silent=True) or {}
         message = data.get("message", "")
+        project = data.get("project", "_default")
         if not message:
             return jsonify({"error": "message is required"}), 400
 
-        response = converse.respond(message)
-        return jsonify({"response": response})
+        chat.append(project, {"role": "user", "content": message})
+
+        chat_path = os.path.join(projects_dir, project, "chat.json")
+        task = queue.push(
+            title=f"converse: {message[:60]}",
+            kind="llm_complete",
+            spec_path=chat_path,
+        )
+        queue.update(task.id, status=TaskStatus.READY)
+
+        return jsonify({"task_id": task.id, "project": project}), 202
 
     @bp.route("/history", methods=["GET"])
     def agent_history():
-        return jsonify({"messages": converse.history})
+        project = request.args.get("project", "_default")
+        return jsonify({"messages": chat.read(project)})
 
     @bp.route("/history", methods=["DELETE"])
     def agent_history_clear():
-        converse.history.clear()
+        project = request.args.get("project", "_default")
+        chat.clear(project)
         return jsonify({"cleared": True})
 
     # ==================================================================
-    # Task queue
+    # Work endpoints (worker pulls work / pushes results)
+    # ==================================================================
+
+    @bp.route("/work/pop", methods=["GET"])
+    def work_pop():
+        """Worker calls this to get the next prepared work item."""
+        task = queue.pop(status=TaskStatus.READY)
+        if task is None:
+            return "", 204
+
+        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
+
+        if task.kind == "llm_complete" and task.spec_path.endswith("chat.json"):
+            messages = _hydrate_conversation(config, task.spec_path)
+            return jsonify({
+                "task_id": task.id,
+                "kind": task.kind,
+                "messages": messages,
+            })
+
+        payload = {}
+        if task.spec_path and os.path.isfile(task.spec_path):
+            with open(task.spec_path) as f:
+                try:
+                    payload = json.load(f)
+                except (json.JSONDecodeError, ValueError):
+                    payload = {}
+
+        return jsonify({
+            "task_id": task.id,
+            "kind": task.kind,
+            **payload,
+        })
+
+    @bp.route("/work/result/<task_id>", methods=["POST"])
+    def work_result(task_id):
+        """Worker pushes a completed result back."""
+        data = request.get_json(silent=True) or {}
+        result_text = data.get("result", "")
+        project = data.get("project", "_default")
+        kind = data.get("kind", "")
+
+        task = queue.get(task_id)
+        if task is None:
+            return jsonify({"error": "task not found"}), 404
+
+        result_dir = os.path.join(config.worker.tasks_dir, task_id)
+        os.makedirs(result_dir, exist_ok=True)
+        result_path = os.path.join(result_dir, "result.json")
+        with open(result_path, "w") as f:
+            json.dump(data.get("raw", result_text), f)
+
+        queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
+
+        if kind == "llm_complete" and result_text:
+            chat.append(project, {"role": "assistant", "content": result_text})
+
+        return jsonify({"ok": True})
+
+    # ==================================================================
+    # Task queue CRUD
     # ==================================================================
 
     @bp.route("/tasks", methods=["GET"])
@@ -335,16 +405,12 @@ def create_blueprint(config: AssaiConfig | None = None,
     @bp.route("/status", methods=["GET"])
     def agent_status():
         counts = {}
-        for s in (TaskStatus.PENDING, TaskStatus.CURATING,
-                  TaskStatus.READY, TaskStatus.IN_PROGRESS,
-                  TaskStatus.COMPLETED, TaskStatus.FAILED,
-                  TaskStatus.REVIEW):
+        for s in _STATUS_KINDS:
             counts[s] = len(queue.list(status=s))
 
         return jsonify({
             "queue": counts,
             "events": len(events.history),
-            "conversation_turns": len(converse.history),
             "llm_backend": config.llm.backend,
             "llm_endpoint": config.llm.endpoint,
         })
@@ -370,9 +436,6 @@ def create_blueprint(config: AssaiConfig | None = None,
     # ==================================================================
     # Projects
     # ==================================================================
-
-    projects_dir = os.path.join(config.workspace, "projects")
-    projects = ProjectStore(projects_dir)
 
     def _project_json(p: Project) -> dict:
         from dataclasses import asdict
@@ -426,7 +489,34 @@ def create_blueprint(config: AssaiConfig | None = None,
         projects.delete(name)
         return jsonify({"deleted": True})
 
-    return bp, queue, events, config
+    return bp, queue, events, chat, config
+
+
+# ------------------------------------------------------------------
+# Context hydration
+# ------------------------------------------------------------------
+
+def _hydrate_conversation(config: AssaiConfig, chat_path: str) -> list[dict]:
+    """Read the chat file and prepend the system prompt + spec."""
+    try:
+        with open(chat_path) as f:
+            messages = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        messages = []
+
+    spec = ""
+    spec_path = os.path.join(config.scribe.specs_dir, "spec.md")
+    if os.path.isfile(spec_path):
+        with open(spec_path) as f:
+            spec = f.read()
+
+    spec_section = (
+        f"Project specification:\n\n{spec}" if spec
+        else "(No specification written yet.)"
+    )
+    system = CONVERSE_SYSTEM.format(spec_section=spec_section)
+
+    return [{"role": "system", "content": system}] + messages
 
 
 # ------------------------------------------------------------------
@@ -440,20 +530,24 @@ _STATUS_KINDS = (
 )
 
 
-def _setup_socketio(socketio: SocketIO, config: AssaiConfig,
-                    queue: WorkQueue, events: EventBus):
+def setup_socketio(socketio: SocketIO, config: AssaiConfig,
+                   queue: WorkQueue, events: EventBus):
     """Wire SocketIO event handlers and start the background emitter."""
 
     @socketio.on("connect")
     def handle_connect():
         log.debug("WS client connected")
+        socketio.emit("capabilities", {"telemetry": True})
 
     @socketio.on("disconnect")
     def handle_disconnect():
         log.debug("WS client disconnected")
 
+    @socketio.on("chunk")
+    def handle_chunk(data):
+        socketio.emit("chunk", data)
+
     def _emit_loop():
-        """Periodically push tasks / status / events to all clients."""
         while True:
             socketio.sleep(2)
             try:
@@ -489,46 +583,15 @@ def _setup_socketio(socketio: SocketIO, config: AssaiConfig,
 # ------------------------------------------------------------------
 
 def routes(app, config: AssaiConfig | None = None, prefix: str = "/agent"):
-    """Register agent routes and SocketIO on an existing Flask app.
+    """Register orchestrator routes and SocketIO on an existing Flask app.
 
-    Returns ``(app, socketio)`` so callers can use ``socketio.run()``.
+    Returns ``(app, socketio, queue, events, chat, config)`` so callers
+    can compose with worker blueprints (uber mode).
     """
-    bp, queue, events, resolved_config = create_blueprint(config, prefix)
+    bp, queue, events, chat, resolved_config = create_blueprint(config, prefix)
     app.register_blueprint(bp)
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
-    _setup_socketio(socketio, resolved_config, queue, events)
+    setup_socketio(socketio, resolved_config, queue, events)
 
-    return app, socketio
-
-
-# ------------------------------------------------------------------
-# Standalone entrypoint
-# ------------------------------------------------------------------
-
-def main(argv=None):
-    import argparse
-
-    parser = argparse.ArgumentParser(description="assai agent server")
-    parser.add_argument("-c", "--config", default=None,
-                        help="path to a YAML config file")
-    parser.add_argument("--host", default="0.0.0.0")
-    parser.add_argument("--port", default=5050, type=int)
-    parser.add_argument("--prefix", default="/agent",
-                        help="URL prefix for all routes")
-    parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args(argv)
-
-    if args.config:
-        load_config(args.config)
-
-    config = AssaiConfig()
-    app = Flask(__name__)
-    _, socketio = routes(app, config, prefix=args.prefix)
-
-    print(f"Agent server on http://{args.host}:{args.port}{args.prefix}")
-    socketio.run(app, host=args.host, port=args.port, debug=args.debug)
-
-
-if __name__ == "__main__":
-    main()
+    return app, socketio, queue, events, chat, resolved_config

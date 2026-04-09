@@ -1,35 +1,56 @@
-"""Run the worker (dispatch loop)."""
+"""Run the worker Flask server (LLM + tools, polls orchestrator)."""
 
 from __future__ import annotations
 
-import logging
+import threading
+from dataclasses import dataclass
 
+from argklass import argument
 from argklass.command import Command
 
 from assai.cli import CommonArguments, setup
 
-log = logging.getLogger(__name__)
+
+@dataclass
+class WorkerArguments(CommonArguments):
+    host: str = argument(default=None, help="bind address (default from config)")
+    port: int = argument(default=None, help="listen port (default from config)")
+    orchestrator_url: str = argument(
+        default=None, help="override orchestrator URL",
+    )
 
 
 class Worker(Command):
-    """Run the worker (dispatch loop)."""
+    """Run the worker Flask server (LLM + tools, polls orchestrator)."""
 
     name = "worker"
 
-    Arguments = CommonArguments
+    Arguments = WorkerArguments
 
     @staticmethod
     def execute(args) -> int:
-        config, queue = setup(args)
+        config, _ = setup(args)
 
-        from assai.agents.worker import Worker as W
+        if args.host:
+            config.worker.host = args.host
+        if args.port:
+            config.worker.port = args.port
+        if args.orchestrator_url:
+            config.worker.orchestrator_url = args.orchestrator_url
 
-        w = W(config, queue)
-        log.info(
-            "worker started  (db=%s  llm=%s  poll=%ds)",
-            config.queue.url, config.llm.endpoint, config.queue.poll_interval,
+        from assai.agents.worker import create_worker_app
+
+        app, socketio, poller, llm_server = create_worker_app(config)
+
+        threading.Thread(target=poller.run, daemon=True, name="poller").start()
+
+        print(
+            f"Worker on http://{config.worker.host}:{config.worker.port} "
+            f"→ orchestrator {config.worker.orchestrator_url}"
         )
-        w.run()
+        socketio.run(
+            app, host=config.worker.host, port=config.worker.port,
+        )
         return 0
 
 

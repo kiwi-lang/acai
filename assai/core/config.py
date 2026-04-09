@@ -158,6 +158,11 @@ class WorkerConfig:
     sandbox: str = defaultfield("worker.sandbox", str, "container")
     timeout: int = defaultfield("worker.timeout", int, 300)
     tasks_dir: str = defaultfield("worker.tasks_dir", str, "tasks")
+    host: str = defaultfield("worker.host", str, "0.0.0.0")
+    port: int = defaultfield("worker.port", int, 5051)
+    orchestrator_url: str = defaultfield(
+        "worker.orchestrator_url", str, "http://localhost:5050/agent",
+    )
 
 
 @dataclass
@@ -175,13 +180,14 @@ class QueueConfig:
 
 @dataclass
 class LLMConfig:
-    backend: str = defaultfield("llm.backend", str, "openai")
-    model: str = defaultfield("llm.model", str, "")
+    backend: str = defaultfield("llm.backend", str, "vllm")
+    model: str = defaultfield("llm.model", str, "Qwen/Qwen3-Coder-Next-FP8")
     endpoint: str = defaultfield("llm.endpoint", str, "http://127.0.0.1:9123")
     max_tokens: int = defaultfield("llm.max_tokens", int, 4096)
     temperature: float = defaultfield("llm.temperature", float, 0.7)
     api_key: str = defaultfield("llm.api_key", str, "")
     server_command: str = defaultfield("llm.server_command", str, "")
+    server_port: int = defaultfield("llm.server_port", int, 9123)
 
 
 @dataclass
@@ -213,3 +219,6 @@ class AssaiConfig:
             db_path = url[len("sqlite:///"):]
             if not os.path.isabs(db_path):
                 self.queue.url = f"sqlite:///{os.path.join(ws, db_path)}"
+
+        if self.llm.backend != "openai" and self.llm.endpoint == "http://127.0.0.1:9123":
+            self.llm.endpoint = f"http://127.0.0.1:{self.llm.server_port}"

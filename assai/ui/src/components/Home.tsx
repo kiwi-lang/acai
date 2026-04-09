@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef, KeyboardEvent, useLayoutEffect } from 'react';
+import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner } from '@chakra-ui/react';
 import { converse, getHistory, clearHistory } from '../services/api';
-import type { AgentMessage } from '../services/types';
+import { useAgentSocket } from '../contexts/WebSocketContext';
+import type { AgentMessage, StreamChunk } from '../services/types';
 
 const SendIcon = () => (
     <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
@@ -36,6 +37,9 @@ const Home = () => {
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const shouldRestoreFocusRef = useRef(false);
+    const activeTaskRef = useRef<string | null>(null);
+
+    const { onChunk, onStreamEnd } = useAgentSocket();
 
     useEffect(() => {
         document.title = 'Conversation - ASSAI';
@@ -58,6 +62,38 @@ const Home = () => {
         }
     }, [input, isLoading]);
 
+    const handleChunk = useCallback((chunk: StreamChunk) => {
+        if (chunk.task_id !== activeTaskRef.current) return;
+        setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.isStreaming && last.taskId === chunk.task_id) {
+                copy[copy.length - 1] = { ...last, content: last.content + chunk.token };
+            }
+            return copy;
+        });
+    }, []);
+
+    const handleStreamEnd = useCallback((data: { task_id: string }) => {
+        if (data.task_id !== activeTaskRef.current) return;
+        setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.isStreaming && last.taskId === data.task_id) {
+                copy[copy.length - 1] = { ...last, isStreaming: false };
+            }
+            return copy;
+        });
+        activeTaskRef.current = null;
+        setIsLoading(false);
+    }, []);
+
+    useEffect(() => {
+        const unsub1 = onChunk(handleChunk);
+        const unsub2 = onStreamEnd(handleStreamEnd);
+        return () => { unsub1(); unsub2(); };
+    }, [onChunk, onStreamEnd, handleChunk, handleStreamEnd]);
+
     const handleSend = async () => {
         const text = input.trim();
         if (!text || isLoading) return;
@@ -73,12 +109,15 @@ const Home = () => {
         setIsLoading(true);
 
         try {
-            const response = await converse(text);
-            setMessages(prev => [...prev, { role: 'assistant', content: response }]);
+            const taskId = await converse(text);
+            activeTaskRef.current = taskId;
+            setMessages(prev => [
+                ...prev,
+                { role: 'assistant', content: '', isStreaming: true, taskId },
+            ]);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
-        } finally {
             setIsLoading(false);
         }
     };
@@ -150,12 +189,17 @@ const Home = () => {
                                         <Text fontSize="md" lineHeight="1.75" whiteSpace="pre-wrap"
                                             wordBreak="break-word" color="gray.200">
                                             {msg.content}
+                                            {msg.isStreaming && (
+                                                <Box as="span" display="inline-block" w="2px" h="1em"
+                                                    bg="green.400" ml={0.5}
+                                                    animation="blink 1s step-start infinite" />
+                                            )}
                                         </Text>
                                     </VStack>
                                 </HStack>
                             </Box>
                         ))}
-                        {isLoading && (
+                        {isLoading && !messages.some(m => m.isStreaming) && (
                             <Box w="100%" bg="gray.800" py={6} px={4}>
                                 <HStack maxW="48rem" mx="auto" align="flex-start" gap={4}>
                                     <AssistantIcon />
