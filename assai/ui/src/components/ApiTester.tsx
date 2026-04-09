@@ -19,7 +19,7 @@ interface QueryParam {
     value: string;
     id: number;
 }
-
+ 
 const ApiTester = () => {
     const [method, setMethod] = useState<'GET' | 'POST'>('GET');
     const [url, setUrl] = useState('');

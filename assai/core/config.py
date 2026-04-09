@@ -157,6 +157,7 @@ class WorkerConfig:
     max_retries: int = defaultfield("worker.max_retries", int, 3)
     sandbox: str = defaultfield("worker.sandbox", str, "container")
     timeout: int = defaultfield("worker.timeout", int, 300)
+    tasks_dir: str = defaultfield("worker.tasks_dir", str, "tasks")
 
 
 @dataclass
@@ -185,9 +186,30 @@ class LLMConfig:
 
 @dataclass
 class AssaiConfig:
+    workspace: str = defaultfield("workspace", str, "workspace")
     scribe: ScribeConfig = field(default_factory=ScribeConfig)
     curator: CuratorConfig = field(default_factory=CuratorConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     git: GitConfig = field(default_factory=GitConfig)
     queue: QueueConfig = field(default_factory=QueueConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+
+    def __post_init__(self):
+        ws = os.path.abspath(self.workspace)
+        self.workspace = ws
+        os.makedirs(ws, exist_ok=True)
+
+        if not os.path.isabs(self.scribe.specs_dir):
+            self.scribe.specs_dir = os.path.join(ws, self.scribe.specs_dir)
+
+        if not os.path.isabs(self.git.worktree_dir):
+            self.git.worktree_dir = os.path.join(ws, self.git.worktree_dir)
+
+        if not os.path.isabs(self.worker.tasks_dir):
+            self.worker.tasks_dir = os.path.join(ws, self.worker.tasks_dir)
+
+        url = self.queue.url
+        if url.startswith("sqlite:///") and not url.startswith("sqlite:////"):
+            db_path = url[len("sqlite:///"):]
+            if not os.path.isabs(db_path):
+                self.queue.url = f"sqlite:///{os.path.join(ws, db_path)}"

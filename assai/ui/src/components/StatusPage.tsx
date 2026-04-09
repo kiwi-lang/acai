@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { Box, VStack, HStack, Text, Heading, Badge } from '@chakra-ui/react';
 import { getStatus, listEvents } from '../services/api';
+import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentEvent, AgentStatus } from '../services/types';
 
 const EVENT_COLORS: Record<string, string> = {
@@ -20,32 +21,37 @@ const EVENT_COLORS: Record<string, string> = {
 };
 
 const StatusPage = () => {
+    const { status: wsStatus, events: wsEvents, isConnected } = useAgentSocket();
     const [status, setStatus] = useState<AgentStatus | null>(null);
     const [events, setEvents] = useState<AgentEvent[]>([]);
     const [error, setError] = useState('');
 
-    const load = useCallback(async () => {
-        try {
-            const [s, e] = await Promise.all([getStatus(), listEvents(100)]);
-            setStatus(s);
-            setEvents(e.reverse());
-            setError('');
-        } catch (err) {
-            setError(err instanceof Error ? err.message : 'Failed to load');
-        }
-    }, []);
+    useEffect(() => {
+        if (wsStatus) setStatus(wsStatus);
+    }, [wsStatus]);
+
+    useEffect(() => {
+        if (wsEvents.length > 0) setEvents([...wsEvents].reverse());
+    }, [wsEvents]);
 
     useEffect(() => {
         document.title = 'Status - ASSAI';
-        load();
-        const interval = setInterval(load, 5000);
-        return () => clearInterval(interval);
-    }, [load]);
+        if (!isConnected) {
+            Promise.all([getStatus(), listEvents(100)])
+                .then(([s, e]) => { setStatus(s); setEvents(e.reverse()); setError(''); })
+                .catch(err => setError(err instanceof Error ? err.message : 'Failed to load'));
+        }
+    }, [isConnected]);
 
     return (
         <Box h="100vh" w="100%" bg="gray.900" overflowY="auto" p={6}>
             <Box maxW="4xl" mx="auto">
-                <Heading size="lg" color="white" mb={6}>Agent Status</Heading>
+                <HStack justify="space-between" mb={6}>
+                    <Heading size="lg" color="white">Agent Status</Heading>
+                    <Badge colorScheme={isConnected ? 'green' : 'red'} fontSize="xs" variant="outline">
+                        {isConnected ? 'live' : 'disconnected'}
+                    </Badge>
+                </HStack>
 
                 {error && (
                     <Box p={3} bg="red.900" borderRadius="md" mb={4}>
@@ -53,10 +59,8 @@ const StatusPage = () => {
                     </Box>
                 )}
 
-                {/* Status cards */}
                 {status && (
                     <VStack gap={4} mb={8} align="stretch">
-                        {/* LLM info */}
                         <Box p={4} bg="gray.800" borderRadius="lg" border="1px solid" borderColor="gray.700">
                             <Text fontWeight="semibold" color="white" mb={3}>LLM Backend</Text>
                             <HStack gap={6}>
@@ -68,14 +72,15 @@ const StatusPage = () => {
                                     <Text fontSize="xs" color="gray.500">Endpoint</Text>
                                     <Text fontSize="sm" color="gray.200" fontFamily="mono">{status.llm_endpoint}</Text>
                                 </VStack>
-                                <VStack align="flex-start" gap={0}>
-                                    <Text fontSize="xs" color="gray.500">Conversation turns</Text>
-                                    <Text fontSize="sm" color="gray.200">{status.conversation_turns}</Text>
-                                </VStack>
+                                {status.conversation_turns !== undefined && (
+                                    <VStack align="flex-start" gap={0}>
+                                        <Text fontSize="xs" color="gray.500">Conversation turns</Text>
+                                        <Text fontSize="sm" color="gray.200">{status.conversation_turns}</Text>
+                                    </VStack>
+                                )}
                             </HStack>
                         </Box>
 
-                        {/* Queue stats */}
                         <Box p={4} bg="gray.800" borderRadius="lg" border="1px solid" borderColor="gray.700">
                             <Text fontWeight="semibold" color="white" mb={3}>Queue</Text>
                             <HStack gap={4} flexWrap="wrap">
@@ -90,7 +95,6 @@ const StatusPage = () => {
                     </VStack>
                 )}
 
-                {/* Events log */}
                 <Heading size="md" color="white" mb={4}>Events</Heading>
                 <VStack gap={2} align="stretch">
                     {events.length === 0 ? (

@@ -47,6 +47,20 @@ export interface Worktree {
     head: string;
 }
 
+export interface Project {
+    id: string;
+    name: string;
+    language: string;
+    source: string;
+    template: string;
+    repo_url: string;
+    provider: string;
+    path: string;
+    python_version: string;
+    venv_path: string;
+    created_at: string;
+}
+
 // Kept for ChatComponent compatibility
 export interface Input {
     kind: 'text' | 'image' | 'audio' | 'video' | 'mesh';

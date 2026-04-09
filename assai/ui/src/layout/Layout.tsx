@@ -36,6 +36,12 @@ const TasksIcon = () => (
   </svg>
 );
 
+const ProjectsIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+  </svg>
+);
+
 const StatusIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
@@ -44,6 +50,7 @@ const StatusIcon = () => (
 
 const navItems = [
   { id: 'chat', name: 'Conversation', path: '/', icon: ChatIcon, color: 'green' },
+  { id: 'projects', name: 'Projects', path: '/projects', icon: ProjectsIcon, color: 'orange' },
   { id: 'tasks', name: 'Work Queue', path: '/tasks', icon: TasksIcon, color: 'blue' },
   { id: 'status', name: 'Status', path: '/status', icon: StatusIcon, color: 'purple' },
 ];

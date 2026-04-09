@@ -30,11 +30,18 @@ if __name__ == "__main__":
             ],
         },
         install_requires=[
+            "argklass",
             "flask",
             "flask-socketio",
             "requests",
             "sqlalchemy",
             "pyyaml",
+            "importlib_resources",
+            "cantilever",
+            "voir",
+            "qwen_vl_utils",
+            "torchvision",
+            "vllm"
         ],
         extras_require={
             "models": [
@@ -60,7 +67,7 @@ if __name__ == "__main__":
         },
         entry_points={
             "console_scripts": [
-                "assai=assai.agents.__main__:main",
+                "assai=assai.cli:main",
             ],
         },
     )

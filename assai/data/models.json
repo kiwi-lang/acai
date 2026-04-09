@@ -1,33 +1,33 @@
 {
   "t2i_Qwen Qwen-Image": {
     "load_time_stat": {
-      "sum": 1294.6271402835846,
-      "sum_sqr": 331635.5915722726,
+      "sum": 1573.3485367298126,
+      "sum_sqr": 409321.208409208,
       "first_obs": 31.989132404327393,
       "min": 31.989132404327393,
-      "max": 293.50269198417664,
-      "current_count": 7,
-      "current_obs": 251.53444623947144,
+      "max": 310.7105288505554,
+      "current_count": 8,
+      "current_obs": 278.721396446228,
       "drop_obs": 0
     },
     "mem_stat": {
-      "sum": -276073.2578125,
-      "sum_sqr": 15037415734.763397,
+      "sum": -333123.5078125,
+      "sum_sqr": 18292146759.825897,
       "first_obs": 111171.55859375,
-      "min": 55538.77734375,
+      "min": 54121.30859375,
       "max": 111171.55859375,
-      "current_count": 7,
-      "current_obs": -55632.78125,
+      "current_count": 8,
+      "current_obs": -57050.25,
       "drop_obs": 0
     },
     "inference_stat": {
-      "sum": -850.5604276657104,
-      "sum_sqr": 69359.36474327797,
+      "sum": -908.0664613246918,
+      "sum_sqr": 72666.30865046586,
       "first_obs": 110.36234521865845,
       "min": 8.858357906341553,
       "max": 114.68399810791016,
-      "current_count": 13,
-      "current_obs": -63.49478244781494,
+      "current_count": 14,
+      "current_obs": -57.50603365898132,
       "drop_obs": 0
     },
     "model_info": {}
@@ -201,33 +201,33 @@
   },
   "t2t_llama.cpp Scout": {
     "load_time_stat": {
-      "sum": 4.995751142501831,
-      "sum_sqr": 120.62514713535091,
+      "sum": 43.1592333316803,
+      "sum_sqr": 986.2604617994753,
       "first_obs": 5.777076721191406,
       "min": 0.0026772022247314453,
-      "max": 15.071542263031006,
-      "current_count": 7,
-      "current_obs": 0.8352882862091064,
+      "max": 33.14765453338623,
+      "current_count": 9,
+      "current_obs": 27.370577812194824,
       "drop_obs": 0
     },
     "mem_stat": {
-      "sum": -10783.3125,
-      "sum_sqr": 109361691.11056519,
+      "sum": -10346.828125,
+      "sum_sqr": 109504623.34555054,
       "first_obs": 10394.609375,
       "min": 0.0,
       "max": 11085.09765625,
-      "current_count": 7,
-      "current_obs": -38.6953125,
+      "current_count": 9,
+      "current_obs": 63.8515625,
       "drop_obs": 0
     },
     "inference_stat": {
-      "sum": -128.4103434085846,
-      "sum_sqr": 5464.923252182083,
+      "sum": -469.79885268211365,
+      "sum_sqr": 20226.357667627726,
       "first_obs": 44.956559896469116,
-      "min": 0.6067078113555908,
+      "min": 0.3019864559173584,
       "max": 44.956559896469116,
-      "current_count": 5,
-      "current_obs": -44.30437350273132,
+      "current_count": 13,
+      "current_obs": -29.673774480819702,
       "drop_obs": 0
     },
     "model_info": {
@@ -299,5 +299,75 @@
       "drop_obs": 0
     },
     "model_info": {}
+  },
+  "t2t_Qwen Qwen3-VL-235B-A22B-Thinking-FP8": {
+    "load_time_stat": {
+      "sum": -11.072821617126465,
+      "sum_sqr": 15.163562517993796,
+      "first_obs": 1.383903980255127,
+      "min": 0.0016732215881347656,
+      "max": 1.383903980255127,
+      "current_count": 10,
+      "current_obs": -1.3822307586669922,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": -1487.67578125,
+      "sum_sqr": 273883.2540740967,
+      "first_obs": 186.46484375,
+      "min": 0.0,
+      "max": 186.46484375,
+      "current_count": 10,
+      "current_obs": -186.46484375,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": -1.811981201171875e-05,
+      "sum_sqr": 3.617515176301822e-10,
+      "first_obs": 6.9141387939453125e-06,
+      "min": 1.6689300537109375e-06,
+      "max": 2.1219253540039062e-05,
+      "current_count": 11,
+      "current_obs": -5.245208740234375e-06,
+      "drop_obs": 0
+    },
+    "model_info": {
+      "name": "Qwen/Qwen3-VL-235B-A22B-Thinking-FP8"
+    }
+  },
+  "t2t_Qwen Qwen3-Next-80B-A3B-Thinking-FP8": {
+    "load_time_stat": {
+      "sum": -0.20724773406982422,
+      "sum_sqr": 0.008591592369725731,
+      "first_obs": 0.04397177696228027,
+      "min": 0.0017044544219970703,
+      "max": 0.04397177696228027,
+      "current_count": 6,
+      "current_obs": -0.0422673225402832,
+      "drop_obs": 0
+    },
+    "mem_stat": {
+      "sum": 0.0,
+      "sum_sqr": 0.0,
+      "first_obs": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "current_count": 6,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "inference_stat": {
+      "sum": 4.5299530029296875e-06,
+      "sum_sqr": 5.286437954055145e-12,
+      "first_obs": 1.6689300537109375e-06,
+      "min": 1.6689300537109375e-06,
+      "max": 3.0994415283203125e-06,
+      "current_count": 6,
+      "current_obs": 0.0,
+      "drop_obs": 0
+    },
+    "model_info": {
+      "name": "Qwen/Qwen3-Next-80B-A3B-Thinking-FP8"
+    }
   }
 }

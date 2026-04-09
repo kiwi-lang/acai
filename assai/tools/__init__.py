@@ -18,7 +18,6 @@ import importlib
 import importlib_resources
 
 import torch
-from diffusers import FluxPipeline
 from flask import request
 import torchcompat.core as accelerator
 from PIL import Image

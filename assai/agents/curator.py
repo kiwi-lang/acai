@@ -29,10 +29,10 @@ class CuratorAgent(Agent):
     """Prepares context bundles from specs and task descriptions."""
 
     def __init__(self, name, config, events: EventBus | None = None,
-                 llm: LLM | None = None, specs_dir: str = "specs",
-                 tasks_dir: str = "tasks"):
-        self.specs_dir = specs_dir
-        self.tasks_dir = tasks_dir
+                 llm: LLM | None = None, specs_dir: str | None = None,
+                 tasks_dir: str | None = None):
+        self.specs_dir = specs_dir or config.scribe.specs_dir
+        self.tasks_dir = tasks_dir or config.worker.tasks_dir
         super().__init__(name, config, events, llm)
 
     # ------------------------------------------------------------------

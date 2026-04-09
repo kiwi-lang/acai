@@ -35,9 +35,9 @@ class ScribeAgent(Agent):
     """Maintains the spec by reacting to conversation events."""
 
     def __init__(self, name, config, events: EventBus | None = None,
-                 llm: LLM | None = None, specs_dir: str = "specs",
+                 llm: LLM | None = None, specs_dir: str | None = None,
                  git: GitTracker | None = None):
-        self.specs_dir = specs_dir
+        self.specs_dir = specs_dir or config.scribe.specs_dir
         self.git = git
         super().__init__(name, config, events, llm)
 

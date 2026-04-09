@@ -82,3 +82,6 @@ static/
 .env/
 env/
 .vscode/
+
+
+workspace/

@@ -4,6 +4,7 @@ import {
     Input, Textarea,
 } from '@chakra-ui/react';
 import { listTasks, createTask } from '../services/api';
+import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { Task } from '../services/types';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -84,6 +85,7 @@ const TaskCard = ({ task }: { task: Task }) => (
 );
 
 const TasksPage = () => {
+    const { tasks: wsTasks, isConnected } = useAgentSocket();
     const [tasks, setTasks] = useState<Task[]>([]);
     const [filter, setFilter] = useState<string | null>(null);
     const [showCreate, setShowCreate] = useState(false);
@@ -91,23 +93,21 @@ const TasksPage = () => {
     const [newDesc, setNewDesc] = useState('');
     const [loading, setLoading] = useState(true);
 
-    const loadTasks = useCallback(async () => {
-        try {
-            const data = await listTasks(filter ?? undefined);
-            setTasks(data);
-        } catch {
-            // silently handle
-        } finally {
+    useEffect(() => {
+        if (wsTasks.length > 0) {
+            setTasks(filter ? wsTasks.filter(t => t.status === filter) : wsTasks);
             setLoading(false);
         }
-    }, [filter]);
+    }, [wsTasks, filter]);
 
     useEffect(() => {
         document.title = 'Work Queue - ASSAI';
-        loadTasks();
-        const interval = setInterval(loadTasks, 5000);
-        return () => clearInterval(interval);
-    }, [loadTasks]);
+        if (!isConnected) {
+            listTasks(filter ?? undefined)
+                .then(data => { setTasks(data); setLoading(false); })
+                .catch(() => setLoading(false));
+        }
+    }, [isConnected, filter]);
 
     const handleCreate = async () => {
         if (!newTitle.trim()) return;
@@ -116,7 +116,6 @@ const TasksPage = () => {
             setNewTitle('');
             setNewDesc('');
             setShowCreate(false);
-            loadTasks();
         } catch {
             // silently handle
         }

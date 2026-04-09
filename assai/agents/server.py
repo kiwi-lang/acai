@@ -23,6 +23,7 @@ import threading
 import time
 
 from flask import Blueprint, Flask, jsonify, request
+from flask_socketio import SocketIO
 
 from assai.agents.converse import ConverseAgent
 from assai.agents.llm import create_llm
@@ -30,6 +31,7 @@ from assai.agents.scribe import ScribeAgent
 from assai.agents.worker import Worker
 from assai.config import AssaiConfig, load_config
 from assai.events import EventBus
+from assai.projects import Project, ProjectStore, scaffold, clone
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
 
@@ -49,10 +51,10 @@ class Orchestrator:
     """
 
     def __init__(self, config: AssaiConfig, queue: WorkQueue,
-                 tasks_dir: str = "tasks"):
+                 tasks_dir: str | None = None):
         self.config = config
         self.queue = queue
-        self.tasks_dir = tasks_dir
+        self.tasks_dir = tasks_dir or config.worker.tasks_dir
 
     def run(self):
         """Block forever, polling for completed items to chain."""
@@ -180,12 +182,8 @@ def create_blueprint(config: AssaiConfig | None = None,
     queue  = WorkQueue(config.queue.url)
     git    = GitTracker(config.git.repo_path, config.git.worktree_dir)
 
-    converse = ConverseAgent(
-        "converse", config, events, llm, config.scribe.specs_dir,
-    )
-    ScribeAgent(
-        "scribe", config, events, llm, config.scribe.specs_dir, git,
-    )
+    converse = ConverseAgent("converse", config, events, llm)
+    ScribeAgent("scribe", config, events, llm, git=git)
 
     # -- start worker + orchestrator in background threads -------------
     worker = Worker(config, queue)
@@ -369,7 +367,121 @@ def create_blueprint(config: AssaiConfig | None = None,
             for e in recent
         ])
 
-    return bp
+    # ==================================================================
+    # Projects
+    # ==================================================================
+
+    projects_dir = os.path.join(config.workspace, "projects")
+    projects = ProjectStore(projects_dir)
+
+    def _project_json(p: Project) -> dict:
+        from dataclasses import asdict
+        return asdict(p)
+
+    @bp.route("/projects", methods=["GET"])
+    def list_projects():
+        return jsonify([_project_json(p) for p in projects.list()])
+
+    @bp.route("/projects", methods=["POST"])
+    def create_project():
+        data = request.get_json(silent=True) or {}
+        name = data.get("name", "").strip()
+        if not name:
+            return jsonify({"error": "name is required"}), 400
+
+        slug = name.replace(" ", "-").lower()
+
+        proj = Project(
+            name=slug,
+            language=data.get("language", "python"),
+            source=data.get("source", "new"),
+            template=data.get("template", "default"),
+            repo_url=data.get("repo_url", ""),
+            provider=data.get("provider", ""),
+            python_version=data.get("python_version", "3.12"),
+            venv_path=data.get("venv_path", ".venv"),
+            path=os.path.join(config.git.worktree_dir, slug),
+        )
+
+        try:
+            if proj.source == "clone" and proj.repo_url:
+                clone(proj)
+            else:
+                scaffold(proj)
+            projects.save(proj)
+        except Exception as exc:
+            return jsonify({"error": str(exc)}), 500
+
+        return jsonify(_project_json(proj)), 201
+
+    @bp.route("/projects/<name>", methods=["GET"])
+    def get_project(name):
+        proj = projects.get(name)
+        if proj is None:
+            return jsonify({"error": "not found"}), 404
+        return jsonify(_project_json(proj))
+
+    @bp.route("/projects/<name>", methods=["DELETE"])
+    def delete_project(name):
+        projects.delete(name)
+        return jsonify({"deleted": True})
+
+    return bp, queue, events, config
+
+
+# ------------------------------------------------------------------
+# SocketIO setup
+# ------------------------------------------------------------------
+
+_STATUS_KINDS = (
+    TaskStatus.PENDING, TaskStatus.CURATING, TaskStatus.READY,
+    TaskStatus.IN_PROGRESS, TaskStatus.COMPLETED, TaskStatus.FAILED,
+    TaskStatus.REVIEW,
+)
+
+
+def _setup_socketio(socketio: SocketIO, config: AssaiConfig,
+                    queue: WorkQueue, events: EventBus):
+    """Wire SocketIO event handlers and start the background emitter."""
+
+    @socketio.on("connect")
+    def handle_connect():
+        log.debug("WS client connected")
+
+    @socketio.on("disconnect")
+    def handle_disconnect():
+        log.debug("WS client disconnected")
+
+    def _emit_loop():
+        """Periodically push tasks / status / events to all clients."""
+        while True:
+            socketio.sleep(2)
+            try:
+                tasks = queue.list()
+                socketio.emit("tasks", [_task_json(t) for t in tasks])
+
+                counts = {s: len(queue.list(status=s)) for s in _STATUS_KINDS}
+                socketio.emit("status", {
+                    "queue": counts,
+                    "events": len(events.history),
+                    "llm_backend": config.llm.backend,
+                    "llm_endpoint": config.llm.endpoint,
+                })
+
+                recent = events.history[-100:]
+                socketio.emit("events", [
+                    {
+                        "kind": e.kind.value,
+                        "source": e.source,
+                        "data": e.data,
+                        "timestamp": e.timestamp.isoformat(),
+                    }
+                    for e in recent
+                ])
+            except Exception:
+                log.exception("emitter error")
+
+    socketio.start_background_task(_emit_loop)
 
 
 # ------------------------------------------------------------------
@@ -377,10 +489,17 @@ def create_blueprint(config: AssaiConfig | None = None,
 # ------------------------------------------------------------------
 
 def routes(app, config: AssaiConfig | None = None, prefix: str = "/agent"):
-    """Register agent routes on an existing Flask app."""
-    bp = create_blueprint(config, prefix)
+    """Register agent routes and SocketIO on an existing Flask app.
+
+    Returns ``(app, socketio)`` so callers can use ``socketio.run()``.
+    """
+    bp, queue, events, resolved_config = create_blueprint(config, prefix)
     app.register_blueprint(bp)
-    return app
+
+    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+    _setup_socketio(socketio, resolved_config, queue, events)
+
+    return app, socketio
 
 
 # ------------------------------------------------------------------
@@ -405,10 +524,10 @@ def main(argv=None):
 
     config = AssaiConfig()
     app = Flask(__name__)
-    routes(app, config, prefix=args.prefix)
+    _, socketio = routes(app, config, prefix=args.prefix)
 
     print(f"Agent server on http://{args.host}:{args.port}{args.prefix}")
-    app.run(host=args.host, port=args.port, debug=args.debug)
+    socketio.run(app, host=args.host, port=args.port, debug=args.debug)
 
 
 if __name__ == "__main__":

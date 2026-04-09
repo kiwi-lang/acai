@@ -1,4 +1,4 @@
-from assai.agents.server import main
+from assai.cli import main
 
 if __name__ == "__main__":
-    main()
+    main(["agent-server"])

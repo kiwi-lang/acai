@@ -10,6 +10,10 @@ When the next ``llm_complete`` arrives the server is started again.
 Batching: when the first item popped is ``llm_complete``, the worker
 peeks for more ``llm_complete`` items so related work runs back-to-back
 and benefits from KV-cache locality.
+
+Tools are discovered through the :class:`~assai.tools.registry.ToolRegistry`.
+The built-in tools (shell, filesystem) are loaded by default; additional
+tools can be registered at runtime or via plugins.
 """
 
 from __future__ import annotations
@@ -24,6 +28,8 @@ from typing import TYPE_CHECKING
 
 from assai.agents.llm import create_llm
 from assai.queue.work import TaskStatus
+from assai.tools.registry import ToolRegistry
+from assai.tools.builtins import registry as _builtin_registry
 
 if TYPE_CHECKING:
     from assai.agents.llm import LLM
@@ -36,14 +42,32 @@ log = logging.getLogger(__name__)
 class Worker:
     """Dispatch loop that pops work items and executes them."""
 
-    def __init__(self, config: AssaiConfig, queue: WorkQueue,
-                 tasks_dir: str = "tasks"):
+    def __init__(
+        self,
+        config: AssaiConfig,
+        queue: WorkQueue,
+        tasks_dir: str | None = None,
+        namespaces: list[str] | None = None,
+    ):
         self.config = config
         self.queue = queue
-        self.tasks_dir = tasks_dir
+        self.tasks_dir = tasks_dir or config.worker.tasks_dir
 
         self._llm_proc: subprocess.Popen | None = None
         self._llm_client: LLM | None = None
+
+        self.registry = ToolRegistry()
+        self.registry.merge(_builtin_registry)
+
+        self._namespaces = namespaces
+
+    # ------------------------------------------------------------------
+    # Tool access
+    # ------------------------------------------------------------------
+
+    def mcp_definitions(self) -> list[dict]:
+        """Return MCP tool definitions for the currently exposed namespaces."""
+        return self.registry.mcp_definitions(self._namespaces)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -70,8 +94,6 @@ class Worker:
                 self._ensure_llm()
                 self._run_llm(task)
             elif task.kind == "tool_call":
-                if task.gpu:
-                    self._kill_llm()
                 self._run_tool(task)
             else:
                 raise ValueError(f"unknown task kind: {task.kind}")
@@ -124,70 +146,26 @@ class Worker:
         self._write_result(task.id, result)
 
     # ------------------------------------------------------------------
-    # Tool execution
+    # Tool execution (registry-driven)
     # ------------------------------------------------------------------
 
     def _run_tool(self, task: Task):
         payload = self._read_payload(task)
-        tool = payload.get("tool", "")
+        tool_name = payload.get("tool", "")
         args = payload.get("args", {})
 
-        if tool == "shell":
-            result = self._tool_shell(args)
-        elif tool == "read_file":
-            result = self._tool_read_file(args, task.worktree)
-        elif tool == "write_file":
-            result = self._tool_write_file(args, task.worktree)
-        elif tool == "list_directory":
-            result = self._tool_list_directory(args, task.worktree)
+        td = self.registry.get(tool_name)
+        if td is None:
+            result = json.dumps({"error": f"unknown tool: {tool_name}"})
         else:
-            result = json.dumps({"error": f"unknown tool: {tool}"})
+            if td.gpu:
+                self._kill_llm()
+            try:
+                result = self.registry.call(tool_name, args)
+            except Exception as exc:
+                result = json.dumps({"error": str(exc)})
 
         self._write_result(task.id, result)
-
-    def _tool_shell(self, args: dict) -> str:
-        command = args.get("command", "")
-        cwd = args.get("cwd", None)
-        timeout = args.get("timeout", self.config.worker.timeout)
-        try:
-            proc = subprocess.run(
-                command, shell=True, cwd=cwd,
-                capture_output=True, text=True, timeout=timeout,
-            )
-            return json.dumps({
-                "stdout": proc.stdout,
-                "stderr": proc.stderr,
-                "returncode": proc.returncode,
-            })
-        except subprocess.TimeoutExpired:
-            return json.dumps({"error": "timeout", "timeout": timeout})
-
-    def _tool_read_file(self, args: dict, worktree: str) -> str:
-        path = os.path.join(worktree, args.get("path", "")) if worktree else args.get("path", "")
-        try:
-            with open(path) as f:
-                return f.read()
-        except OSError as exc:
-            return json.dumps({"error": str(exc)})
-
-    def _tool_write_file(self, args: dict, worktree: str) -> str:
-        path = os.path.join(worktree, args.get("path", "")) if worktree else args.get("path", "")
-        content = args.get("content", "")
-        try:
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w") as f:
-                f.write(content)
-            return json.dumps({"written": path})
-        except OSError as exc:
-            return json.dumps({"error": str(exc)})
-
-    def _tool_list_directory(self, args: dict, worktree: str) -> str:
-        path = os.path.join(worktree, args.get("path", ".")) if worktree else args.get("path", ".")
-        try:
-            entries = sorted(os.listdir(path))
-            return json.dumps(entries)
-        except OSError as exc:
-            return json.dumps({"error": str(exc)})
 
     # ------------------------------------------------------------------
     # Lazy LLM lifecycle

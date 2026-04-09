@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentMessage, AgentStatus, Task, Worktree } from './types';
+import type { AgentEvent, AgentMessage, AgentStatus, Project, Task, Worktree } from './types';
 
 const API_BASE = '/api/agent';
 
@@ -81,4 +81,24 @@ export async function listEvents(limit = 50): Promise<AgentEvent[]> {
 // Status
 export async function getStatus(): Promise<AgentStatus> {
     return request<AgentStatus>('/status');
+}
+
+// Projects
+export async function listProjects(): Promise<Project[]> {
+    return request<Project[]>('/projects');
+}
+
+export async function createProject(data: Partial<Project>): Promise<Project> {
+    return request<Project>('/projects', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function getProject(id: string): Promise<Project> {
+    return request<Project>(`/projects/${id}`);
+}
+
+export async function deleteProject(id: string): Promise<void> {
+    await request(`/projects/${id}`, { method: 'DELETE' });
 }

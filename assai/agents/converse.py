@@ -30,8 +30,8 @@ class ConverseAgent(Agent):
     """Interactive agent that talks to a human."""
 
     def __init__(self, name, config, events: EventBus | None = None,
-                 llm: LLM | None = None, specs_dir: str = "specs"):
-        self.specs_dir = specs_dir
+                 llm: LLM | None = None, specs_dir: str | None = None):
+        self.specs_dir = specs_dir or config.scribe.specs_dir
         self.history: list[dict] = []
         super().__init__(name, config, events, llm)
 

@@ -1,9 +1,3 @@
-install:
-	pip install -e .[all]
-	pip install -r requirements.txt
-	pip install -r docs/requirements.txt
-	pip install -r tests/requirements.txt
-
 doc: build-doc
 
 build-doc:
@@ -14,20 +8,28 @@ serve-doc:
 
 update-doc: build-doc serve-doc
 
-
 virtual-env:
-	virtualenv .venv
-	(. .venv/bin/activate && pip install -e .)
+	@[ -d .venv ] || uv venv --python=3.12 --seed
 
-install:
-	(. .venv/bin/activate && pip install -e .)
+install: virtual-env
+	(. .venv/bin/activate && pip install -r requirements.txt) 
+	(. .venv/bin/activate && pip install -e '.[models]') 
 
 # back-dev:
 # 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) flask --debug --app assai.server.run:main run  --with-threads --port 5001)
 
-back-dev:
-	(. .venv/bin/activate && FLASK_STATIC=$(pwd) python -m assai.server.run)
+# back-dev: install
+# 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) python -m assai.server.run)
+
+back-dev: install
+	(. .venv/bin/activate && FLASK_STATIC=$(pwd) assai uber --debug 1)
+
 
 
 front-dev:
 	(cd assai/ui && npm i && npm run dev)
+
+hello:
+	@echo "hello world"
+
+
