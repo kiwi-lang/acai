@@ -70,7 +70,6 @@ const Layout: FC<LayoutProps> = ({ children }) => {
   const handleNewChat = () => {
     navigate('/');
     setIsMobileMenuOpen(false);
-    window.location.reload();
   };
 
   const closeMobileMenu = () => setIsMobileMenuOpen(false);
@@ -167,7 +166,9 @@ const Layout: FC<LayoutProps> = ({ children }) => {
           <VStack gap={1} align="stretch">
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = location.pathname === item.path;
+              const isActive = item.path === '/'
+                ? location.pathname === '/' || location.pathname.startsWith('/conversations')
+                : location.pathname.startsWith(item.path);
               return (
                 <Link
                   key={item.id}

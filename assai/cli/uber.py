@@ -47,12 +47,13 @@ class Uber(Command):
         )
 
         app = Flask(__name__)
-        app, socketio, queue, events, chat, config = routes(
+        app, socketio, queue, events, chat, config, stream_tracker = routes(
             app, config, prefix=args.prefix,
         )
 
+        tracked_sio = stream_tracker.wrap_socketio(socketio)
         bp, llm_server, registry = create_worker_blueprint(
-            config, socketio=socketio, prefix="/worker",
+            config, socketio=tracked_sio, prefix="/worker",
             extern_llm=args.extern_llm,
         )
         tool_bp = registry.blueprint(url_prefix="/tools")

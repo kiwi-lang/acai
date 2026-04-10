@@ -85,7 +85,9 @@ def create_worker_blueprint(
                 llm_server.start()
             except LLMServerError as exc:
                 log.error("[%s] LLM server failed to start: %s", task_id, exc)
-                _emit_error(socketio, task_id, str(exc))
+                if socketio is not None:
+                    socketio.emit("stream_error", {"task_id": task_id, "error": str(exc)})
+                    socketio.emit("stream_end", {"task_id": task_id})
                 return jsonify({"error": str(exc)}), 503
 
         llm = create_llm(config.llm)
@@ -118,7 +120,9 @@ def create_worker_blueprint(
             err_msg = str(exc)
             if not extern_llm and llm_server.process is not None and llm_server.process.poll() is not None:
                 err_msg = f"LLM server crashed during inference. {llm_server.read_log(tail=30)}"
-            _emit_error(socketio, task_id, err_msg)
+            if socketio is not None:
+                socketio.emit("stream_error", {"task_id": task_id, "error": err_msg})
+                socketio.emit("stream_end", {"task_id": task_id})
             return jsonify({"error": err_msg}), 502
 
     # ------------------------------------------------------------------
@@ -154,16 +158,6 @@ def create_worker_blueprint(
         })
 
     return bp, llm_server, registry
-
-
-def _emit_error(socketio: SocketIO | None, task_id: str, message: str):
-    """Emit an error event so the UI can display it to the user."""
-    if socketio is not None:
-        socketio.emit("stream_error", {
-            "task_id": task_id,
-            "error": message,
-        })
-        socketio.emit("stream_end", {"task_id": task_id})
 
 
 # ------------------------------------------------------------------
@@ -295,7 +289,7 @@ class WorkerPoller:
             payload: dict = {
                 "result": result,
                 "kind": kind,
-                "project": work.get("project", "_default"),
+                "conversation": work.get("conversation", ""),
                 "raw": result,
             }
             if error:

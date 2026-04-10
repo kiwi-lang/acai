@@ -23,6 +23,7 @@ from flask_socketio import SocketIO
 from assai.agents.converse import ConverseAgent
 from assai.agents.llm import create_llm
 from assai.agents.scribe import ScribeAgent
+from assai.agents.stream import StreamTracker
 from assai.chat import ChatStore
 from assai.config import AssaiConfig, load_config
 from assai.events import EventBus
@@ -191,14 +192,17 @@ def _task_json(task):
 # ------------------------------------------------------------------
 
 def create_blueprint(config: AssaiConfig | None = None,
-                     prefix: str = "/agent"):
+                     prefix: str = "/agent",
+                     stream_tracker: StreamTracker | None = None):
     """Build the orchestrator Flask Blueprint.
 
-    Returns ``(bp, queue, events, chat, config)`` so the caller can
-    compose with SocketIO and worker blueprints.
+    Returns ``(bp, queue, events, chat, config, stream_tracker)`` so
+    the caller can compose with SocketIO and worker blueprints.
     """
     if config is None:
         config = AssaiConfig()
+
+    tracker = stream_tracker or StreamTracker()
 
     bp = Blueprint("agent", __name__, url_prefix=prefix)
 
@@ -208,45 +212,93 @@ def create_blueprint(config: AssaiConfig | None = None,
 
     projects_dir = os.path.join(config.workspace, "projects")
     projects = ProjectStore(projects_dir)
-    chat = ChatStore(projects_dir)
+    chat = ChatStore(config.workspace)
 
     # Start orchestrator chaining loop in background
     orc = Orchestrator(config, queue)
     threading.Thread(target=orc.run, daemon=True, name="orchestrator").start()
 
     # ==================================================================
-    # Conversation (async — queues work, returns task_id)
+    # Conversations CRUD
+    # ==================================================================
+
+    @bp.route("/conversations", methods=["GET"])
+    def list_conversations():
+        return jsonify(chat.list())
+
+    @bp.route("/conversations", methods=["POST"])
+    def create_conversation():
+        data = request.get_json(silent=True) or {}
+        meta = chat.create(
+            title=data.get("title", ""),
+            project=data.get("project", ""),
+        )
+        return jsonify(meta.to_dict()), 201
+
+    @bp.route("/conversations/<conv_id>", methods=["GET"])
+    def get_conversation(conv_id):
+        meta = chat.get_meta(conv_id)
+        if meta is None:
+            return jsonify({"error": "not found"}), 404
+        return jsonify(meta)
+
+    @bp.route("/conversations/<conv_id>", methods=["DELETE"])
+    def delete_conversation(conv_id):
+        chat.delete(conv_id)
+        return jsonify({"deleted": True})
+
+    # ==================================================================
+    # Converse (async — queues work, returns task_id)
     # ==================================================================
 
     @bp.route("/converse", methods=["POST"])
     def agent_converse():
         data = request.get_json(silent=True) or {}
         message = data.get("message", "")
-        project = data.get("project", "_default")
+        conversation = data.get("conversation", "")
         if not message:
             return jsonify({"error": "message is required"}), 400
 
-        chat.append(project, {"role": "user", "content": message})
+        if not conversation:
+            meta = chat.create(title=message[:80])
+            conversation = meta.id
 
-        chat_path = os.path.join(projects_dir, project, "chat.json")
+        chat.append(conversation, {"role": "user", "content": message})
+
+        conv_path = chat._msg_path(conversation)
         task = queue.push(
             title=f"converse: {message[:60]}",
             kind="llm_complete",
-            spec_path=chat_path,
+            spec_path=conv_path,
         )
         queue.update(task.id, status=TaskStatus.READY)
+        tracker.register(task.id, conversation)
 
-        return jsonify({"task_id": task.id, "project": project}), 202
+        return jsonify({"task_id": task.id, "conversation": conversation}), 202
 
     @bp.route("/history", methods=["GET"])
     def agent_history():
-        project = request.args.get("project", "_default")
-        return jsonify({"messages": chat.read(project)})
+        conversation = request.args.get("conversation", "")
+        if not conversation:
+            return jsonify({"messages": [], "streaming": None})
+
+        messages = chat.read(conversation)
+        streaming = None
+
+        active_task, partial = tracker.get_partial(conversation)
+        if active_task is not None:
+            streaming = {
+                "task_id": active_task,
+                "partial": partial,
+            }
+
+        return jsonify({"messages": messages, "streaming": streaming})
 
     @bp.route("/history", methods=["DELETE"])
     def agent_history_clear():
-        project = request.args.get("project", "_default")
-        chat.clear(project)
+        conversation = request.args.get("conversation", "")
+        if conversation:
+            chat.clear(conversation)
         return jsonify({"cleared": True})
 
     # ==================================================================
@@ -262,12 +314,15 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         queue.update(task.id, status=TaskStatus.IN_PROGRESS)
 
-        if task.kind == "llm_complete" and task.spec_path.endswith("chat.json"):
+        if task.kind == "llm_complete" and task.spec_path.endswith("conversation.json"):
+            conv_dir = os.path.dirname(task.spec_path)
+            conv_id = os.path.basename(conv_dir)
             messages = _hydrate_conversation(config, task.spec_path)
             return jsonify({
                 "task_id": task.id,
                 "kind": task.kind,
                 "messages": messages,
+                "conversation": conv_id,
             })
 
         payload = {}
@@ -290,7 +345,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         data = request.get_json(silent=True) or {}
         result_text = data.get("result", "")
         error = data.get("error")
-        project = data.get("project", "_default")
+        conversation = data.get("conversation", "")
         kind = data.get("kind", "")
 
         task = queue.get(task_id)
@@ -308,14 +363,15 @@ def create_blueprint(config: AssaiConfig | None = None,
                 task_id, status=TaskStatus.FAILED,
                 result_path=result_path, error_log=error,
             )
-            chat.append(project, {
-                "role": "assistant",
-                "content": f"[Error] {error}",
-            })
+            if conversation:
+                chat.append(conversation, {
+                    "role": "assistant",
+                    "content": f"[Error] {error}",
+                })
         else:
             queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
-            if kind == "llm_complete" and result_text:
-                chat.append(project, {"role": "assistant", "content": result_text})
+            if kind == "llm_complete" and result_text and conversation:
+                chat.append(conversation, {"role": "assistant", "content": result_text})
 
         return jsonify({"ok": True})
 
@@ -499,7 +555,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         projects.delete(name)
         return jsonify({"deleted": True})
 
-    return bp, queue, events, chat, config
+    return bp, queue, events, chat, config, tracker
 
 
 # ------------------------------------------------------------------
@@ -553,10 +609,6 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
     def handle_disconnect():
         log.debug("WS client disconnected")
 
-    @socketio.on("chunk")
-    def handle_chunk(data):
-        socketio.emit("chunk", data)
-
     def _emit_loop():
         while True:
             socketio.sleep(2)
@@ -595,13 +647,17 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
 def routes(app, config: AssaiConfig | None = None, prefix: str = "/agent"):
     """Register orchestrator routes and SocketIO on an existing Flask app.
 
-    Returns ``(app, socketio, queue, events, chat, config)`` so callers
-    can compose with worker blueprints (uber mode).
+    Returns ``(app, socketio, queue, events, chat, config, stream_tracker)``
+    so callers can compose with worker blueprints (uber mode).
     """
-    bp, queue, events, chat, resolved_config = create_blueprint(config, prefix)
+    tracker = StreamTracker()
+
+    bp, queue, events, chat, resolved_config, tracker = create_blueprint(
+        config, prefix, stream_tracker=tracker,
+    )
     app.register_blueprint(bp)
 
     socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
     setup_socketio(socketio, resolved_config, queue, events)
 
-    return app, socketio, queue, events, chat, resolved_config
+    return app, socketio, queue, events, chat, resolved_config, tracker

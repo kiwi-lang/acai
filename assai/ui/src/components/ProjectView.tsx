@@ -3,9 +3,10 @@ import { useParams, useNavigate } from 'react-router-dom';
 import {
     Box, VStack, HStack, Text, Heading, Badge, Textarea, IconButton, Spinner,
 } from '@chakra-ui/react';
-import { getProject, converse, getHistory, listTasks, createTask, updateTask } from '../services/api';
+import { getProject, converse, listTasks, createTask, updateTask } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { Project, Task, AgentMessage, StreamChunk } from '../services/types';
+import Markdown from './Markdown';
 
 const SendIcon = () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
@@ -113,11 +114,12 @@ const ProjectView = () => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const activeTaskRef = useRef<string | null>(null);
 
+    const convIdRef = useRef<string | null>(null);
+
     useEffect(() => {
         if (!name) return;
         document.title = `${name} - ASSAI`;
         getProject(name).then(setProject).catch(() => navigate('/projects'));
-        getHistory(name).then(setMessages).catch(() => {});
     }, [name, navigate]);
 
     useEffect(() => {
@@ -194,11 +196,12 @@ const ProjectView = () => {
         setIsLoading(true);
 
         try {
-            const taskId = await converse(text, name);
-            activeTaskRef.current = taskId;
+            const resp = await converse(text, convIdRef.current || '');
+            activeTaskRef.current = resp.task_id;
+            convIdRef.current = resp.conversation;
             setMessages(prev => [
                 ...prev,
-                { role: 'assistant', content: '', isStreaming: true, taskId },
+                { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
             ]);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
@@ -272,7 +275,7 @@ const ProjectView = () => {
 
                 {/* Chat Panel */}
                 <Box
-                    w="380px" flexShrink={0}
+                    w="520px" flexShrink={0}
                     borderLeft="1px solid" borderColor="gray.700"
                     display="flex" flexDirection="column"
                     bg="gray.900"
@@ -303,14 +306,12 @@ const ProjectView = () => {
                                     <Text fontSize="xs" color="gray.400" mb={0.5}>
                                         {msg.role === 'user' ? 'You' : 'Agent'}
                                     </Text>
-                                    <Text fontSize="sm" color="gray.200" whiteSpace="pre-wrap" wordBreak="break-word" lineHeight="1.5">
-                                        {msg.content}
-                                        {msg.isStreaming && (
-                                            <Box as="span" display="inline-block" w="2px" h="0.9em"
-                                                bg="green.400" ml={0.5}
-                                                animation="blink 1s step-start infinite" />
-                                        )}
-                                    </Text>
+                                    <Markdown content={msg.content} />
+                                    {msg.isStreaming && (
+                                        <Box as="span" display="inline-block" w="2px" h="0.9em"
+                                            bg="green.400" ml={0.5}
+                                            animation="blink 1s step-start infinite" />
+                                    )}
                                 </Box>
                             ))}
                             {isLoading && !messages.some(m => m.isStreaming) && (

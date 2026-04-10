@@ -121,3 +121,10 @@ export interface Conversation {
     title: string;
     messages: Message[];
 }
+
+export interface ConversationMeta {
+    id: string;
+    title: string;
+    project: string;
+    created_at: number;
+}

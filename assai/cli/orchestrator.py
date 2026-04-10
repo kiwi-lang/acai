@@ -33,7 +33,9 @@ class Orchestrator(Command):
         from assai.agents.server import routes
 
         app = Flask(__name__)
-        app, socketio, *_ = routes(app, config, prefix=args.prefix)
+        app, socketio, queue, events, chat, config, tracker = routes(
+            app, config, prefix=args.prefix,
+        )
 
         print(f"Orchestrator on http://{args.host}:{args.port}{args.prefix}")
         socketio.run(app, host=args.host, port=args.port, debug=args.debug)

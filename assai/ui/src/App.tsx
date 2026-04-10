@@ -25,6 +25,7 @@ function App() {
             <Layout>
               <Routes>
               <Route path="/" element={<Home />} />
+              <Route path="/conversations/:convId" element={<Home />} />
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:name" element={<ProjectView />} />
               <Route path="/tasks" element={<TasksPage />} />

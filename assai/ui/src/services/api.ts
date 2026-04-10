@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentMessage, AgentStatus, Project, Task, Worktree } from './types';
+import type { AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Task, Worktree } from './types';
 
 const API_BASE = '/api/agent';
 
@@ -17,22 +17,45 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
     return response.json();
 }
 
-// Conversation (async — returns task_id, response streamed via WS)
-export async function converse(message: string, project = '_default'): Promise<string> {
-    const data = await request<{ task_id: string }>('/converse', {
+// Conversations CRUD
+export async function listConversations(): Promise<ConversationMeta[]> {
+    return request<ConversationMeta[]>('/conversations');
+}
+
+export async function createConversation(title = '', project = ''): Promise<ConversationMeta> {
+    return request<ConversationMeta>('/conversations', {
         method: 'POST',
-        body: JSON.stringify({ message, project }),
+        body: JSON.stringify({ title, project }),
     });
-    return data.task_id;
 }
 
-export async function getHistory(project = '_default'): Promise<AgentMessage[]> {
-    const data = await request<{ messages: AgentMessage[] }>(`/history?project=${encodeURIComponent(project)}`);
-    return data.messages;
+export async function getConversation(id: string): Promise<ConversationMeta> {
+    return request<ConversationMeta>(`/conversations/${id}`);
 }
 
-export async function clearHistory(project = '_default'): Promise<void> {
-    await request(`/history?project=${encodeURIComponent(project)}`, { method: 'DELETE' });
+export async function deleteConversation(id: string): Promise<void> {
+    await request(`/conversations/${id}`, { method: 'DELETE' });
+}
+
+// Converse (async — returns task_id + conversation, response streamed via WS)
+export async function converse(message: string, conversation = ''): Promise<{ task_id: string; conversation: string }> {
+    return request<{ task_id: string; conversation: string }>('/converse', {
+        method: 'POST',
+        body: JSON.stringify({ message, conversation }),
+    });
+}
+
+export interface HistoryResponse {
+    messages: AgentMessage[];
+    streaming: { task_id: string; partial: string } | null;
+}
+
+export async function getHistory(conversation: string): Promise<HistoryResponse> {
+    return request<HistoryResponse>(`/history?conversation=${encodeURIComponent(conversation)}`);
+}
+
+export async function clearHistory(conversation: string): Promise<void> {
+    await request(`/history?conversation=${encodeURIComponent(conversation)}`, { method: 'DELETE' });
 }
 
 // Tasks
