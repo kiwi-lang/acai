@@ -289,6 +289,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         """Worker pushes a completed result back."""
         data = request.get_json(silent=True) or {}
         result_text = data.get("result", "")
+        error = data.get("error")
         project = data.get("project", "_default")
         kind = data.get("kind", "")
 
@@ -302,10 +303,19 @@ def create_blueprint(config: AssaiConfig | None = None,
         with open(result_path, "w") as f:
             json.dump(data.get("raw", result_text), f)
 
-        queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
-
-        if kind == "llm_complete" and result_text:
-            chat.append(project, {"role": "assistant", "content": result_text})
+        if error:
+            queue.update(
+                task_id, status=TaskStatus.FAILED,
+                result_path=result_path, error_log=error,
+            )
+            chat.append(project, {
+                "role": "assistant",
+                "content": f"[Error] {error}",
+            })
+        else:
+            queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
+            if kind == "llm_complete" and result_text:
+                chat.append(project, {"role": "assistant", "content": result_text})
 
         return jsonify({"ok": True})
 

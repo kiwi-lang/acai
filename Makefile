@@ -22,7 +22,10 @@ install: virtual-env
 # 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) python -m assai.server.run)
 
 back-dev: install
-	(. .venv/bin/activate && FLASK_STATIC=$(pwd) assai uber --debug 1)
+	(. .venv/bin/activate && FLASK_STATIC=$(pwd) assai uber --debug 1 --extern_llm 1)
+
+vllm:
+	(. .venv/bin/activate && FLASK_STATIC=$(pwd) assai serve --model "Qwen/Qwen3-Coder-Next-FP8")
 
 
 

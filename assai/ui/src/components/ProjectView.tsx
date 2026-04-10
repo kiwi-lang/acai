@@ -101,7 +101,7 @@ const KanbanColumn = ({ label, tasks, color }: { label: string; tasks: Task[]; c
 const ProjectView = () => {
     const { name } = useParams<{ name: string }>();
     const navigate = useNavigate();
-    const { tasks: wsTasks, isConnected, onChunk, onStreamEnd } = useAgentSocket();
+    const { tasks: wsTasks, isConnected, onChunk, onStreamEnd, onStreamError } = useAgentSocket();
 
     const [project, setProject] = useState<Project | null>(null);
     const [tasks, setTasks] = useState<Task[]>([]);
@@ -158,11 +158,30 @@ const ProjectView = () => {
         setIsLoading(false);
     }, []);
 
+    const handleStreamError = useCallback((data: { task_id: string; error: string }) => {
+        if (data.task_id !== activeTaskRef.current) return;
+        setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.isStreaming && last.taskId === data.task_id) {
+                copy[copy.length - 1] = {
+                    ...last,
+                    content: `⚠ Error: ${data.error}`,
+                    isStreaming: false,
+                };
+            }
+            return copy;
+        });
+        activeTaskRef.current = null;
+        setIsLoading(false);
+    }, []);
+
     useEffect(() => {
         const unsub1 = onChunk(handleChunk);
         const unsub2 = onStreamEnd(handleStreamEnd);
-        return () => { unsub1(); unsub2(); };
-    }, [onChunk, onStreamEnd, handleChunk, handleStreamEnd]);
+        const unsub3 = onStreamError(handleStreamError);
+        return () => { unsub1(); unsub2(); unsub3(); };
+    }, [onChunk, onStreamEnd, onStreamError, handleChunk, handleStreamEnd, handleStreamError]);
 
     const handleSend = async () => {
         const text = input.trim();

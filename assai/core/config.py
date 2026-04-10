@@ -178,16 +178,26 @@ class QueueConfig:
     poll_interval: int = defaultfield("queue.poll_interval", int, 5)
 
 
+def _model_to_slug(model: str) -> str:
+    """Derive a short slug from a model path like ``Org/Model-Name``."""
+    return model.rsplit("/", 1)[-1].lower().replace("_", "-")
+
+
 @dataclass
 class LLMConfig:
     backend: str = defaultfield("llm.backend", str, "vllm")
     model: str = defaultfield("llm.model", str, "Qwen/Qwen3-Coder-Next-FP8")
+    slug: str = defaultfield("llm.slug", str, "")
     endpoint: str = defaultfield("llm.endpoint", str, "http://127.0.0.1:9123")
     max_tokens: int = defaultfield("llm.max_tokens", int, 4096)
     temperature: float = defaultfield("llm.temperature", float, 0.7)
     api_key: str = defaultfield("llm.api_key", str, "")
     server_command: str = defaultfield("llm.server_command", str, "")
     server_port: int = defaultfield("llm.server_port", int, 9123)
+
+    def __post_init__(self):
+        if not self.slug:
+            self.slug = _model_to_slug(self.model)
 
 
 @dataclass

@@ -2,6 +2,11 @@ import { createContext, useContext, useEffect, useState, useCallback, useRef, us
 import { io, Socket } from 'socket.io-client';
 import type { Task, AgentEvent, AgentStatus, StreamChunk, Capabilities, TelemetryData } from '../services/types';
 
+interface StreamError {
+    task_id: string;
+    error: string;
+}
+
 interface AgentSocketContextType {
     socket: Socket | null;
     isConnected: boolean;
@@ -13,6 +18,7 @@ interface AgentSocketContextType {
     requestTelemetry: () => void;
     onChunk: (cb: (chunk: StreamChunk) => void) => () => void;
     onStreamEnd: (cb: (data: { task_id: string }) => void) => () => void;
+    onStreamError: (cb: (data: StreamError) => void) => () => void;
 }
 
 const AgentSocketContext = createContext<AgentSocketContextType | undefined>(undefined);
@@ -34,6 +40,7 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
 
     const chunkListeners = useRef<Set<(chunk: StreamChunk) => void>>(new Set());
     const endListeners = useRef<Set<(data: { task_id: string }) => void>>(new Set());
+    const errorListeners = useRef<Set<(data: StreamError) => void>>(new Set());
 
     useEffect(() => {
         let wsUrl: string | undefined = import.meta.env.VITE_WS_URL;
@@ -67,6 +74,9 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
         sock.on('stream_end', (data: { task_id: string }) => {
             endListeners.current.forEach(cb => cb(data));
         });
+        sock.on('stream_error', (data: StreamError) => {
+            errorListeners.current.forEach(cb => cb(data));
+        });
 
         return () => {
             sock.disconnect();
@@ -89,11 +99,16 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
         return () => { endListeners.current.delete(cb); };
     }, []);
 
+    const onStreamError = useCallback((cb: (data: StreamError) => void) => {
+        errorListeners.current.add(cb);
+        return () => { errorListeners.current.delete(cb); };
+    }, []);
+
     return (
         <AgentSocketContext.Provider value={{
             socket, isConnected, tasks, status, events,
             capabilities, telemetry, requestTelemetry,
-            onChunk, onStreamEnd,
+            onChunk, onStreamEnd, onStreamError,
         }}>
             {children}
         </AgentSocketContext.Provider>

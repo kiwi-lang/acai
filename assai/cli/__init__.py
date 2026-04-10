@@ -5,6 +5,8 @@ Usage::
     assai orchestrator       # orchestrator only
     assai worker             # worker only
     assai uber               # orchestrator + worker (GB10 mode)
+    assai uber --extern-llm  # uber without internal LLM management
+    assai serve              # launch LLM server standalone
     assai server             # legacy model-serving server
     assai agent-server       # agent HTTP API server
 """
@@ -18,6 +20,9 @@ from argklass import argument
 from argklass.cli import CommandLineInterface
 
 import assai.cli
+from assai.core.env import apply_env
+
+apply_env()
 
 
 @dataclass
@@ -59,5 +64,8 @@ def setup(args):
 
 
 def main(argv=None):
-    cli = CommandLineInterface(assai.cli, prog="assai", description="Assai — AI agent swarm CLI")
-    cli.run(argv)
+    from argklass.plugin import with_cache_location
+
+    with with_cache_location("assai"):
+        cli = CommandLineInterface(assai.cli, prog="assai", description="Assai — AI agent swarm CLI")
+        cli.run(argv)

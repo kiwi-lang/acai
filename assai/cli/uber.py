@@ -21,6 +21,10 @@ class UberArguments(CommonArguments):
     port: int   = argument(default=5050, help="listen port")
     prefix: str = argument(default="/agent", help="URL prefix for orchestrator routes")
     debug: bool = argument(default=False, help="enable Flask debug mode")
+    extern_llm: bool = argument(
+        default=False,
+        help="skip internal LLM management — use an externally started server (e.g. via `assai serve`)",
+    )
 
 
 class Uber(Command):
@@ -49,6 +53,7 @@ class Uber(Command):
 
         bp, llm_server, registry = create_worker_blueprint(
             config, socketio=socketio, prefix="/worker",
+            extern_llm=args.extern_llm,
         )
         tool_bp = registry.blueprint(url_prefix="/tools")
         app.register_blueprint(bp)
@@ -66,7 +71,10 @@ class Uber(Command):
         )
         threading.Thread(target=poller.run, daemon=True, name="poller").start()
 
-        print(f"Uber server on http://{args.host}:{args.port}")
+        if args.extern_llm:
+            print(f"Uber server on http://{args.host}:{args.port} (external LLM at {config.llm.endpoint})")
+        else:
+            print(f"Uber server on http://{args.host}:{args.port}")
         socketio.run(app, host=args.host, port=args.port, debug=args.debug)
         return 0
 
