@@ -58,6 +58,7 @@ const Home = () => {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const shouldRestoreFocusRef = useRef(false);
     const activeTaskRef = useRef<string | null>(null);
+    const chunkBufferRef = useRef<StreamChunk[]>([]);
 
     const { onChunk, onStreamEnd, onStreamError } = useAgentSocket();
 
@@ -65,15 +66,32 @@ const Home = () => {
         listConversations().then(setConversations).catch(() => {});
     }, []);
 
+    const flushBuffer = useCallback((taskId: string) => {
+        const buffered = chunkBufferRef.current.filter(c => c.task_id === taskId);
+        chunkBufferRef.current = [];
+        if (buffered.length === 0) return;
+        setMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last && last.isStreaming && last.taskId === taskId) {
+                const extra = buffered.map(c => c.token).join('');
+                copy[copy.length - 1] = { ...last, content: last.content + extra };
+            }
+            return copy;
+        });
+    }, []);
+
     const loadConversation = useCallback((id: string) => {
         setMessages([]);
         setIsLoading(false);
         activeTaskRef.current = null;
+        chunkBufferRef.current = [];
 
         getHistory(id).then(resp => {
             setMessages(resp.messages);
             if (resp.streaming) {
-                activeTaskRef.current = resp.streaming.task_id;
+                const tid = resp.streaming.task_id;
+                activeTaskRef.current = tid;
                 setIsLoading(true);
                 setMessages(prev => [
                     ...prev,
@@ -81,12 +99,13 @@ const Home = () => {
                         role: 'assistant',
                         content: resp.streaming!.partial,
                         isStreaming: true,
-                        taskId: resp.streaming!.task_id,
+                        taskId: tid,
                     },
                 ]);
+                flushBuffer(tid);
             }
         }).catch(() => {});
-    }, []);
+    }, [flushBuffer]);
 
     useEffect(() => {
         document.title = 'Conversations - ASSAI';
@@ -138,6 +157,10 @@ const Home = () => {
     }, [input, isLoading]);
 
     const handleChunk = useCallback((chunk: StreamChunk) => {
+        if (activeTaskRef.current === null) {
+            chunkBufferRef.current.push(chunk);
+            return;
+        }
         if (chunk.task_id !== activeTaskRef.current) return;
         setMessages(prev => {
             const copy = [...prev];
