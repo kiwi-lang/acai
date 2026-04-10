@@ -50,9 +50,19 @@ const StatusIcon = () => (
   </svg>
 );
 
+const AgentsIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <circle cx="12" cy="8" r="4" />
+    <path d="M6 21v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2" />
+    <path d="M17 3a2 2 0 0 1 0 4" />
+    <path d="M21 21v-2a4 4 0 0 0-3-3.87" />
+  </svg>
+);
+
 const navItems = [
   { id: 'chat', name: 'Conversation', path: '/', icon: ChatIcon, color: 'green' },
   { id: 'projects', name: 'Projects', path: '/projects', icon: ProjectsIcon, color: 'orange' },
+  { id: 'agents', name: 'Agents', path: '/agents', icon: AgentsIcon, color: 'teal' },
   { id: 'tasks', name: 'Work Queue', path: '/tasks', icon: TasksIcon, color: 'blue' },
   { id: 'status', name: 'Status', path: '/status', icon: StatusIcon, color: 'purple' },
 ];
@@ -101,8 +111,8 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         className={`sidebar ${isMobileMenuOpen ? 'mobile-open' : ''}`}
         w="260px"
         h="100vh"
-        bg="gray.900"
-        color="white"
+        bg="var(--bg-sidebar)"
+        color="var(--text-primary)"
         display="flex"
         flexDirection="column"
         position="fixed"
@@ -112,30 +122,33 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         transition="transform 0.3s"
         transform={{ base: isMobileMenuOpen ? 'translateX(0)' : 'translateX(-100%)', md: 'translateX(0)' }}
         borderRight="1px solid"
-        borderColor="gray.700"
+        borderColor="var(--border-primary)"
       >
         {/* Header */}
-        <Box p={4} borderBottom="1px solid" borderColor="gray.700">
-          <Link to="/" style={{ textDecoration: 'none' }} onClick={closeMobileMenu}>
-            <HStack gap={2}>
-              <ColorModeButton />
-              <Text fontSize="xl" fontWeight="bold" color="white">
-                AS
-              </Text>
-              <Box
-                w="32px"
-                h="32px"
-                bg="green.500"
-                borderRadius="md"
-                display="flex"
-                alignItems="center"
-                justifyContent="center"
-                fontWeight="bold"
-              >
-                SAI
-              </Box>
-            </HStack>
-          </Link>
+        <Box p={4} borderBottom="1px solid" borderColor="var(--border-primary)">
+          <HStack gap={2}>
+            <ColorModeButton />
+            <Link to="/" style={{ textDecoration: 'none' }} onClick={closeMobileMenu}>
+              <HStack gap={2}>
+                <Text fontSize="xl" fontWeight="bold" color="var(--text-heading)">
+                  AS
+                </Text>
+                <Box
+                  w="32px"
+                  h="32px"
+                  bg="var(--bg-brand-icon)"
+                  borderRadius="md"
+                  display="flex"
+                  alignItems="center"
+                  justifyContent="center"
+                  fontWeight="bold"
+                  color="var(--text-inverse)"
+                >
+                  SAI
+                </Box>
+              </HStack>
+            </Link>
+          </HStack>
         </Box>
 
         {/* New Chat Button */}
@@ -143,13 +156,12 @@ const Layout: FC<LayoutProps> = ({ children }) => {
           <Button
             w="100%"
             onClick={handleNewChat}
-            colorScheme="green"
             variant="outline"
             justifyContent="flex-start"
             size="md"
-            color="gray.200"
-            borderColor="gray.600"
-            _hover={{ bg: 'gray.700', borderColor: 'gray.500' }}
+            color="var(--text-secondary)"
+            borderColor="var(--border-secondary)"
+            _hover={{ bg: 'var(--bg-hover)', borderColor: 'var(--border-primary)' }}
           >
             <HStack gap={2}>
               <PlusIcon />
@@ -160,7 +172,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
 
         {/* Navigation */}
         <Box px={3} pb={3} flex={1}>
-          <Text fontSize="xs" fontWeight="bold" color="gray.500" mb={2} px={2} textTransform="uppercase" letterSpacing="wide">
+          <Text fontSize="xs" fontWeight="bold" color="var(--text-muted)" mb={2} px={2} textTransform="uppercase" letterSpacing="wide">
             Navigation
           </Text>
           <VStack gap={1} align="stretch">
@@ -179,18 +191,18 @@ const Layout: FC<LayoutProps> = ({ children }) => {
                   <HStack
                     p={2.5}
                     borderRadius="md"
-                    bg={isActive ? 'gray.700' : 'transparent'}
-                    _hover={{ bg: 'gray.800' }}
+                    bg={isActive ? 'var(--bg-active)' : 'transparent'}
+                    _hover={{ bg: 'var(--bg-hover)' }}
                     cursor="pointer"
                     gap={3}
                     transition="all 0.2s"
                   >
-                    <Box color={isActive ? `${item.color}.300` : 'gray.400'}>
+                    <Box color={isActive ? `${item.color}.400` : 'var(--text-muted)'}>
                       <Icon />
                     </Box>
                     <Text
                       fontSize="sm"
-                      color={isActive ? 'white' : 'gray.300'}
+                      color={isActive ? 'var(--text-heading)' : 'var(--text-secondary)'}
                       fontWeight={isActive ? 'medium' : 'normal'}
                     >
                       {item.name}
@@ -202,12 +214,12 @@ const Layout: FC<LayoutProps> = ({ children }) => {
           </VStack>
         </Box>
 
-        {/* Footer — telemetry or version */}
-        <Box p={4} borderTop="1px solid" borderColor="gray.700">
+        {/* Footer */}
+        <Box p={4} borderTop="1px solid" borderColor="var(--border-primary)">
           {capabilities?.telemetry ? (
             <TelemetryDisplay />
           ) : (
-            <Text fontSize="xs" color="gray.500" textAlign="center">
+            <Text fontSize="xs" color="var(--text-muted)" textAlign="center">
               assai v0.1.0
             </Text>
           )}
@@ -233,7 +245,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
           left={0}
           right={0}
           bottom={0}
-          bg="blackAlpha.600"
+          bg="var(--bg-overlay)"
           zIndex={999}
           onClick={closeMobileMenu}
           display={{ base: 'block', md: 'none' }}

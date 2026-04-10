@@ -13,11 +13,13 @@ Usage::
     config = AssaiConfig()
 """
 
+from __future__ import annotations
+
 import contextvars
 import os
 from contextlib import contextmanager
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 
 
 config_global = contextvars.ContextVar("assai_config", default=None)
@@ -201,14 +203,104 @@ class LLMConfig:
 
 
 @dataclass
+class ProviderConfig:
+    """An LLM provider (local or remote API)."""
+
+    name: str = ""
+    backend: str = "openai"
+    model: str = ""
+    slug: str = ""
+    endpoint: str = ""
+    api_key: str = ""
+    server_port: int = 9123
+    server_command: str = ""
+    max_tokens: int = 4096
+    temperature: float = 0.7
+    priority: int = 0
+    roles: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        if self.model and not self.slug:
+            self.slug = _model_to_slug(self.model)
+
+    def to_llm_config(self) -> LLMConfig:
+        """Convert to an ``LLMConfig`` for the worker/LLM server."""
+        return LLMConfig(
+            backend=self.backend,
+            model=self.model,
+            slug=self.slug,
+            endpoint=self.endpoint or f"http://127.0.0.1:{self.server_port}",
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            api_key=self.api_key,
+            server_command=self.server_command,
+            server_port=self.server_port,
+        )
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ProviderConfig:
+        roles = d.get("roles")
+        if isinstance(roles, str):
+            roles = [r.strip() for r in roles.split(",") if r.strip()]
+        return cls(
+            name=d.get("name", ""),
+            backend=d.get("backend", "openai"),
+            model=d.get("model", ""),
+            slug=d.get("slug", ""),
+            endpoint=d.get("endpoint", ""),
+            api_key=d.get("api_key", ""),
+            server_port=int(d.get("server_port", 9123)),
+            server_command=d.get("server_command", ""),
+            max_tokens=int(d.get("max_tokens", 4096)),
+            temperature=float(d.get("temperature", 0.7)),
+            priority=int(d.get("priority", 0)),
+            roles=roles if isinstance(roles, list) else [],
+        )
+
+    @classmethod
+    def from_llm_config(cls, llm: LLMConfig, name: str = "",
+                        priority: int = 0,
+                        roles: list[str] | None = None) -> ProviderConfig:
+        """Build a provider from the legacy ``LLMConfig``."""
+        return cls(
+            name=name or llm.slug,
+            backend=llm.backend,
+            model=llm.model,
+            slug=llm.slug,
+            endpoint=llm.endpoint,
+            api_key=llm.api_key,
+            server_port=llm.server_port,
+            server_command=llm.server_command,
+            max_tokens=llm.max_tokens,
+            temperature=llm.temperature,
+            priority=priority,
+            roles=roles or ["worker"],
+        )
+
+
+def _load_providers_from_global() -> list[ProviderConfig]:
+    """Read the ``providers`` list from the global config dict."""
+    config = config_global.get() or {}
+    raw = config.get("providers")
+    if not isinstance(raw, list):
+        return []
+    return [ProviderConfig.from_dict(d) for d in raw if isinstance(d, dict)]
+
+
+@dataclass
 class AssaiConfig:
     workspace: str = defaultfield("workspace", str, "workspace")
+    dump_rendered_request: bool = defaultfield("dump_rendered_request", bool, False)
     scribe: ScribeConfig = field(default_factory=ScribeConfig)
     curator: CuratorConfig = field(default_factory=CuratorConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     git: GitConfig = field(default_factory=GitConfig)
     queue: QueueConfig = field(default_factory=QueueConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    providers: list[ProviderConfig] = field(default_factory=_load_providers_from_global)
 
     def __post_init__(self):
         ws = os.path.abspath(self.workspace)
@@ -232,3 +324,69 @@ class AssaiConfig:
 
         if self.llm.backend != "openai" and self.llm.endpoint == "http://127.0.0.1:9123":
             self.llm.endpoint = f"http://127.0.0.1:{self.llm.server_port}"
+
+        if not self.providers:
+            self.providers = [
+                ProviderConfig.from_llm_config(self.llm, priority=100, roles=["worker"]),
+            ]
+
+    def active_provider(self) -> ProviderConfig:
+        """Return the provider matching ``config.llm``, or the highest-priority one."""
+        for p in self.providers:
+            if p.slug == self.llm.slug and p.backend == self.llm.backend:
+                return p
+        best = sorted(self.providers, key=lambda p: -p.priority)
+        return best[0] if best else ProviderConfig.from_llm_config(self.llm)
+
+    def get_provider(self, name: str) -> ProviderConfig | None:
+        """Look up a provider by name."""
+        for p in self.providers:
+            if p.name == name:
+                return p
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Provider persistence (workspace/assai.yaml)
+# ---------------------------------------------------------------------------
+
+def _yaml_path(workspace: str) -> str:
+    return os.path.join(os.path.abspath(workspace), "assai.yaml")
+
+
+def load_providers(workspace: str) -> list[ProviderConfig]:
+    """Read the ``providers`` list from ``workspace/assai.yaml``."""
+    path = _yaml_path(workspace)
+    if not os.path.isfile(path):
+        return []
+    import yaml
+
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    raw = data.get("providers")
+    if not isinstance(raw, list):
+        return []
+    return [ProviderConfig.from_dict(d) for d in raw if isinstance(d, dict)]
+
+
+def save_providers(workspace: str, providers: list[ProviderConfig]) -> None:
+    """Write back only the ``providers`` section of ``workspace/assai.yaml``.
+
+    Preserves any other top-level keys the user may have set.
+    """
+    import yaml
+
+    path = _yaml_path(workspace)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    existing: dict = {}
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            existing = yaml.safe_load(f) or {}
+
+    existing["providers"] = [p.to_dict() for p in providers]
+
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False)
+    os.replace(tmp, path)

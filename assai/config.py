@@ -5,6 +5,7 @@ from assai.core.config import (  # noqa: F401
     CuratorConfig,
     GitConfig,
     LLMConfig,
+    ProviderConfig,
     QueueConfig,
     ScribeConfig,
     WorkerConfig,

@@ -18,9 +18,9 @@ const LANG_COLORS: Record<string, string> = {
 
 const ProjectCard = ({ project, onClick }: { project: Project; onClick: () => void }) => (
     <Box
-        p={4} bg="gray.800" borderRadius="lg"
-        border="1px solid" borderColor="gray.700"
-        _hover={{ borderColor: 'green.600', cursor: 'pointer' }}
+        p={4} bg="var(--bg-card)" borderRadius="lg"
+        border="1px solid" borderColor="var(--border-primary)"
+        _hover={{ borderColor: 'var(--accent)', cursor: 'pointer' }}
         transition="all 0.2s"
         onClick={onClick}
     >
@@ -29,7 +29,7 @@ const ProjectCard = ({ project, onClick }: { project: Project; onClick: () => vo
                 <Badge colorScheme={LANG_COLORS[project.language] || 'gray'} fontSize="xs" variant="outline">
                     {project.language}
                 </Badge>
-                <Text fontWeight="semibold" color="white" fontSize="md">
+                <Text fontWeight="semibold" color="var(--text-heading)" fontSize="md">
                     {project.name}
                 </Text>
             </HStack>
@@ -38,27 +38,27 @@ const ProjectCard = ({ project, onClick }: { project: Project; onClick: () => vo
             </Badge>
         </HStack>
 
-        <Text fontSize="sm" color="gray.400" fontFamily="mono" mb={2}>
+        <Text fontSize="sm" color="var(--text-tertiary)" fontFamily="mono" mb={2}>
             {project.path}
         </Text>
 
         <HStack gap={4} flexWrap="wrap">
             {project.language === 'python' && (
                 <>
-                    <Text fontSize="xs" color="gray.500">
+                    <Text fontSize="xs" color="var(--text-muted)">
                         Python {project.python_version}
                     </Text>
-                    <Text fontSize="xs" color="gray.500">
+                    <Text fontSize="xs" color="var(--text-muted)">
                         venv: {project.venv_path}
                     </Text>
                 </>
             )}
             {project.repo_url && (
-                <Text fontSize="xs" color="gray.500" overflow="hidden" textOverflow="ellipsis">
+                <Text fontSize="xs" color="var(--text-muted)" overflow="hidden" textOverflow="ellipsis">
                     {project.repo_url}
                 </Text>
             )}
-            <Text fontSize="xs" color="gray.500">
+            <Text fontSize="xs" color="var(--text-muted)">
                 {new Date(project.created_at).toLocaleString()}
             </Text>
         </HStack>
@@ -138,10 +138,10 @@ const ProjectsPage = () => {
     };
 
     return (
-        <Box h="100vh" w="100%" bg="gray.900" overflowY="auto" p={6}>
+        <Box h="100vh" w="100%" bg="var(--bg-page)" overflowY="auto" p={6}>
             <Box maxW="4xl" mx="auto">
                 <HStack justify="space-between" mb={6}>
-                    <Heading size="lg" color="white">Projects</Heading>
+                    <Heading size="lg" color="var(--text-heading)">Projects</Heading>
                     <Button
                         colorScheme="green" size="sm"
                         onClick={() => { setShowCreate(!showCreate); if (showCreate) resetForm(); }}
@@ -152,39 +152,39 @@ const ProjectsPage = () => {
 
                 {/* Create form */}
                 {showCreate && (
-                    <Box p={5} bg="gray.800" borderRadius="lg" mb={6} border="1px solid" borderColor="gray.700">
+                    <Box p={5} bg="var(--bg-card)" borderRadius="lg" mb={6} border="1px solid" borderColor="var(--border-primary)">
                         <VStack gap={4} align="stretch">
-                            <Heading size="md" color="white">Create Project</Heading>
+                            <Heading size="md" color="var(--text-heading)">Create Project</Heading>
 
                             {error && (
-                                <Box p={3} bg="red.900" borderRadius="md">
-                                    <Text color="red.200" fontSize="sm">{error}</Text>
+                                <Box p={3} bg="var(--bg-error)" borderRadius="md">
+                                    <Text color="var(--text-error)" fontSize="sm">{error}</Text>
                                 </Box>
                             )}
 
                             {/* Name */}
                             <Box>
-                                <Text fontSize="sm" color="gray.400" mb={1}>Project Name</Text>
+                                <Text fontSize="sm" color="var(--text-tertiary)" mb={1}>Project Name</Text>
                                 <Input
                                     placeholder="my-project"
                                     value={name}
                                     onChange={e => setName(e.target.value)}
-                                    bg="gray.700" border="none" color="white"
-                                    _placeholder={{ color: 'gray.500' }}
+                                    bg="var(--bg-input)" border="none" color="var(--text-heading)"
+                                    _placeholder={{ color: 'var(--text-muted)' }}
                                 />
                             </Box>
 
                             {/* Language */}
                             <Box>
-                                <Text fontSize="sm" color="gray.400" mb={1}>Language</Text>
+                                <Text fontSize="sm" color="var(--text-tertiary)" mb={1}>Language</Text>
                                 <NativeSelect.Root>
                                     <NativeSelect.Field
                                         value={language}
                                         onChange={e => setLanguage(e.target.value)}
-                                        bg="gray.700" border="none" color="white"
+                                        bg="var(--bg-input)" border="none" color="var(--text-heading)"
                                     >
                                         {LANGUAGES.map(l => (
-                                            <option key={l} value={l} style={{ background: '#1a202c' }}>{l}</option>
+                                            <option key={l} value={l} style={{ background: 'var(--option-bg)' }}>{l}</option>
                                         ))}
                                     </NativeSelect.Field>
                                 </NativeSelect.Root>
@@ -192,7 +192,7 @@ const ProjectsPage = () => {
 
                             {/* Source: new or clone */}
                             <Box>
-                                <Text fontSize="sm" color="gray.400" mb={2}>Source</Text>
+                                <Text fontSize="sm" color="var(--text-tertiary)" mb={2}>Source</Text>
                                 <HStack gap={2}>
                                     <Button
                                         size="sm" flex={1}
@@ -216,15 +216,15 @@ const ProjectsPage = () => {
                             {/* New project: template */}
                             {source === 'new' && (
                                 <Box>
-                                    <Text fontSize="sm" color="gray.400" mb={1}>Template</Text>
+                                    <Text fontSize="sm" color="var(--text-tertiary)" mb={1}>Template</Text>
                                     <NativeSelect.Root>
                                         <NativeSelect.Field
                                             value={template}
                                             onChange={e => setTemplate(e.target.value)}
-                                            bg="gray.700" border="none" color="white"
+                                            bg="var(--bg-input)" border="none" color="var(--text-heading)"
                                         >
                                             {TEMPLATES.map(t => (
-                                                <option key={t} value={t} style={{ background: '#1a202c' }}>{t}</option>
+                                                <option key={t} value={t} style={{ background: 'var(--option-bg)' }}>{t}</option>
                                             ))}
                                         </NativeSelect.Field>
                                     </NativeSelect.Root>
@@ -235,26 +235,26 @@ const ProjectsPage = () => {
                             {source === 'clone' && (
                                 <>
                                     <Box>
-                                        <Text fontSize="sm" color="gray.400" mb={1}>Repository URL</Text>
+                                        <Text fontSize="sm" color="var(--text-tertiary)" mb={1}>Repository URL</Text>
                                         <Input
                                             placeholder="https://github.com/user/repo.git"
                                             value={repoUrl}
                                             onChange={e => setRepoUrl(e.target.value)}
-                                            bg="gray.700" border="none" color="white"
-                                            _placeholder={{ color: 'gray.500' }}
+                                            bg="var(--bg-input)" border="none" color="var(--text-heading)"
+                                            _placeholder={{ color: 'var(--text-muted)' }}
                                         />
                                     </Box>
                                     <Box>
-                                        <Text fontSize="sm" color="gray.400" mb={1}>Provider (optional)</Text>
+                                        <Text fontSize="sm" color="var(--text-tertiary)" mb={1}>Provider (optional)</Text>
                                         <NativeSelect.Root>
                                             <NativeSelect.Field
                                                 value={provider}
                                                 onChange={e => setProvider(e.target.value)}
-                                                bg="gray.700" border="none" color="white"
+                                                bg="var(--bg-input)" border="none" color="var(--text-heading)"
                                             >
-                                                <option value="" style={{ background: '#1a202c' }}>Auto-detect</option>
+                                                <option value="" style={{ background: 'var(--option-bg)' }}>Auto-detect</option>
                                                 {PROVIDERS.filter(Boolean).map(p => (
-                                                    <option key={p} value={p} style={{ background: '#1a202c' }}>{p}</option>
+                                                    <option key={p} value={p} style={{ background: 'var(--option-bg)' }}>{p}</option>
                                                 ))}
                                             </NativeSelect.Field>
                                         </NativeSelect.Root>
@@ -264,29 +264,29 @@ const ProjectsPage = () => {
 
                             {/* Python-specific settings */}
                             {language === 'python' && (
-                                <Box p={4} bg="gray.750" borderRadius="md" border="1px solid" borderColor="gray.600">
-                                    <Text fontSize="sm" fontWeight="semibold" color="gray.300" mb={3}>Python Settings</Text>
+                                <Box p={4} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-secondary)">
+                                    <Text fontSize="sm" fontWeight="semibold" color="var(--text-secondary)" mb={3}>Python Settings</Text>
                                     <HStack gap={4}>
                                         <Box flex={1}>
-                                            <Text fontSize="xs" color="gray.400" mb={1}>Python Version</Text>
+                                            <Text fontSize="xs" color="var(--text-tertiary)" mb={1}>Python Version</Text>
                                             <NativeSelect.Root>
                                                 <NativeSelect.Field
                                                     value={pythonVersion}
                                                     onChange={e => setPythonVersion(e.target.value)}
-                                                    bg="gray.700" border="none" color="white"
+                                                    bg="var(--bg-input)" border="none" color="var(--text-heading)"
                                                 >
                                                     {['3.10', '3.11', '3.12', '3.13'].map(v => (
-                                                        <option key={v} value={v} style={{ background: '#1a202c' }}>{v}</option>
+                                                        <option key={v} value={v} style={{ background: 'var(--option-bg)' }}>{v}</option>
                                                     ))}
                                                 </NativeSelect.Field>
                                             </NativeSelect.Root>
                                         </Box>
                                         <Box flex={1}>
-                                            <Text fontSize="xs" color="gray.400" mb={1}>Venv Path</Text>
+                                            <Text fontSize="xs" color="var(--text-tertiary)" mb={1}>Venv Path</Text>
                                             <Input
                                                 value={venvPath}
                                                 onChange={e => setVenvPath(e.target.value)}
-                                                bg="gray.700" border="none" color="white"
+                                                bg="var(--bg-input)" border="none" color="var(--text-heading)"
                                                 size="sm"
                                             />
                                         </Box>
@@ -295,11 +295,11 @@ const ProjectsPage = () => {
                             )}
 
                             {/* Scaffold preview */}
-                            <Box p={4} bg="gray.900" borderRadius="md" border="1px solid" borderColor="gray.600">
-                                <Text fontSize="xs" fontWeight="semibold" color="gray.400" mb={2}>
+                            <Box p={4} bg="var(--bg-page)" borderRadius="md" border="1px solid" borderColor="var(--border-secondary)">
+                                <Text fontSize="xs" fontWeight="semibold" color="var(--text-tertiary)" mb={2}>
                                     Will create:
                                 </Text>
-                                <Text fontSize="xs" color="gray.500" fontFamily="mono" whiteSpace="pre" lineHeight="1.8">
+                                <Text fontSize="xs" color="var(--text-muted)" fontFamily="mono" whiteSpace="pre" lineHeight="1.8">
 {`${name || '<project>'}/
 ├── docs/
 │   ├── goal.md
@@ -329,11 +329,11 @@ const ProjectsPage = () => {
                 {/* Project list */}
                 <VStack gap={3} align="stretch">
                     {loading ? (
-                        <Text color="gray.400" textAlign="center" py={8}>Loading...</Text>
+                        <Text color="var(--text-tertiary)" textAlign="center" py={8}>Loading...</Text>
                     ) : projects.length === 0 ? (
                         <VStack py={12} gap={3}>
-                            <Text fontSize="lg" color="gray.400">No projects yet</Text>
-                            <Text fontSize="sm" color="gray.500">
+                            <Text fontSize="lg" color="var(--text-tertiary)">No projects yet</Text>
+                            <Text fontSize="sm" color="var(--text-muted)">
                                 Create a new project or clone an existing repository to get started.
                             </Text>
                         </VStack>

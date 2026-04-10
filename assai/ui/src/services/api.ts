@@ -1,4 +1,4 @@
-import type { AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Task, Worktree } from './types';
+import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, Task, Worktree } from './types';
 
 const API_BASE = '/api/agent';
 
@@ -38,10 +38,17 @@ export async function deleteConversation(id: string): Promise<void> {
 }
 
 // Converse (async — returns task_id + conversation, response streamed via WS)
-export async function converse(message: string, conversation = ''): Promise<{ task_id: string; conversation: string }> {
+export async function converse(
+    message: string,
+    conversation = '',
+    project = '',
+    parent_task = '',
+    provider = '',
+    agent = '',
+): Promise<{ task_id: string; conversation: string }> {
     return request<{ task_id: string; conversation: string }>('/converse', {
         method: 'POST',
-        body: JSON.stringify({ message, conversation }),
+        body: JSON.stringify({ message, conversation, project, parent_task, provider, agent }),
     });
 }
 
@@ -59,8 +66,18 @@ export async function clearHistory(conversation: string): Promise<void> {
 }
 
 // Tasks
-export async function listTasks(status?: string): Promise<Task[]> {
-    const qs = status ? `?status=${status}` : '';
+export interface ListTasksParams {
+    status?: string;
+    project?: string;
+    rootOnly?: boolean;
+}
+
+export async function listTasks(params: ListTasksParams = {}): Promise<Task[]> {
+    const parts: string[] = [];
+    if (params.status) parts.push(`status=${encodeURIComponent(params.status)}`);
+    if (params.project) parts.push(`project=${encodeURIComponent(params.project)}`);
+    if (params.rootOnly) parts.push('root_only=true');
+    const qs = parts.length ? `?${parts.join('&')}` : '';
     return request<Task[]>(`/tasks${qs}`);
 }
 
@@ -68,10 +85,20 @@ export async function getTask(id: string): Promise<Task> {
     return request<Task>(`/tasks/${id}`);
 }
 
-export async function createTask(title: string, description = '', priority = 0): Promise<Task> {
+export async function getTaskTree(id: string): Promise<Task[]> {
+    return request<Task[]>(`/tasks/${id}/tree`);
+}
+
+export async function createTask(
+    title: string,
+    description = '',
+    priority = 0,
+    project = '',
+    parent_task = '',
+): Promise<Task> {
     return request<Task>('/tasks', {
         method: 'POST',
-        body: JSON.stringify({ title, description, priority }),
+        body: JSON.stringify({ title, description, priority, project, parent_task, kind: 'task' }),
     });
 }
 
@@ -124,4 +151,94 @@ export async function getProject(id: string): Promise<Project> {
 
 export async function deleteProject(id: string): Promise<void> {
     await request(`/projects/${id}`, { method: 'DELETE' });
+}
+
+// Conversations update
+export async function updateConversation(
+    id: string,
+    fields: { title?: string; provider?: string; agent?: string },
+): Promise<ConversationMeta> {
+    return request<ConversationMeta>(`/conversations/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(fields),
+    });
+}
+
+// Providers
+export async function listProviders(): Promise<Provider[]> {
+    return request<Provider[]>('/providers');
+}
+
+export async function createProvider(data: Partial<Provider>): Promise<Provider> {
+    return request<Provider>('/providers', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function getProvider(name: string): Promise<Provider> {
+    return request<Provider>(`/providers/${name}`);
+}
+
+export async function updateProvider(name: string, data: Partial<Provider>): Promise<Provider> {
+    return request<Provider>(`/providers/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function deleteProvider(name: string): Promise<void> {
+    await request(`/providers/${name}`, { method: 'DELETE' });
+}
+
+export async function activateProvider(name: string): Promise<Provider> {
+    return request<Provider>(`/providers/${name}/activate`, { method: 'POST' });
+}
+
+// Agents
+export async function listAgents(): Promise<AgentDef[]> {
+    return request<AgentDef[]>('/agents');
+}
+
+export async function createAgent(data: Partial<AgentDef>): Promise<AgentDef> {
+    return request<AgentDef>('/agents', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function getAgent(name: string): Promise<AgentDef> {
+    return request<AgentDef>(`/agents/${name}`);
+}
+
+export async function updateAgent(name: string, data: Partial<AgentDef>): Promise<AgentDef> {
+    return request<AgentDef>(`/agents/${name}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function deleteAgent(name: string): Promise<void> {
+    await request(`/agents/${name}`, { method: 'DELETE' });
+}
+
+export async function getAgentTemplate(name: string): Promise<{ name: string; content: string }> {
+    return request(`/agents/${name}/template`);
+}
+
+export async function updateAgentTemplate(name: string, content: string): Promise<{ name: string; content: string }> {
+    return request(`/agents/${name}/template`, {
+        method: 'PUT',
+        body: JSON.stringify({ content }),
+    });
+}
+
+// Tool namespaces
+export interface ToolNamespace {
+    namespace: string;
+    tools: string[];
+}
+
+export async function listToolNamespaces(): Promise<ToolNamespace[]> {
+    return request<ToolNamespace[]>('/tools/namespaces');
 }

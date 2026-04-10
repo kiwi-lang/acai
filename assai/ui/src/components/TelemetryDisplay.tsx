@@ -521,14 +521,14 @@ const TelemetryDisplay = () => {
                 w="100%"
                 pt={3}
                 borderTop="1px solid"
-                borderColor="gray.700"
+                borderColor="var(--border-primary)"
             >
                 <VStack gap={1.5} align="flex-start">
                     <HStack justify="space-between" w="100%">
-                        <Text fontSize="xs" fontWeight="bold" color="gray.500" textTransform="uppercase" letterSpacing="wide">
+                        <Text fontSize="xs" fontWeight="bold" color="var(--text-muted)" textTransform="uppercase" letterSpacing="wide">
                             System Stats
                         </Text>
-                        <Text fontSize="xs" color="red.400">
+                        <Text fontSize="xs" color="var(--text-error)">
                             {error}
                         </Text>
                     </HStack>
@@ -544,14 +544,14 @@ const TelemetryDisplay = () => {
                 w="100%"
                 pt={3}
                 borderTop="1px solid"
-                borderColor="gray.700"
+                borderColor="var(--border-primary)"
             >
                 <VStack gap={1.5} align="flex-start">
                     <HStack justify="space-between" w="100%">
-                        <Text fontSize="xs" fontWeight="bold" color="gray.500" textTransform="uppercase" letterSpacing="wide">
+                        <Text fontSize="xs" fontWeight="bold" color="var(--text-muted)" textTransform="uppercase" letterSpacing="wide">
                             System Stats
                         </Text>
-                        <Text fontSize="xs" color="gray.500">
+                        <Text fontSize="xs" color="var(--text-muted)">
                             Loading...
                         </Text>
                     </HStack>
@@ -565,12 +565,12 @@ const TelemetryDisplay = () => {
             w="100%"
             pt={3}
             borderTop="1px solid"
-            borderColor="gray.700"
+            borderColor="var(--border-primary)"
         >
             <VStack gap={1.5} align="flex-start">
                 <HStack justify="space-between" w="100%">
                     <HStack gap={2}>
-                        <Text fontSize="xs" fontWeight="bold" color="gray.500" textTransform="uppercase" letterSpacing="wide">
+                        <Text fontSize="xs" fontWeight="bold" color="var(--text-muted)" textTransform="uppercase" letterSpacing="wide">
                             System Stats
                         </Text>
                         {error && (
@@ -597,10 +597,10 @@ const TelemetryDisplay = () => {
                             px={1}
                             fontSize="xs"
                             textAlign="center"
-                            borderColor="gray.600"
-                            _focus={{ borderColor: 'gray.500' }}
+                            borderColor="var(--border-secondary)"
+                            _focus={{ borderColor: 'var(--border-secondary)' }}
                         />
-                        <Text fontSize="xs" color="gray.500" w="15px">
+                        <Text fontSize="xs" color="var(--text-muted)" w="15px">
                             s
                         </Text>
                         {/* <IconButton
@@ -629,37 +629,37 @@ const TelemetryDisplay = () => {
                 <Box ref={containerRef} w="100%">
                     <VStack gap={1.5} align="stretch" w="100%">
                         <HStack justify="space-between" fontSize="xs" align="center" w="100%">
-                            <Text color="gray.400" w="57px" fontWeight="medium" flexShrink={0}>
+                            <Text color="var(--text-tertiary)" w="57px" fontWeight="medium" flexShrink={0}>
                                 CPU:
                             </Text>
                             <Box flex={1} display="flex" justifyContent="center">
-                                <Sparkline values={cpuHistory} color="#90cdf4" fill={fillGraphs} width={sparklineWidth} />
+                                <Sparkline values={cpuHistory} color="var(--spark-cpu)" fill={fillGraphs} width={sparklineWidth} />
                             </Box>
-                            <Text color="blue.300" w="40px" fontFamily="mono" textAlign="right" flexShrink={0}>
+                            <Text color="var(--stat-cpu)" w="40px" fontFamily="mono" textAlign="right" flexShrink={0}>
                                 {cpuLoadPercent.toFixed(1)}%
                             </Text>
                         </HStack>
                         {firstGpu && (
                             <>
                                 <HStack justify="space-between" fontSize="xs" align="center" w="100%">
-                                    <Text color="gray.400" w="57px" fontWeight="medium" flexShrink={0}>
+                                    <Text color="var(--text-tertiary)" w="57px" fontWeight="medium" flexShrink={0}>
                                         GPU:
                                     </Text>
                                     <Box flex={1} display="flex" justifyContent="center">
-                                        <Sparkline values={gpuHistory} color="#c084fc" fill={fillGraphs} width={sparklineWidth} />
+                                        <Sparkline values={gpuHistory} color="var(--spark-gpu)" fill={fillGraphs} width={sparklineWidth} />
                                     </Box>
-                                    <Text color="purple.300" w="40px" fontFamily="mono" textAlign="right" flexShrink={0}>
+                                    <Text color="var(--stat-gpu)" w="40px" fontFamily="mono" textAlign="right" flexShrink={0}>
                                         {(firstGpu.load * 100).toFixed(1)}%
                                     </Text>
                                 </HStack>
                                 <HStack justify="space-between" fontSize="xs" align="center" w="100%">
-                                    <Text color="gray.400" w="57px" fontWeight="medium" flexShrink={0}>
+                                    <Text color="var(--text-tertiary)" w="57px" fontWeight="medium" flexShrink={0}>
                                         GPU Mem:
                                     </Text>
                                     <Box flex={1} display="flex" justifyContent="center">
-                                        <Sparkline values={gpuMemoryHistory} color="#86efac" fill={fillGraphs} width={sparklineWidth} />
+                                        <Sparkline values={gpuMemoryHistory} color="var(--spark-gpu-mem)" fill={fillGraphs} width={sparklineWidth} />
                                     </Box>
-                                    <Text color="green.300" w="40px" fontFamily="mono" textAlign="right" flexShrink={0}>
+                                    <Text color="var(--stat-gpu-mem)" w="40px" fontFamily="mono" textAlign="right" flexShrink={0}>
                                         {gpuMemoryPercent.toFixed(1)}%
                                     </Text>
                                 </HStack>
@@ -667,15 +667,15 @@ const TelemetryDisplay = () => {
                         )}
                         {telemetry.network && (
                             <HStack justify="space-between" fontSize="xs" align="center" w="100%">
-                                <Text color="gray.400" w="57px" fontWeight="medium" flexShrink={0}>
+                                <Text color="var(--text-tertiary)" w="57px" fontWeight="medium" flexShrink={0}>
                                     Network:
                                 </Text>
                                 <Box flex={1} display="flex" justifyContent="center">
                                     <BidirectionalSparkline
                                         uploadValues={networkUploadHistory}
                                         downloadValues={networkDownloadHistory}
-                                        uploadColor="#fbbf24"
-                                        downloadColor="#60a5fa"
+                                        uploadColor="var(--spark-net-up)"
+                                        downloadColor="var(--spark-net-down)"
                                         fill={fillGraphs}
                                         width={sparklineWidth}
                                     />
@@ -687,10 +687,10 @@ const TelemetryDisplay = () => {
                                 >
                                     <Box as="span" cursor="help">
                                         <VStack gap={0} align="flex-end" flexShrink={0} w="40px">
-                                            <Text color="yellow.300" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
+                                            <Text color="var(--stat-net-up)" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
                                                 ↑{networkUploadRate.toFixed(2)}
                                             </Text>
-                                            <Text color="blue.300" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
+                                            <Text color="var(--stat-net-down)" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
                                                 ↓{networkDownloadRate.toFixed(2)}
                                             </Text>
                                         </VStack>
@@ -700,15 +700,15 @@ const TelemetryDisplay = () => {
                         )}
                         {telemetry.disk && (
                             <HStack justify="space-between" fontSize="xs" align="center" w="100%">
-                                <Text color="gray.400" w="57px" fontWeight="medium" flexShrink={0}>
+                                <Text color="var(--text-tertiary)" w="57px" fontWeight="medium" flexShrink={0}>
                                     Disk R/W:
                                 </Text>
                                 <Box flex={1} display="flex" justifyContent="center">
                                     <BidirectionalSparkline
                                         uploadValues={diskReadTimeHistory}
                                         downloadValues={diskWriteTimeHistory}
-                                        uploadColor="#14b8a6"
-                                        downloadColor="#f97316"
+                                        uploadColor="var(--spark-disk-read)"
+                                        downloadColor="var(--spark-disk-write)"
                                         fill={fillGraphs}
                                         width={sparklineWidth}
                                     />
@@ -720,10 +720,10 @@ const TelemetryDisplay = () => {
                                 >
                                     <Box as="span" cursor="help">
                                         <VStack gap={0} align="flex-end" flexShrink={0} w="40px">
-                                            <Text color="teal.300" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
+                                            <Text color="var(--stat-disk-read)" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
                                                 {diskReadTimeRate.toFixed(1)}R
                                             </Text>
-                                            <Text color="orange.300" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
+                                            <Text color="var(--stat-disk-write)" fontFamily="mono" textAlign="right" fontSize="xs" lineHeight="1">
                                                 {diskWriteTimeRate.toFixed(1)}W
                                             </Text>
                                         </VStack>

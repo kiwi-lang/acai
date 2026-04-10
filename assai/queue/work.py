@@ -19,11 +19,13 @@ from datetime import datetime, timezone
 from sqlalchemy import (
     Column,
     DateTime,
+    ForeignKey,
     Integer,
     String,
     Text,
     create_engine,
     desc,
+    or_,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -68,6 +70,7 @@ class Task(Base):
     description = Column(Text, default="")
     status      = Column(String, default=TaskStatus.PENDING, index=True)
     priority    = Column(Integer, default=0)
+    spec        = Column(Text, default="")
     spec_path   = Column(String, default="")
     context_path = Column(String, default="")
     result_path = Column(String, default="")
@@ -79,6 +82,10 @@ class Task(Base):
     assigned_to = Column(String, default="")
     depends_on  = Column(String, default="")
     error_log   = Column(Text, default="")
+    project     = Column(String, default="", index=True)
+    agent       = Column(String, default="")
+    parent_task = Column(String, ForeignKey("tasks.id"), nullable=True, default=None)
+    root_task   = Column(String, ForeignKey("tasks.id"), nullable=True, default=None, index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -97,7 +104,20 @@ class WorkQueue:
     def __init__(self, url: str = "sqlite:///work.db"):
         self.engine = create_engine(url)
         Base.metadata.create_all(self.engine)
+        self._migrate(self.engine)
         self._Session = sessionmaker(bind=self.engine)
+
+    @staticmethod
+    def _migrate(engine):
+        """Add columns that may be missing in older databases."""
+        from sqlalchemy import inspect as sa_inspect, text
+        inspector = sa_inspect(engine)
+        cols = {c["name"] for c in inspector.get_columns("tasks")}
+        with engine.begin() as conn:
+            if "agent" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE tasks ADD COLUMN agent VARCHAR DEFAULT ''"
+                ))
 
     def session(self) -> Session:
         return self._Session()
@@ -108,8 +128,11 @@ class WorkQueue:
 
     def push(self, title: str, description: str = "",
              priority: int = 0, depends_on: list[str] | None = None,
-             max_retries: int = 3, spec_path: str = "",
-             kind: str = "llm_complete", gpu: int = 0) -> Task:
+             max_retries: int = 3, spec: str = "", spec_path: str = "",
+             kind: str = "llm_complete", gpu: int = 0,
+             project: str = "", agent: str = "",
+             parent_task: str = "",
+             root_task: str = "") -> Task:
         """Insert a new task and return it."""
         deps = ",".join(depends_on) if depends_on else ""
         task = Task(
@@ -120,7 +143,12 @@ class WorkQueue:
             priority=priority,
             depends_on=deps,
             max_retries=max_retries,
+            spec=spec,
             spec_path=spec_path,
+            project=project,
+            agent=agent,
+            parent_task=parent_task or None,
+            root_task=root_task or None,
         )
         with self.session() as s:
             s.add(task)
@@ -163,15 +191,41 @@ class WorkQueue:
                 s.expunge(task)
             return task
 
-    def list(self, status: str | None = None) -> list[Task]:
+    def list(self, status: str | None = None,
+             project: str | None = None,
+             root_only: bool = False) -> list[Task]:
         with self.session() as s:
             q = s.query(Task).order_by(desc(Task.priority), Task.created_at)
             if status is not None:
                 q = q.filter(Task.status == status)
+            if project is not None:
+                q = q.filter(Task.project == project)
+            if root_only:
+                q = q.filter(Task.parent_task.is_(None))
             tasks = q.all()
             for t in tasks:
                 s.expunge(t)
             return tasks
+
+    def list_tree(self, root_id: str) -> list[Task]:
+        """Return the root task and all its descendants in one query."""
+        with self.session() as s:
+            tasks = (
+                s.query(Task)
+                .filter(or_(Task.id == root_id, Task.root_task == root_id))
+                .order_by(Task.created_at)
+                .all()
+            )
+            for t in tasks:
+                s.expunge(t)
+            return tasks
+
+    def resolve_root(self, parent_id: str) -> str:
+        """Given a parent task id, return the root_task id for a new child."""
+        parent = self.get(parent_id)
+        if parent is None:
+            return ""
+        return parent.root_task or parent.id
 
     # ------------------------------------------------------------------
     # Dependency resolution

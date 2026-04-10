@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo, ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
 import type { Task, AgentEvent, AgentStatus, StreamChunk, Capabilities, TelemetryData } from '../services/types';
+import { toaster } from '../components/ui/toaster';
 
 interface StreamError {
     task_id: string;
@@ -76,6 +77,17 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
         });
         sock.on('stream_error', (data: StreamError) => {
             errorListeners.current.forEach(cb => cb(data));
+        });
+
+        sock.on('toast', (data: { message: string; title?: string; status?: string; duration?: number }) => {
+            const type = (data.status === 'success' || data.status === 'error' || data.status === 'warning')
+                ? data.status : 'info';
+            toaster.create({
+                title: data.title || undefined,
+                description: data.message,
+                type,
+                duration: data.duration || 5000,
+            });
         });
 
         return () => {

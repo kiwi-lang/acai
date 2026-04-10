@@ -46,6 +46,9 @@ class Uber(Command):
             create_worker_blueprint,
         )
 
+        if args.debug:
+            config.dump_rendered_request = True
+
         app = Flask(__name__)
         app, socketio, queue, events, chat, config, stream_tracker = routes(
             app, config, prefix=args.prefix,

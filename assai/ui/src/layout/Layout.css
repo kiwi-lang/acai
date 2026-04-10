@@ -1,16 +1,14 @@
-/* ChatGPT-inspired Layout Styles */
-
 .layout {
   display: flex;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
-  background-color: #1a202c;
+  background-color: var(--bg-page);
 }
 
 .sidebar {
   width: 260px;
-  background-color: #171717;
+  background-color: var(--bg-sidebar);
   position: fixed;
   height: 100vh;
   left: 0;
@@ -27,7 +25,6 @@
   overflow: hidden;
 }
 
-/* Mobile responsiveness */
 @media (max-width: 768px) {
   .sidebar {
     transform: translateX(-100%);

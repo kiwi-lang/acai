@@ -14,7 +14,10 @@ Usage::
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 from argklass import argument
 from argklass.cli import CommandLineInterface
@@ -48,6 +51,12 @@ def setup(args):
 
     if args.config:
         load_config(args.config)
+    else:
+        ws = os.path.abspath(os.environ.get("ASSAI_WORKSPACE", "workspace"))
+        auto_yaml = os.path.join(ws, "assai.yaml")
+        if os.path.isfile(auto_yaml):
+            log.info("auto-discovered config: %s", auto_yaml)
+            load_config(auto_yaml)
 
     overrides = {}
     if args.db:

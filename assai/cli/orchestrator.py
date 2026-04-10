@@ -32,6 +32,9 @@ class Orchestrator(Command):
         from flask import Flask
         from assai.agents.server import routes
 
+        if args.debug:
+            config.dump_rendered_request = True
+
         app = Flask(__name__)
         app, socketio, queue, events, chat, config, tracker = routes(
             app, config, prefix=args.prefix,

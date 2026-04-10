@@ -484,6 +484,11 @@ class OpenAICompatibleLLM(LLM):
         return resp.json()["choices"][0]["message"]
 
     def stream(self, messages, **kwargs):
+        """Stream tokens from the LLM.
+
+        After the generator is exhausted, ``self.last_tool_calls`` holds
+        any tool-call objects the model returned (or ``None``).
+        """
         payload = self._payload(messages, stream=True, **kwargs)
         if kwargs.get("tools"):
             payload["tools"] = kwargs["tools"]
@@ -496,6 +501,9 @@ class OpenAICompatibleLLM(LLM):
         )
         resp.raise_for_status()
 
+        tool_calls_acc: dict[int, dict] = {}
+        self.last_tool_calls = None
+
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):
                 continue
@@ -504,15 +512,36 @@ class OpenAICompatibleLLM(LLM):
                 break
             try:
                 data = json.loads(data_str)
-                content = (
-                    data.get("choices", [{}])[0]
-                    .get("delta", {})
-                    .get("content", "")
-                )
+                delta = data.get("choices", [{}])[0].get("delta", {})
+
+                content = delta.get("content", "")
                 if content:
                     yield content
+
+                for tc in delta.get("tool_calls", []):
+                    idx = tc.get("index", 0)
+                    if idx not in tool_calls_acc:
+                        tool_calls_acc[idx] = {
+                            "id": tc.get("id", ""),
+                            "type": "function",
+                            "function": {"name": "", "arguments": ""},
+                        }
+                    entry = tool_calls_acc[idx]
+                    if tc.get("id"):
+                        entry["id"] = tc["id"]
+                    fn = tc.get("function", {})
+                    if fn.get("name"):
+                        entry["function"]["name"] = fn["name"]
+                    if fn.get("arguments"):
+                        entry["function"]["arguments"] += fn["arguments"]
+
             except (json.JSONDecodeError, IndexError):
                 continue
+
+        if tool_calls_acc:
+            self.last_tool_calls = [
+                tool_calls_acc[i] for i in sorted(tool_calls_acc)
+            ]
 
 
 def create_llm(config: LLMConfig) -> LLM:

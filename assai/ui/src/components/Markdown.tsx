@@ -15,7 +15,7 @@ const Markdown = memo(({ content, fontSize = 'sm' }: MarkdownProps) => (
         className="markdown-body"
         fontSize={fontSize}
         lineHeight="1.7"
-        color="gray.200"
+        color="var(--text-primary)"
         wordBreak="break-word"
         css={{
             '& p': { marginBottom: '0.5em' },
@@ -23,24 +23,24 @@ const Markdown = memo(({ content, fontSize = 'sm' }: MarkdownProps) => (
             '& ul, & ol': { paddingLeft: '1.5em', marginBottom: '0.5em' },
             '& li': { marginBottom: '0.2em' },
             '& li > p': { marginBottom: '0.2em' },
-            '& h1': { fontSize: '1.4em', fontWeight: 700, marginTop: '0.8em', marginBottom: '0.4em', color: 'white' },
-            '& h2': { fontSize: '1.2em', fontWeight: 700, marginTop: '0.7em', marginBottom: '0.3em', color: 'white' },
-            '& h3': { fontSize: '1.05em', fontWeight: 600, marginTop: '0.6em', marginBottom: '0.3em', color: 'white' },
+            '& h1': { fontSize: '1.4em', fontWeight: 700, marginTop: '0.8em', marginBottom: '0.4em', color: 'var(--text-heading)' },
+            '& h2': { fontSize: '1.2em', fontWeight: 700, marginTop: '0.7em', marginBottom: '0.3em', color: 'var(--text-heading)' },
+            '& h3': { fontSize: '1.05em', fontWeight: 600, marginTop: '0.6em', marginBottom: '0.3em', color: 'var(--text-heading)' },
             '& blockquote': {
-                borderLeft: '3px solid var(--chakra-colors-gray-600)',
+                borderLeft: '3px solid var(--border-secondary)',
                 paddingLeft: '0.8em',
-                color: 'var(--chakra-colors-gray-400)',
+                color: 'var(--text-tertiary)',
                 marginBottom: '0.5em',
             },
-            '& hr': { borderColor: 'var(--chakra-colors-gray-700)', margin: '0.8em 0' },
+            '& hr': { borderColor: 'var(--border-primary)', margin: '0.8em 0' },
             '& table': { borderCollapse: 'collapse', width: '100%', marginBottom: '0.5em', fontSize: '0.9em' },
             '& th, & td': {
-                border: '1px solid var(--chakra-colors-gray-600)',
+                border: '1px solid var(--border-secondary)',
                 padding: '0.3em 0.6em',
                 textAlign: 'left',
             },
-            '& th': { background: 'var(--chakra-colors-gray-700)', fontWeight: 600 },
-            '& a': { color: 'var(--chakra-colors-blue-300)', textDecoration: 'underline' },
+            '& th': { background: 'var(--border-primary)', fontWeight: 600 },
+            '& a': { color: 'var(--text-link)', textDecoration: 'underline' },
             '& img': { maxWidth: '100%', borderRadius: '6px' },
         }}
     >
@@ -71,8 +71,8 @@ const Markdown = memo(({ content, fontSize = 'sm' }: MarkdownProps) => (
                     return (
                         <Box
                             as="code"
-                            bg="gray.700"
-                            color="green.200"
+                            bg="var(--bg-code-inline)"
+                            color="var(--text-code)"
                             px="0.3em"
                             py="0.1em"
                             borderRadius="sm"

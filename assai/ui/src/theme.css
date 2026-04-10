@@ -1,0 +1,155 @@
+/* ===================================================================
+   ASSAI Theme — CSS Custom Properties
+   Light = :root, Dark = .dark  (toggled via next-themes class)
+   =================================================================== */
+
+:root {
+  /* ---- Backgrounds ---- */
+  --bg-page:            #ffffff;
+  --bg-sidebar:         #f9fafb;
+  --bg-card:            #ffffff;
+  --bg-card-hover:      #f3f4f6;
+  --bg-input:           #f3f4f6;
+  --bg-elevated:        #f9fafb;
+  --bg-kanban-col:      #f3f4f6;
+  --bg-msg-user:        #ede9fe;
+  --bg-msg-assistant:   #f9fafb;
+  --bg-code-inline:     #f3f4f6;
+  --bg-error:           #fef2f2;
+  --bg-overlay:         rgba(0, 0, 0, 0.2);
+  --bg-active:          #e5e7eb;
+  --bg-hover:           #f3f4f6;
+  --bg-brand-icon:      #38a169;
+
+  /* ---- Borders ---- */
+  --border-primary:     #e5e7eb;
+  --border-secondary:   #d1d5db;
+  --border-input:       #d1d5db;
+  --border-msg-user:    #d6bcfa;
+  --border-msg-assistant:#e5e7eb;
+
+  /* ---- Text ---- */
+  --text-primary:       #1a202c;
+  --text-secondary:     #4a5568;
+  --text-tertiary:      #718096;
+  --text-muted:         #a0aec0;
+  --text-inverse:       #ffffff;
+  --text-heading:       #1a202c;
+  --text-link:          #3182ce;
+  --text-code:          #276749;
+  --text-error:         #c53030;
+  --text-user-label:    #6b46c1;
+  --text-assistant-label:#276749;
+  --text-empty:         #a0aec0;
+
+  /* ---- Accent / Brand ---- */
+  --accent:             #38a169;
+  --accent-hover:       #2f855a;
+  --accent-subtle:      #c6f6d5;
+
+  /* ---- Scrollbar ---- */
+  --scrollbar-thumb:    #d1d5db;
+  --scrollbar-hover:    #9ca3af;
+
+  /* ---- Telemetry / Stats ---- */
+  --stat-cpu:           #2563eb;
+  --stat-gpu:           #7c3aed;
+  --stat-gpu-mem:       #16a34a;
+  --stat-net-up:        #ca8a04;
+  --stat-net-down:      #2563eb;
+  --stat-disk-read:     #0d9488;
+  --stat-disk-write:    #ea580c;
+  --spark-cpu:          #3b82f6;
+  --spark-gpu:          #8b5cf6;
+  --spark-gpu-mem:      #22c55e;
+  --spark-net-up:       #eab308;
+  --spark-net-down:     #3b82f6;
+  --spark-disk-read:    #14b8a6;
+  --spark-disk-write:   #f97316;
+
+  /* ---- Misc ---- */
+  --focus-ring:         #48bb78;
+  --cursor-blink:       #38a169;
+  --option-bg:          #ffffff;
+  --badge-ghost-bg:     #f3f4f6;
+}
+
+.dark {
+  --bg-page:            #171717;
+  --bg-sidebar:         #171717;
+  --bg-card:            #262626;
+  --bg-card-hover:      #333333;
+  --bg-input:           #2d2d2d;
+  --bg-elevated:        #1e1e1e;
+  --bg-kanban-col:      #1a1a1a;
+  --bg-msg-user:        #44337a;
+  --bg-msg-assistant:   #262626;
+  --bg-code-inline:     #2d3748;
+  --bg-error:           #742a2a;
+  --bg-overlay:         rgba(0, 0, 0, 0.6);
+  --bg-active:          #404040;
+  --bg-hover:           #333333;
+  --bg-brand-icon:      #48bb78;
+
+  --border-primary:     #404040;
+  --border-secondary:   #525252;
+  --border-input:       #525252;
+  --border-msg-user:    #6b46c1;
+  --border-msg-assistant:#404040;
+
+  --text-primary:       #f5f5f5;
+  --text-secondary:     #d4d4d4;
+  --text-tertiary:      #a3a3a3;
+  --text-muted:         #737373;
+  --text-inverse:       #171717;
+  --text-heading:       #ffffff;
+  --text-link:          #63b3ed;
+  --text-code:          #68d391;
+  --text-error:         #feb2b2;
+  --text-user-label:    #d6bcfa;
+  --text-assistant-label:#68d391;
+  --text-empty:         #525252;
+
+  --accent:             #48bb78;
+  --accent-hover:       #38a169;
+  --accent-subtle:      #22543d;
+
+  --scrollbar-thumb:    #525252;
+  --scrollbar-hover:    #6b7280;
+
+  --stat-cpu:           #90cdf4;
+  --stat-gpu:           #d6bcfa;
+  --stat-gpu-mem:       #86efac;
+  --stat-net-up:        #fde68a;
+  --stat-net-down:      #93c5fd;
+  --stat-disk-read:     #5eead4;
+  --stat-disk-write:    #fdba74;
+  --spark-cpu:          #90cdf4;
+  --spark-gpu:          #c084fc;
+  --spark-gpu-mem:      #86efac;
+  --spark-net-up:       #fbbf24;
+  --spark-net-down:     #60a5fa;
+  --spark-disk-read:    #14b8a6;
+  --spark-disk-write:   #f97316;
+
+  --focus-ring:         #48bb78;
+  --cursor-blink:       #48bb78;
+  --option-bg:          #1a202c;
+  --badge-ghost-bg:     #333333;
+}
+
+/* Give small buttons and badges more breathing room */
+.chakra-button {
+  padding-inline: 1rem;
+  gap: 0.5rem;
+}
+
+.chakra-badge {
+  padding-inline: 0.5rem;
+  padding-block: 0.125rem;
+}
+
+/* Blink animation for streaming cursor */
+@keyframes blink {
+  50% { opacity: 0; }
+}

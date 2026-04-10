@@ -25,13 +25,16 @@ def _new_id() -> str:
 
 
 class ConversationMeta:
-    __slots__ = ("id", "title", "project", "created_at")
+    __slots__ = ("id", "title", "project", "provider", "agent", "created_at")
 
     def __init__(self, id: str, title: str = "", project: str = "",
+                 provider: str = "auto", agent: str = "",
                  created_at: float | None = None):
         self.id = id
         self.title = title or id
         self.project = project
+        self.provider = provider or "auto"
+        self.agent = agent or ""
         self.created_at = created_at or time.time()
 
     def to_dict(self) -> dict:
@@ -39,6 +42,8 @@ class ConversationMeta:
             "id": self.id,
             "title": self.title,
             "project": self.project,
+            "provider": self.provider,
+            "agent": self.agent,
             "created_at": self.created_at,
         }
 
@@ -48,6 +53,8 @@ class ConversationMeta:
             id=d["id"],
             title=d.get("title", d["id"]),
             project=d.get("project", ""),
+            provider=d.get("provider", "auto"),
+            agent=d.get("agent", ""),
             created_at=d.get("created_at"),
         )
 
@@ -77,9 +84,11 @@ class ChatStore:
     # Conversation lifecycle
     # ------------------------------------------------------------------
 
-    def create(self, title: str = "", project: str = "") -> ConversationMeta:
+    def create(self, title: str = "", project: str = "",
+               provider: str = "auto", agent: str = "") -> ConversationMeta:
         conv_id = _new_id()
-        meta = ConversationMeta(id=conv_id, title=title, project=project)
+        meta = ConversationMeta(id=conv_id, title=title, project=project,
+                                provider=provider, agent=agent)
         d = self._dir(conv_id)
         with self._lock:
             os.makedirs(d, exist_ok=True)

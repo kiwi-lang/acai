@@ -1,5 +1,3 @@
-/* ASSAI - ChatGPT-inspired Interface Styles */
-
 * {
   margin: 0;
   padding: 0;
@@ -17,6 +15,8 @@ body,
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: var(--bg-page);
+  color: var(--text-primary);
 }
 
 .App {
@@ -35,7 +35,6 @@ code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
 }
 
-/* Scrollbar Styles */
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -46,16 +45,15 @@ code {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #4a5568;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #718096;
+  background: var(--scrollbar-hover);
 }
 
-/* Focus styles */
 *:focus-visible {
-  outline: 2px solid #48bb78;
+  outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }

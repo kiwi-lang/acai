@@ -1,0 +1,824 @@
+import { useState, useEffect, useCallback } from 'react';
+import {
+    Box, VStack, HStack, Text, Heading, Badge, IconButton, Input,
+    NativeSelect, Spinner, Textarea,
+} from '@chakra-ui/react';
+import {
+    listAgents, createAgent, updateAgent, deleteAgent,
+    getAgentTemplate, updateAgentTemplate, listProviders,
+    listToolNamespaces,
+} from '../services/api';
+import type { ToolNamespace } from '../services/api';
+import type { AgentDef, Provider, SandboxConfig } from '../services/types';
+
+const ROLES = ['worker', 'curator', 'manager'];
+const SANDBOX_TYPES = ['none', 'docker', 'bubblewrap', 'nsjail'];
+
+const DEFAULT_TEMPLATE = `{%- set system_prompt -%}
+You are {{ agent.name }}{% if agent.description %}, {{ agent.description }}{% endif %}.
+{% if task.project_obj %}
+
+You are working on project **{{ task.project_obj.name }}** ({{ task.project_obj.language }}).
+{% if task.project_spec %}
+
+## Project Specification
+{{ task.project_spec }}
+{% endif %}
+{% endif %}
+{% if tools_description %}
+
+## Available Tools
+{{ tools_description }}
+{% endif %}
+
+Answer questions, suggest plans, and create tasks when asked.
+{%- endset -%}
+[
+  {"role": "system", "content": {{ system_prompt | tojson }}}
+{% for msg in messages %},
+  {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
+{% endfor %}
+]
+`;
+
+const PlusIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+        <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+    </svg>
+);
+
+const TrashIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polyline points="3 6 5 6 21 6" /><path d="M19 6l-1 14H6L5 6" />
+        <path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4h6v2" />
+    </svg>
+);
+
+const EditIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+    </svg>
+);
+
+const ChevronDown = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polyline points="6 9 12 15 18 9" />
+    </svg>
+);
+
+const ChevronUp = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polyline points="18 15 12 9 6 15" />
+    </svg>
+);
+
+const OUTPUT_FORMATS = ['messages', 'text'] as const;
+
+interface AgentFormData {
+    name: string;
+    description: string;
+    role: string;
+    avatar: string;
+    provider: string;
+    output_format: string;
+    temperature: string;
+    max_tokens: string;
+    tools: string;
+    context_sources: string;
+    max_iterations: string;
+    approval_required: boolean;
+    tags: string;
+    sandbox_type: string;
+    sandbox_network: boolean;
+    sandbox_gpu: boolean;
+    sandbox_timeout: string;
+    sandbox_memory_limit: string;
+    sandbox_writable_paths: string;
+    sandbox_readonly_paths: string;
+}
+
+const emptyForm: AgentFormData = {
+    name: '', description: '', role: 'worker', avatar: '',
+    provider: 'auto', output_format: 'messages',
+    temperature: '0.7', max_tokens: '4096',
+    tools: '', context_sources: '', max_iterations: '20',
+    approval_required: false, tags: '',
+    sandbox_type: 'none', sandbox_network: true, sandbox_gpu: false,
+    sandbox_timeout: '120', sandbox_memory_limit: '4G',
+    sandbox_writable_paths: '', sandbox_readonly_paths: '',
+};
+
+const ROLE_COLORS: Record<string, string> = {
+    worker: 'blue',
+    curator: 'purple',
+    manager: 'orange',
+};
+
+const AgentsPage = () => {
+    const [agents, setAgents] = useState<AgentDef[]>([]);
+    const [providers, setProviders] = useState<Provider[]>([]);
+    const [toolNamespaces, setToolNamespaces] = useState<ToolNamespace[]>([]);
+    const [error, setError] = useState('');
+    const [showForm, setShowForm] = useState(false);
+    const [editingName, setEditingName] = useState<string | null>(null);
+    const [form, setForm] = useState<AgentFormData>(emptyForm);
+    const [formError, setFormError] = useState('');
+    const [busy, setBusy] = useState(false);
+    const [showSandbox, setShowSandbox] = useState(false);
+    const [templateContent, setTemplateContent] = useState('');
+    const [templateDirty, setTemplateDirty] = useState(false);
+    const [savingTemplate, setSavingTemplate] = useState(false);
+
+    const refresh = useCallback(() => {
+        listAgents().then(setAgents).catch(err => setError(err instanceof Error ? err.message : 'Failed to load'));
+    }, []);
+
+    useEffect(() => {
+        document.title = 'Agents - ASSAI';
+        refresh();
+        listProviders().then(setProviders).catch(() => {});
+        listToolNamespaces().then(setToolNamespaces).catch(() => {});
+    }, [refresh]);
+
+    const formToPayload = (f: AgentFormData) => {
+        const model_overrides: Record<string, any> = {};
+        const temp = parseFloat(f.temperature);
+        if (!isNaN(temp)) model_overrides.temperature = temp;
+        const mt = parseInt(f.max_tokens);
+        if (!isNaN(mt)) model_overrides.max_tokens = mt;
+
+        const sandbox: SandboxConfig = {
+            type: f.sandbox_type,
+            network: f.sandbox_network,
+            gpu: f.sandbox_gpu,
+            timeout: parseInt(f.sandbox_timeout) || 120,
+            memory_limit: f.sandbox_memory_limit || '4G',
+            writable_paths: f.sandbox_writable_paths ? f.sandbox_writable_paths.split(',').map(s => s.trim()).filter(Boolean) : [],
+            readonly_paths: f.sandbox_readonly_paths ? f.sandbox_readonly_paths.split(',').map(s => s.trim()).filter(Boolean) : [],
+        };
+
+        return {
+            name: f.name.trim(),
+            description: f.description,
+            role: f.role,
+            avatar: f.avatar,
+            provider: f.provider,
+            output_format: f.output_format,
+            model_overrides,
+            tools: f.tools ? f.tools.split(',').map(s => s.trim()).filter(Boolean) : [],
+            context_sources: f.context_sources ? f.context_sources.split(',').map(s => s.trim()).filter(Boolean) : [],
+            max_iterations: parseInt(f.max_iterations) || 20,
+            approval_required: f.approval_required,
+            tags: f.tags ? f.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
+            sandbox,
+        };
+    };
+
+    const openAdd = () => {
+        setForm(emptyForm);
+        setEditingName(null);
+        setFormError('');
+        setShowForm(true);
+        setShowSandbox(false);
+        setTemplateContent(DEFAULT_TEMPLATE);
+        setTemplateDirty(false);
+    };
+
+    const openEdit = async (a: AgentDef) => {
+        setForm({
+            name: a.name,
+            description: a.description,
+            role: a.role,
+            avatar: a.avatar,
+            provider: a.provider,
+            output_format: a.output_format || 'messages',
+            temperature: String(a.model_overrides?.temperature ?? '0.7'),
+            max_tokens: String(a.model_overrides?.max_tokens ?? '4096'),
+            tools: a.tools.join(', '),
+            context_sources: a.context_sources.join(', '),
+            max_iterations: String(a.max_iterations),
+            approval_required: a.approval_required,
+            tags: a.tags.join(', '),
+            sandbox_type: a.sandbox?.type ?? 'none',
+            sandbox_network: a.sandbox?.network ?? true,
+            sandbox_gpu: a.sandbox?.gpu ?? false,
+            sandbox_timeout: String(a.sandbox?.timeout ?? 120),
+            sandbox_memory_limit: a.sandbox?.memory_limit ?? '4G',
+            sandbox_writable_paths: (a.sandbox?.writable_paths ?? []).join(', '),
+            sandbox_readonly_paths: (a.sandbox?.readonly_paths ?? []).join(', '),
+        });
+        setEditingName(a.name);
+        setFormError('');
+        setShowForm(true);
+        setShowSandbox(false);
+
+        try {
+            const { content } = await getAgentTemplate(a.name);
+            setTemplateContent(content);
+        } catch {
+            setTemplateContent('');
+        }
+        setTemplateDirty(false);
+    };
+
+    const handleSubmit = async () => {
+        if (!form.name.trim()) { setFormError('Name is required'); return; }
+        setBusy(true);
+        setFormError('');
+        try {
+            const payload = formToPayload(form);
+            if (editingName) {
+                await updateAgent(editingName, payload);
+                if (templateDirty) {
+                    await updateAgentTemplate(editingName, templateContent);
+                }
+            } else {
+                await createAgent(payload);
+                const slug = payload.name.replace(/\s+/g, '-').toLowerCase();
+                await updateAgentTemplate(slug, templateContent);
+            }
+            setShowForm(false);
+            refresh();
+        } catch (err) {
+            setFormError(err instanceof Error ? err.message : 'Failed');
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleDelete = async (name: string) => {
+        setBusy(true);
+        try {
+            await deleteAgent(name);
+            refresh();
+        } catch { /* ignore */ } finally { setBusy(false); }
+    };
+
+    const handleSaveTemplate = async () => {
+        if (!editingName) return;
+        setSavingTemplate(true);
+        try {
+            await updateAgentTemplate(editingName, templateContent);
+            setTemplateDirty(false);
+        } catch { /* ignore */ } finally { setSavingTemplate(false); }
+    };
+
+    const setField = (key: keyof AgentFormData, value: any) =>
+        setForm(prev => ({ ...prev, [key]: value }));
+
+    return (
+        <Box h="100vh" w="100%" bg="var(--bg-page)" overflowY="auto" p={6}>
+            <Box maxW="4xl" mx="auto">
+                <HStack justify="space-between" mb={6}>
+                    <Heading size="lg" color="var(--text-heading)">Agents</Heading>
+                    <IconButton
+                        aria-label="Add agent"
+                        size="sm"
+                        variant="outline"
+                        onClick={openAdd}
+                        borderColor="var(--border-primary)"
+                        color="var(--text-primary)"
+                    >
+                        <PlusIcon />
+                    </IconButton>
+                </HStack>
+
+                {error && (
+                    <Box p={3} bg="var(--bg-error)" borderRadius="md" mb={4}>
+                        <Text color="var(--text-error)" fontSize="sm">{error}</Text>
+                    </Box>
+                )}
+
+                {/* Agent cards */}
+                {agents.length === 0 && !showForm && (
+                    <Text color="var(--text-muted)" fontSize="sm" py={8} textAlign="center">
+                        No agents configured. Click (+) to create one.
+                    </Text>
+                )}
+
+                <VStack gap={3} align="stretch" mb={6}>
+                    {agents.map(a => (
+                        <Box
+                            key={a.name}
+                            p={4}
+                            bg="var(--bg-card)"
+                            borderRadius="lg"
+                            border="1px solid"
+                            borderColor="var(--border-primary)"
+                        >
+                            <HStack justify="space-between" mb={2}>
+                                <HStack gap={2}>
+                                    {a.avatar && <Text fontSize="lg">{a.avatar}</Text>}
+                                    <Text fontWeight="bold" color="var(--text-heading)" fontSize="sm">
+                                        {a.name}
+                                    </Text>
+                                    <Badge colorScheme={ROLE_COLORS[a.role] || 'gray'} fontSize="2xs">
+                                        {a.role}
+                                    </Badge>
+                                    <Badge variant="outline" fontSize="2xs">
+                                        {a.provider === 'auto' ? 'auto' : a.provider}
+                                    </Badge>
+                                </HStack>
+                                <HStack gap={1}>
+                                    <IconButton
+                                        aria-label="Edit" size="xs" variant="ghost"
+                                        onClick={() => openEdit(a)}
+                                        color="var(--text-tertiary)"
+                                    >
+                                        <EditIcon />
+                                    </IconButton>
+                                    <IconButton
+                                        aria-label="Delete" size="xs" variant="ghost"
+                                        onClick={() => handleDelete(a.name)}
+                                        color="var(--text-error)" disabled={busy}
+                                    >
+                                        <TrashIcon />
+                                    </IconButton>
+                                </HStack>
+                            </HStack>
+
+                            {a.description && (
+                                <Text fontSize="sm" color="var(--text-secondary)" mb={2}>
+                                    {a.description}
+                                </Text>
+                            )}
+
+                            <HStack gap={6} flexWrap="wrap">
+                                <VStack align="flex-start" gap={0}>
+                                    <Text fontSize="xs" color="var(--text-muted)">Max Iterations</Text>
+                                    <Text fontSize="sm" color="var(--text-primary)">{a.max_iterations}</Text>
+                                </VStack>
+                                <VStack align="flex-start" gap={0}>
+                                    <Text fontSize="xs" color="var(--text-muted)">Format</Text>
+                                    <Text fontSize="sm" color="var(--text-primary)">
+                                        {a.output_format || 'messages'}
+                                    </Text>
+                                </VStack>
+                                <VStack align="flex-start" gap={0}>
+                                    <Text fontSize="xs" color="var(--text-muted)">Approval</Text>
+                                    <Text fontSize="sm" color="var(--text-primary)">
+                                        {a.approval_required ? 'Required' : 'No'}
+                                    </Text>
+                                </VStack>
+                                {a.sandbox?.type && a.sandbox.type !== 'none' && (
+                                    <VStack align="flex-start" gap={0}>
+                                        <Text fontSize="xs" color="var(--text-muted)">Sandbox</Text>
+                                        <Text fontSize="sm" color="var(--text-primary)">{a.sandbox.type}</Text>
+                                    </VStack>
+                                )}
+                            </HStack>
+
+                            {a.tools.length > 0 && (
+                                <HStack mt={2} gap={1} flexWrap="wrap">
+                                    <Text fontSize="xs" color="var(--text-muted)">Tools:</Text>
+                                    {a.tools.map(t => (
+                                        <Badge key={t} fontSize="2xs" variant="outline">{t}</Badge>
+                                    ))}
+                                </HStack>
+                            )}
+
+                            {a.tags.length > 0 && (
+                                <HStack mt={1} gap={1} flexWrap="wrap">
+                                    <Text fontSize="xs" color="var(--text-muted)">Tags:</Text>
+                                    {a.tags.map(t => (
+                                        <Badge key={t} fontSize="2xs" colorScheme="teal">{t}</Badge>
+                                    ))}
+                                </HStack>
+                            )}
+                        </Box>
+                    ))}
+                </VStack>
+
+                {/* Create / Edit Form */}
+                {showForm && (
+                    <Box
+                        p={4} bg="var(--bg-elevated)" borderRadius="lg"
+                        border="1px solid" borderColor="var(--border-primary)" mb={6}
+                    >
+                        <Text fontWeight="semibold" color="var(--text-heading)" mb={3} fontSize="sm">
+                            {editingName ? `Edit "${editingName}"` : 'New Agent'}
+                        </Text>
+
+                        {formError && (
+                            <Box p={2} bg="var(--bg-error)" borderRadius="md" mb={3}>
+                                <Text color="var(--text-error)" fontSize="xs">{formError}</Text>
+                            </Box>
+                        )}
+
+                        <VStack gap={3} align="stretch">
+                            {/* Row: Name + Role */}
+                            <HStack gap={3}>
+                                <Box flex={2}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Name</Text>
+                                    <Input
+                                        size="sm" placeholder="e.g. code-reviewer"
+                                        value={form.name}
+                                        onChange={e => setField('name', e.target.value)}
+                                        disabled={!!editingName}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    />
+                                </Box>
+                                <Box flex={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Role</Text>
+                                    <NativeSelect.Root size="sm">
+                                        <NativeSelect.Field
+                                            value={form.role}
+                                            onChange={e => setField('role', e.target.value)}
+                                            bg="var(--bg-input)" color="var(--text-primary)"
+                                            borderColor="var(--border-input)"
+                                        >
+                                            {ROLES.map(r => (
+                                                <option key={r} value={r} style={{ background: 'var(--option-bg)' }}>{r}</option>
+                                            ))}
+                                        </NativeSelect.Field>
+                                    </NativeSelect.Root>
+                                </Box>
+                                <Box flex={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Avatar</Text>
+                                    <Input
+                                        size="sm" placeholder="emoji"
+                                        value={form.avatar}
+                                        onChange={e => setField('avatar', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    />
+                                </Box>
+                            </HStack>
+
+                            {/* Description */}
+                            <Box>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Description</Text>
+                                <Input
+                                    size="sm" placeholder="What does this agent do?"
+                                    value={form.description}
+                                    onChange={e => setField('description', e.target.value)}
+                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                    borderColor="var(--border-input)"
+                                />
+                            </Box>
+
+                            {/* Provider */}
+                            <Box>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Provider</Text>
+                                <NativeSelect.Root size="sm">
+                                    <NativeSelect.Field
+                                        value={form.provider}
+                                        onChange={e => setField('provider', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    >
+                                        <option value="auto" style={{ background: 'var(--option-bg)' }}>Auto (highest priority)</option>
+                                        {providers.map(p => (
+                                            <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
+                                                {p.name} ({p.model || p.backend})
+                                            </option>
+                                        ))}
+                                    </NativeSelect.Field>
+                                </NativeSelect.Root>
+                            </Box>
+
+                            {/* Output format */}
+                            <Box>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Output Format</Text>
+                                <NativeSelect.Root size="sm">
+                                    <NativeSelect.Field
+                                        value={form.output_format}
+                                        onChange={e => setField('output_format', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    >
+                                        {OUTPUT_FORMATS.map(fmt => (
+                                            <option key={fmt} value={fmt} style={{ background: 'var(--option-bg)' }}>
+                                                {fmt === 'messages' ? 'messages (JSON array)' : 'text (system prompt)'}
+                                            </option>
+                                        ))}
+                                    </NativeSelect.Field>
+                                </NativeSelect.Root>
+                            </Box>
+
+                            {/* Model overrides */}
+                            <HStack gap={3}>
+                                <Box flex={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Temperature</Text>
+                                    <Input
+                                        size="sm" type="number" step="0.1" placeholder="0.7"
+                                        value={form.temperature}
+                                        onChange={e => setField('temperature', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    />
+                                </Box>
+                                <Box flex={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Max Tokens</Text>
+                                    <Input
+                                        size="sm" type="number" placeholder="4096"
+                                        value={form.max_tokens}
+                                        onChange={e => setField('max_tokens', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    />
+                                </Box>
+                                <Box flex={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Max Iterations</Text>
+                                    <Input
+                                        size="sm" type="number" placeholder="20"
+                                        value={form.max_iterations}
+                                        onChange={e => setField('max_iterations', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    />
+                                </Box>
+                            </HStack>
+
+                            {/* Tool namespaces */}
+                            <Box>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>
+                                    Tool namespaces
+                                </Text>
+                                {toolNamespaces.length > 0 ? (
+                                    <HStack gap={2} flexWrap="wrap">
+                                        {toolNamespaces.map(ns => {
+                                            const selected = form.tools
+                                                .split(',').map(s => s.trim()).filter(Boolean);
+                                            const isActive = selected.includes(ns.namespace);
+                                            return (
+                                                <Box
+                                                    key={ns.namespace}
+                                                    as="button"
+                                                    px={3} py={1}
+                                                    borderRadius="md"
+                                                    fontSize="xs"
+                                                    fontWeight="medium"
+                                                    border="1px solid"
+                                                    borderColor={isActive ? 'var(--accent)' : 'var(--border-primary)'}
+                                                    bg={isActive ? 'var(--accent-subtle)' : 'transparent'}
+                                                    color={isActive ? 'var(--accent)' : 'var(--text-tertiary)'}
+                                                    cursor="pointer"
+                                                    _hover={{ borderColor: 'var(--accent)' }}
+                                                    title={ns.tools.join(', ')}
+                                                    onClick={() => {
+                                                        const cur = form.tools
+                                                            .split(',').map(s => s.trim()).filter(Boolean);
+                                                        const next = isActive
+                                                            ? cur.filter(n => n !== ns.namespace)
+                                                            : [...cur, ns.namespace];
+                                                        setField('tools', next.join(', '));
+                                                    }}
+                                                >
+                                                    {ns.namespace}
+                                                    <Text as="span" fontSize="2xs" color="var(--text-muted)" ml={1}>
+                                                        ({ns.tools.length})
+                                                    </Text>
+                                                </Box>
+                                            );
+                                        })}
+                                    </HStack>
+                                ) : (
+                                    <Input
+                                        size="sm" placeholder="filesystem, git, shell"
+                                        value={form.tools}
+                                        onChange={e => setField('tools', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    />
+                                )}
+                            </Box>
+
+                            {/* Context sources */}
+                            <Box>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>
+                                    Context sources (comma-separated file globs)
+                                </Text>
+                                <Input
+                                    size="sm" placeholder="docs/goal.md, docs/overview.md"
+                                    value={form.context_sources}
+                                    onChange={e => setField('context_sources', e.target.value)}
+                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                    borderColor="var(--border-input)"
+                                />
+                            </Box>
+
+                            {/* Tags */}
+                            <Box>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>
+                                    Tags (comma-separated)
+                                </Text>
+                                <Input
+                                    size="sm" placeholder="python, review"
+                                    value={form.tags}
+                                    onChange={e => setField('tags', e.target.value)}
+                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                    borderColor="var(--border-input)"
+                                />
+                            </Box>
+
+                            {/* Approval toggle */}
+                            <HStack gap={2}>
+                                <Box
+                                    as="button"
+                                    px={3} py={1}
+                                    borderRadius="md"
+                                    fontSize="xs"
+                                    fontWeight="medium"
+                                    border="1px solid"
+                                    borderColor={form.approval_required ? 'var(--accent)' : 'var(--border-primary)'}
+                                    bg={form.approval_required ? 'var(--accent-subtle)' : 'transparent'}
+                                    color={form.approval_required ? 'var(--accent)' : 'var(--text-tertiary)'}
+                                    cursor="pointer"
+                                    onClick={() => setField('approval_required', !form.approval_required)}
+                                    _hover={{ borderColor: 'var(--accent)' }}
+                                >
+                                    {form.approval_required ? 'Approval required' : 'No approval needed'}
+                                </Box>
+                            </HStack>
+
+                            {/* Sandbox (collapsible) */}
+                            <Box>
+                                <HStack
+                                    as="button"
+                                    gap={1}
+                                    cursor="pointer"
+                                    onClick={() => setShowSandbox(!showSandbox)}
+                                    color="var(--text-tertiary)"
+                                    _hover={{ color: 'var(--text-primary)' }}
+                                >
+                                    <Text fontSize="xs" fontWeight="medium">Sandbox Settings</Text>
+                                    {showSandbox ? <ChevronUp /> : <ChevronDown />}
+                                </HStack>
+
+                                {showSandbox && (
+                                    <Box mt={2} p={3} bg="var(--bg-card)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
+                                        <VStack gap={2} align="stretch">
+                                            <HStack gap={3}>
+                                                <Box flex={1}>
+                                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Type</Text>
+                                                    <NativeSelect.Root size="sm">
+                                                        <NativeSelect.Field
+                                                            value={form.sandbox_type}
+                                                            onChange={e => setField('sandbox_type', e.target.value)}
+                                                            bg="var(--bg-input)" color="var(--text-primary)"
+                                                            borderColor="var(--border-input)"
+                                                        >
+                                                            {SANDBOX_TYPES.map(t => (
+                                                                <option key={t} value={t} style={{ background: 'var(--option-bg)' }}>{t}</option>
+                                                            ))}
+                                                        </NativeSelect.Field>
+                                                    </NativeSelect.Root>
+                                                </Box>
+                                                <Box flex={1}>
+                                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Timeout (s)</Text>
+                                                    <Input
+                                                        size="sm" type="number" placeholder="120"
+                                                        value={form.sandbox_timeout}
+                                                        onChange={e => setField('sandbox_timeout', e.target.value)}
+                                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                                        borderColor="var(--border-input)"
+                                                    />
+                                                </Box>
+                                                <Box flex={1}>
+                                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Memory</Text>
+                                                    <Input
+                                                        size="sm" placeholder="4G"
+                                                        value={form.sandbox_memory_limit}
+                                                        onChange={e => setField('sandbox_memory_limit', e.target.value)}
+                                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                                        borderColor="var(--border-input)"
+                                                    />
+                                                </Box>
+                                            </HStack>
+                                            <HStack gap={2}>
+                                                <Box
+                                                    as="button"
+                                                    px={3} py={1}
+                                                    borderRadius="md"
+                                                    fontSize="xs"
+                                                    fontWeight="medium"
+                                                    border="1px solid"
+                                                    borderColor={form.sandbox_network ? 'var(--accent)' : 'var(--border-primary)'}
+                                                    bg={form.sandbox_network ? 'var(--accent-subtle)' : 'transparent'}
+                                                    color={form.sandbox_network ? 'var(--accent)' : 'var(--text-tertiary)'}
+                                                    cursor="pointer"
+                                                    onClick={() => setField('sandbox_network', !form.sandbox_network)}
+                                                    _hover={{ borderColor: 'var(--accent)' }}
+                                                >
+                                                    {form.sandbox_network ? 'Network: ON' : 'Network: OFF'}
+                                                </Box>
+                                                <Box
+                                                    as="button"
+                                                    px={3} py={1}
+                                                    borderRadius="md"
+                                                    fontSize="xs"
+                                                    fontWeight="medium"
+                                                    border="1px solid"
+                                                    borderColor={form.sandbox_gpu ? 'var(--accent)' : 'var(--border-primary)'}
+                                                    bg={form.sandbox_gpu ? 'var(--accent-subtle)' : 'transparent'}
+                                                    color={form.sandbox_gpu ? 'var(--accent)' : 'var(--text-tertiary)'}
+                                                    cursor="pointer"
+                                                    onClick={() => setField('sandbox_gpu', !form.sandbox_gpu)}
+                                                    _hover={{ borderColor: 'var(--accent)' }}
+                                                >
+                                                    {form.sandbox_gpu ? 'GPU: ON' : 'GPU: OFF'}
+                                                </Box>
+                                            </HStack>
+                                            <Box>
+                                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Writable paths (comma-separated)</Text>
+                                                <Input
+                                                    size="sm" placeholder="/workspace/.worktrees"
+                                                    value={form.sandbox_writable_paths}
+                                                    onChange={e => setField('sandbox_writable_paths', e.target.value)}
+                                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                                    borderColor="var(--border-input)"
+                                                />
+                                            </Box>
+                                            <Box>
+                                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Read-only paths (comma-separated)</Text>
+                                                <Input
+                                                    size="sm" placeholder="/workspace/docs"
+                                                    value={form.sandbox_readonly_paths}
+                                                    onChange={e => setField('sandbox_readonly_paths', e.target.value)}
+                                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                                    borderColor="var(--border-input)"
+                                                />
+                                            </Box>
+                                        </VStack>
+                                    </Box>
+                                )}
+                            </Box>
+
+                            {/* System template */}
+                            <Box>
+                                <HStack justify="space-between" mb={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)">
+                                        System Template (Jinja2)
+                                    </Text>
+                                    {editingName && templateDirty && (
+                                        <Box
+                                            as="button"
+                                            px={3} py={1}
+                                            borderRadius="md"
+                                            fontSize="xs"
+                                            fontWeight="medium"
+                                            bg="var(--accent)"
+                                            color="var(--text-inverse)"
+                                            cursor="pointer"
+                                            onClick={handleSaveTemplate}
+                                            _hover={{ bg: 'var(--accent-hover)' }}
+                                        >
+                                            {savingTemplate ? <Spinner size="xs" /> : 'Save template'}
+                                        </Box>
+                                    )}
+                                </HStack>
+                                <Textarea
+                                    size="sm"
+                                    rows={12}
+                                    fontFamily="mono"
+                                    fontSize="xs"
+                                    value={templateContent}
+                                    onChange={e => { setTemplateContent(e.target.value); setTemplateDirty(true); }}
+                                    bg="var(--bg-input)"
+                                    color="var(--text-primary)"
+                                    borderColor="var(--border-input)"
+                                    placeholder="Jinja2 system prompt template..."
+                                />
+                            </Box>
+
+                            {/* Submit / Cancel */}
+                            <HStack gap={2} justify="flex-end">
+                                <Box
+                                    as="button"
+                                    px={4} py={1.5}
+                                    borderRadius="md"
+                                    fontSize="sm"
+                                    bg="transparent"
+                                    color="var(--text-secondary)"
+                                    cursor="pointer"
+                                    onClick={() => setShowForm(false)}
+                                >
+                                    Cancel
+                                </Box>
+                                <Box
+                                    as="button"
+                                    px={4} py={1.5}
+                                    borderRadius="md"
+                                    fontSize="sm"
+                                    fontWeight="medium"
+                                    bg="var(--accent)"
+                                    color="var(--text-inverse)"
+                                    cursor="pointer"
+                                    onClick={handleSubmit}
+                                    _hover={{ bg: 'var(--accent-hover)' }}
+                                >
+                                    {busy ? <Spinner size="xs" /> : editingName ? 'Save' : 'Create'}
+                                </Box>
+                            </HStack>
+                        </VStack>
+                    </Box>
+                )}
+            </Box>
+        </Box>
+    );
+};
+
+export default AgentsPage;
