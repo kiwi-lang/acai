@@ -21,7 +21,6 @@ from flask import Blueprint, Flask, jsonify, request
 from flask_socketio import SocketIO
 
 from assai.core.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
-from assai.core.llm import create_llm
 from assai.core.stream import StreamTracker
 from assai.core.chat import ChatStore
 from assai.core.config import (
@@ -31,7 +30,6 @@ from assai.core.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
-from assai.tools.registry import ToolRegistry
 from assai.tracker.git import GitTracker
 
 log = logging.getLogger(__name__)
@@ -348,12 +346,10 @@ def create_blueprint(config: AssaiConfig | None = None,
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
     agent_store.ensure_default()
+    agent_store.ensure_builtin_agents()
 
-    from assai.tools.builtins import registry as _builtin_reg
-    from assai.tools.ui import registry as _ui_reg
-    tool_registry = ToolRegistry()
-    tool_registry.merge(_builtin_reg)
-    tool_registry.merge(_ui_reg)
+    from assai.core.tools import discover_tools
+    tool_registry = discover_tools()
 
     # Start orchestrator chaining loop in background
     orc = Orchestrator(config, queue, socketio_ref=_socketio_ref, chat=chat)
@@ -592,9 +588,16 @@ def create_blueprint(config: AssaiConfig | None = None,
             "kind": task.kind,
             "messages": messages,
             "conversation": resolved["conversation"],
+            "agent": agent_name,
+            "compressor": agent_def.compressor,
         }
         if tool_defs:
             result["tools"] = tool_defs
+
+        project_obj = resolved.get("project_obj")
+        if project_obj and project_obj.path:
+            result["project_path"] = project_obj.path
+            result["project_name"] = resolved.get("project", "")
 
         conv_id = resolved["conversation"]
         if conv_id:

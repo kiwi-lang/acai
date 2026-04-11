@@ -158,6 +158,8 @@ class CuratorConfig:
 class WorkerConfig:
     max_retries: int = defaultfield("worker.max_retries", int, 3)
     sandbox: str = defaultfield("worker.sandbox", str, "container")
+    sandbox_image: str = defaultfield("worker.sandbox_image", str, "assai-sandbox")
+    sandbox_port: int = defaultfield("worker.sandbox_port", int, 9200)
     timeout: int = defaultfield("worker.timeout", int, 300)
     tasks_dir: str = defaultfield("worker.tasks_dir", str, "tasks")
     host: str = defaultfield("worker.host", str, "0.0.0.0")

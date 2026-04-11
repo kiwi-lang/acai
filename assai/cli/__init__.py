@@ -7,6 +7,7 @@ Usage::
     assai uber               # orchestrator + worker (GB10 mode)
     assai uber --extern-llm  # uber without internal LLM management
     assai serve              # launch LLM server standalone
+    assai mcp                # standalone tool server (for sandbox containers)
     assai server             # legacy model-serving server
     assai agent-server       # agent HTTP API server
 """

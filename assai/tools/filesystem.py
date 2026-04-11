@@ -1,53 +1,11 @@
-"""Built-in tools for the worker — filesystem operations and shell execution.
-
-Each function is registered via ``@registry.tool(namespace)`` so the worker
-discovers them automatically through the shared :data:`registry` instance.
-"""
+"""Filesystem tools — read, write, list, and manage files and directories."""
 
 from __future__ import annotations
 
 import json
 import os
-import subprocess
-from typing import Optional
-
-from assai.tools.registry import ToolRegistry
-
-registry = ToolRegistry()
 
 
-# ---------------------------------------------------------------------------
-# shell
-# ---------------------------------------------------------------------------
-
-@registry.tool("shell", gpu=False)
-def run(command: str, cwd: Optional[str] = None, timeout: int = 300) -> str:
-    """Execute a shell command and return its output.
-
-    Args:
-        command: The shell command to execute.
-        cwd: Working directory for the command.
-        timeout: Maximum seconds before the command is killed.
-    """
-    try:
-        proc = subprocess.run(
-            command, shell=True, cwd=cwd,
-            capture_output=True, text=True, timeout=timeout,
-        )
-        return json.dumps({
-            "stdout": proc.stdout,
-            "stderr": proc.stderr,
-            "returncode": proc.returncode,
-        })
-    except subprocess.TimeoutExpired:
-        return json.dumps({"error": "timeout", "timeout": timeout})
-
-
-# ---------------------------------------------------------------------------
-# filesystem
-# ---------------------------------------------------------------------------
-
-@registry.tool("filesystem")
 def read_file(path: str, encoding: str = "utf-8") -> str:
     """Read the contents of a file.
 
@@ -62,7 +20,6 @@ def read_file(path: str, encoding: str = "utf-8") -> str:
         return json.dumps({"error": str(exc)})
 
 
-@registry.tool("filesystem")
 def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
     """Write content to a file, creating parent directories as needed.
 
@@ -80,21 +37,33 @@ def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
         return json.dumps({"error": str(exc)})
 
 
-@registry.tool("filesystem")
-def list_directory(path: str = ".") -> str:
+def list_directory(path: str = ".", recursive: bool = False) -> str:
     """List the entries in a directory.
 
     Args:
         path: Directory path to list.
+        recursive: If true, list all files recursively.
     """
     try:
+        if recursive:
+            entries = []
+            for root, dirs, files in os.walk(path):
+                dirs[:] = [d for d in dirs if d not in (".git", "__pycache__", ".venv", "node_modules")]
+                rel_root = os.path.relpath(root, path)
+                for f in files:
+                    rel = os.path.join(rel_root, f) if rel_root != "." else f
+                    entries.append(rel)
+            return json.dumps(sorted(entries))
         entries = sorted(os.listdir(path))
-        return json.dumps(entries)
+        result = []
+        for e in entries:
+            fp = os.path.join(path, e)
+            result.append({"name": e, "type": "dir" if os.path.isdir(fp) else "file"})
+        return json.dumps(result)
     except OSError as exc:
         return json.dumps({"error": str(exc)})
 
 
-@registry.tool("filesystem")
 def make_directory(path: str) -> str:
     """Create a directory (and parents) if it does not exist.
 
@@ -108,7 +77,6 @@ def make_directory(path: str) -> str:
         return json.dumps({"error": str(exc)})
 
 
-@registry.tool("filesystem")
 def delete_file(path: str) -> str:
     """Delete a file.
 
@@ -122,7 +90,6 @@ def delete_file(path: str) -> str:
         return json.dumps({"error": str(exc)})
 
 
-@registry.tool("filesystem")
 def file_info(path: str) -> str:
     """Return size and modification time of a file.
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -24,10 +25,9 @@ import requests as http
 from flask import Blueprint, Flask, Response, jsonify, request as flask_request
 from flask_socketio import SocketIO
 
+from assai.core.agent_store import compress_messages
 from assai.core.llm import LLMServer, LLMServerError, create_llm
-from assai.tools.builtins import registry as builtin_registry
-from assai.tools.registry import ToolRegistry
-from assai.tools.ui import registry as ui_registry
+from assai.core.tools import ToolRegistry, discover_tools
 
 if TYPE_CHECKING:
     from assai.core.config import AssaiConfig
@@ -57,9 +57,7 @@ def create_worker_blueprint(
 
     provider = config.local_provider() or config.active_provider()
     llm_server = LLMServer(provider, workspace=config.workspace)
-    registry = ToolRegistry()
-    registry.merge(builtin_registry)
-    registry.merge(ui_registry)
+    registry = discover_tools()
 
     log.info(
         "worker blueprint created  model=%s  backend=%s  tools=%d  extern_llm=%s",
@@ -246,13 +244,25 @@ class WorkerPoller:
         self._stop = threading.Event()
         self._sio = None
 
-        from assai.tools.ui import configure as configure_ui
+        from assai.tools.ui import _configure as configure_ui
+        from assai.tools.tasks import _configure as configure_tasks
         configure_ui(self.orchestrator_url)
+        configure_tasks(self.orchestrator_url)
+
+        if config.worker.sandbox == "container":
+            from assai.core.sandbox import SandboxManager
+            self._sandbox = SandboxManager(
+                image=config.worker.sandbox_image,
+                container_port=config.worker.sandbox_port,
+            )
+        else:
+            self._sandbox = None
 
         log.info(
-            "poller created  orchestrator=%s  worker=%s  poll=%ds",
+            "poller created  orchestrator=%s  worker=%s  poll=%ds  sandbox=%s",
             self.orchestrator_url, self.worker_url,
             self.config.queue.poll_interval,
+            config.worker.sandbox,
         )
 
     def _connect_ws(self):
@@ -284,6 +294,11 @@ class WorkerPoller:
     def stop(self):
         log.info("poller stopping")
         self._stop.set()
+        if self._sandbox is not None:
+            try:
+                self._sandbox.stop()
+            except Exception:
+                log.exception("failed to stop sandbox")
         if self._sio is not None:
             try:
                 self._sio.disconnect()
@@ -322,6 +337,7 @@ class WorkerPoller:
         log.info("[%s] popped work  kind=%s", task_id, kind)
 
         if kind == "llm_complete":
+            self._prepare_llm_work(work)
             result, error = self._dispatch_llm(work)
         elif kind == "tool_call":
             result, error = self._dispatch_tool(work)
@@ -330,6 +346,86 @@ class WorkerPoller:
             return
 
         self._push_result(task_id, kind, result, work, error=error)
+
+    def _prepare_llm_work(self, work: dict) -> None:
+        """Set up worktree and compress context before LLM dispatch.
+
+        Mutates *work* in place.
+        """
+        task_id = work.get("task_id", "")
+        agent = work.get("agent", "")
+
+        if agent in ("coder",) and work.get("project_path"):
+            wt_path = self._setup_worktree(work)
+            if wt_path:
+                msgs = work.get("messages", [])
+                if msgs and msgs[0].get("role") == "system":
+                    addendum = (
+                        f"\n\n## Working Directory\n"
+                        f"Your worktree is at: ``{wt_path}``\n"
+                        f"Use this as ``cwd`` for all code and git tool calls."
+                    )
+                    msgs[0]["content"] += addendum
+
+        compressor = work.get("compressor", "")
+        messages = work.get("messages", [])
+        if compressor and messages:
+            provider_info = work.get("provider", {})
+            ctx_window = provider_info.get("context_window", 0) if isinstance(provider_info, dict) else 0
+            if not ctx_window:
+                active = self.config.active_provider()
+                ctx_window = active.context_window
+            try:
+                from assai.core.config import ProviderConfig
+                if isinstance(provider_info, dict) and provider_info.get("endpoint"):
+                    prov = ProviderConfig.from_dict(provider_info)
+                else:
+                    prov = self.config.local_provider() or self.config.active_provider()
+                llm = create_llm(prov)
+                compressed = compress_messages(
+                    messages, ctx_window, llm,
+                    model=prov.slug or prov.model,
+                )
+                if len(compressed) < len(messages):
+                    work["messages"] = compressed
+                    log.info("[%s] compressed context: %d -> %d messages",
+                             task_id, len(messages), len(compressed))
+            except Exception:
+                log.exception("[%s] context compression failed, using full context", task_id)
+
+    def _setup_worktree(self, work: dict) -> str | None:
+        """Create or reuse a git worktree for a work task.
+
+        Returns the worktree path, or ``None`` if unavailable.
+        """
+        project_path = work.get("project_path", "")
+        project_name = work.get("project_name", "")
+        task_id = work.get("task_id", "")
+
+        if not project_path or not os.path.isdir(project_path):
+            return None
+
+        if not os.path.isdir(os.path.join(project_path, ".git")):
+            return project_path
+
+        from assai.tracker.git import GitTracker
+
+        project_git = GitTracker(project_path)
+        slug = task_id[:12]
+        wt_name = f"{project_name}-{slug}" if project_name else f"work-{slug}"
+
+        for wt in project_git.list_worktrees():
+            if wt.path.endswith(wt_name):
+                log.info("[%s] reusing worktree %s", task_id, wt.path)
+                return wt.path
+
+        try:
+            wt_path = project_git.create_worktree(wt_name, base_branch="HEAD")
+            log.info("[%s] created worktree %s", task_id, wt_path)
+            return wt_path
+        except Exception as exc:
+            log.warning("[%s] worktree creation failed: %s", task_id, exc)
+            return project_path
 
     def _dispatch_llm(self, work: dict) -> tuple[str | dict, str | None]:
         task_id = work.get("task_id", "")
@@ -391,9 +487,19 @@ class WorkerPoller:
             log.info("[%s] stopping LLM server for GPU tool %s", task_id, tool_name)
             self.llm_server.stop()
 
+        from assai.core.sandbox import is_sandboxed
+        if self._sandbox is not None and is_sandboxed(tool_name):
+            if not self._sandbox.running:
+                project_path = args.get("cwd") or self.config.workspace
+                self._sandbox.start(project_path, session_id=task_id[:12])
+            tools_url = f"{self._sandbox.endpoint}/tools/call"
+            log.info("[%s] routing %s to sandbox %s", task_id, tool_name, tools_url)
+        else:
+            tools_url = f"{self.base_url}/tools/call"
+
         try:
             resp = http.post(
-                f"{self.base_url}/tools/call",
+                tools_url,
                 json={"tool": tool_name, "args": args},
                 timeout=self.config.worker.timeout,
             )

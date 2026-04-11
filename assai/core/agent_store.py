@@ -56,6 +56,7 @@ class AgentDef:
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     max_iterations: int = 20
     approval_required: bool = False
+    compressor: str = "compressor"
     created_at: str = ""
     tags: list[str] = field(default_factory=list)
 
@@ -211,6 +212,283 @@ class AgentStore:
         self.scaffold(agent)
         return agent
 
+    def ensure_builtin_agents(self) -> None:
+        """Create the built-in refiner, coder, and compressor agents if they don't exist."""
+        self._ensure_refiner()
+        self._ensure_coder()
+        self._ensure_compressor()
+
+    def _ensure_refiner(self) -> AgentDef:
+        existing = self.get("refiner")
+        if existing is not None:
+            return existing
+        agent = AgentDef(
+            name="refiner",
+            description="a task refinement specialist that helps users define clear, actionable work items",
+            role="planner",
+            provider="auto",
+            output_format="messages",
+            tools=["tasks", "ui"],
+        )
+        self.save(agent)
+        self.save_template(agent.name, _REFINER_TEMPLATE)
+        return agent
+
+    def _ensure_coder(self) -> AgentDef:
+        existing = self.get("coder")
+        if existing is not None:
+            return existing
+        agent = AgentDef(
+            name="coder",
+            description="a software engineer that implements features using test-driven development",
+            role="worker",
+            provider="auto",
+            output_format="messages",
+            tools=["filesystem", "code", "git"],
+            max_iterations=40,
+        )
+        self.save(agent)
+        self.save_template(agent.name, _CODER_TEMPLATE)
+        return agent
+
+    def _ensure_compressor(self) -> AgentDef:
+        existing = self.get("compressor")
+        if existing is not None:
+            return existing
+        agent = AgentDef(
+            name="compressor",
+            description="a context compressor that distills conversations into concise summaries",
+            role="system",
+            provider="auto",
+            output_format="text",
+            compressor="",
+        )
+        self.save(agent)
+        self.save_template(agent.name, _COMPRESSOR_TEMPLATE)
+        return agent
+
+
+# ------------------------------------------------------------------
+# Refiner agent template
+# ------------------------------------------------------------------
+
+_REFINER_TEMPLATE = textwrap.dedent("""\
+    {%- set system_prompt -%}
+    You are the **Refiner** — a task refinement specialist.
+
+    Your job is to help the user turn vague ideas into well-defined, actionable tasks.
+    Through conversation you should:
+
+    1. **Clarify the goal** — ask questions until the objective is unambiguous.
+    2. **Break it down** — split large requests into small, independently testable tasks.
+    3. **Define acceptance criteria** — each task description should state what "done" looks like.
+    4. **Create the tasks** — use ``tasks.create`` to add them to the queue.
+    5. **Mark ready** — when a task is fully specified, use ``tasks.mark_ready`` so a worker can pick it up.
+
+    Guidelines:
+    - Keep task titles short (< 80 chars) and imperative ("Add user login endpoint").
+    - Put acceptance criteria and context in the description field.
+    - Set ``kind="work"`` for implementation tasks, ``kind="task"`` for research / planning.
+    - Assign ``agent="coder"`` for implementation tasks.
+    - Use ``ui.toast`` to notify the user of important status changes.
+    {% if task.project_obj %}
+
+    ## Project Context
+    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
+    {% if task.project_obj.path %}Path: ``{{ task.project_obj.path }}``{% endif %}
+    {% endif %}
+    {% if task.project_spec %}
+
+    ## Project Specification
+    {{ task.project_spec }}
+    {% endif %}
+    {% if tools_description %}
+
+    ## Available Tools
+    {{ tools_description }}
+    {% endif %}
+    {%- endset -%}
+    [
+      {"role": "system", "content": {{ system_prompt | tojson }}}
+    {% for msg in messages %},
+      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
+    {% endfor %}
+    ]
+""")
+
+
+# ------------------------------------------------------------------
+# Coder agent template
+# ------------------------------------------------------------------
+
+_CODER_TEMPLATE = textwrap.dedent("""\
+    {%- set system_prompt -%}
+    You are the **Coder** — a software engineer that implements features using test-driven development.
+
+    ## Workflow
+
+    1. **Understand the task** — read the description and acceptance criteria carefully.
+    2. **Explore the codebase** — use ``code.list_files``, ``code.read_file``, and ``code.search`` to understand the existing code structure.
+    3. **Write tests first** — create failing tests that capture the acceptance criteria.
+    4. **Run tests** — use ``code.run_tests`` to confirm the tests fail as expected.
+    5. **Implement** — write the minimum code to make the tests pass.
+    6. **Run tests again** — confirm all tests pass (including pre-existing ones).
+    7. **Iterate** — if tests fail, read the output, fix the code, and re-run.
+    8. **Commit** — once all tests pass, use ``git.commit`` with a clear message.
+    9. **Push** — use ``git.push`` to push the branch.
+
+    ## Rules
+
+    - Work in small increments — commit frequently.
+    - Never skip the test-first step unless the task is purely cosmetic.
+    - If a test already covers the requested behavior, skip to implementation.
+    - Read error output carefully before making changes.
+    - Prefer editing existing files over creating new ones.
+    - Follow the project's existing code style and conventions.
+    {% if task.project_obj %}
+
+    ## Project Context
+    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
+    {% if task.project_obj.path %}Working directory: ``{{ task.project_obj.path }}``{% endif %}
+    {% endif %}
+    {% if task.worktree %}
+
+    ## Working Directory
+    Your worktree is at: ``{{ task.worktree }}``
+    Use this as ``cwd`` for all code and git tool calls.
+    {% endif %}
+
+    ## Current Task
+    **{{ task.title }}**
+    {% if task.description %}
+    {{ task.description }}
+    {% endif %}
+    {% if task.project_spec %}
+
+    ## Project Specification
+    {{ task.project_spec }}
+    {% endif %}
+    {% if tools_description %}
+
+    ## Available Tools
+    {{ tools_description }}
+    {% endif %}
+    {%- endset -%}
+    [
+      {"role": "system", "content": {{ system_prompt | tojson }}}
+    {% for msg in messages %},
+      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
+    {% endfor %}
+    ]
+""")
+
+
+# ------------------------------------------------------------------
+# Compressor agent template
+# ------------------------------------------------------------------
+
+_COMPRESSOR_TEMPLATE = textwrap.dedent("""\
+    You are a **context compressor**. Your job is to read a conversation
+    between a user and an AI assistant and produce a concise summary that
+    preserves all information the assistant would need to continue the
+    conversation without loss of quality.
+
+    Rules:
+    - Keep all **decisions made**, **facts established**, and **open questions**.
+    - Keep all **code snippets**, **file paths**, **variable names**, and **error messages** verbatim.
+    - Keep the **latest user request** in full — never summarize the last user message.
+    - Drop pleasantries, repeated greetings, and purely stylistic exchanges.
+    - Drop tool call / tool result messages that are no longer relevant (old diagnostics, superseded searches).
+    - Use compact prose; bullet lists are encouraged.
+    - Output ONLY the summary — no preamble, no explanation.
+
+    ## Conversation to compress
+
+    {% for msg in messages %}
+    **{{ msg.role }}**: {{ msg.content }}
+
+    {% endfor %}
+""")
+
+
+# ------------------------------------------------------------------
+# Context compression
+# ------------------------------------------------------------------
+
+def compress_messages(
+    messages: list[dict],
+    context_window: int,
+    llm_client,
+    *,
+    threshold: float = 0.75,
+    keep_recent: int = 6,
+    model: str | None = None,
+) -> list[dict]:
+    """Compress a conversation if it exceeds *threshold* of *context_window*.
+
+    Keeps the system message (index 0) and the last *keep_recent* messages
+    intact.  Everything in between is summarized by the compressor LLM
+    into a single ``{"role": "system", "content": "..."}`` message.
+
+    Returns the (possibly shortened) messages list.
+    """
+    total_chars = sum(len(m.get("content", "")) for m in messages)
+    estimated_tokens = total_chars // 4
+    limit = int(context_window * threshold)
+
+    if estimated_tokens <= limit or len(messages) <= keep_recent + 2:
+        return messages
+
+    log.info(
+        "Context compression triggered: ~%d tokens vs %d limit (%d messages)",
+        estimated_tokens, limit, len(messages),
+    )
+
+    system_msg = messages[0] if messages and messages[0].get("role") == "system" else None
+    start = 1 if system_msg else 0
+    split = max(start, len(messages) - keep_recent)
+    old_messages = messages[start:split]
+    recent_messages = messages[split:]
+
+    if not old_messages:
+        return messages
+
+    env = jinja2.Environment(
+        undefined=jinja2.Undefined,
+        keep_trailing_newline=True,
+    )
+    tpl = env.from_string(_COMPRESSOR_TEMPLATE)
+    prompt = tpl.render(messages=old_messages).strip()
+
+    try:
+        resp = llm_client.chat.completions.create(
+            model=model or "default",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2,
+            max_tokens=min(2048, context_window // 4),
+        )
+        summary = resp.choices[0].message.content.strip()
+    except Exception:
+        log.exception("Compression LLM call failed, keeping original messages")
+        return messages
+
+    summary_msg = {
+        "role": "system",
+        "content": f"[Conversation summary — earlier messages compressed]\n\n{summary}",
+    }
+
+    compressed: list[dict] = []
+    if system_msg:
+        compressed.append(system_msg)
+    compressed.append(summary_msg)
+    compressed.extend(recent_messages)
+
+    log.info(
+        "Compressed %d messages -> %d (%d old -> 1 summary + %d recent)",
+        len(messages), len(compressed), len(old_messages), len(recent_messages),
+    )
+    return compressed
+
 
 # ------------------------------------------------------------------
 # Task resolution
@@ -232,6 +510,7 @@ def resolve_task(task, config: Any, chat: Any, projects: Any) -> dict:
         "gpu": task.gpu,
         "parent_task": task.parent_task or "",
         "root_task": task.root_task or "",
+        "worktree": getattr(task, "worktree", "") or "",
     }
 
     resolved["spec"] = task.spec or ""

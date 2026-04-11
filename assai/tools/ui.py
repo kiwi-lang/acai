@@ -12,22 +12,17 @@ from typing import Optional
 
 import requests as http
 
-from assai.tools.registry import ToolRegistry
-
 log = logging.getLogger(__name__)
-
-registry = ToolRegistry()
 
 _orchestrator_url: str = ""
 
 
-def configure(orchestrator_url: str) -> None:
+def _configure(orchestrator_url: str) -> None:
     """Set the orchestrator base URL so tools can reach it."""
     global _orchestrator_url
     _orchestrator_url = orchestrator_url.rstrip("/")
 
 
-@registry.tool("ui")
 def toast(
     message: str,
     title: Optional[str] = None,
