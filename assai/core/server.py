@@ -20,17 +20,16 @@ import time
 from flask import Blueprint, Flask, jsonify, request
 from flask_socketio import SocketIO
 
-from assai.agents.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
-from assai.agents.converse import ConverseAgent
-from assai.agents.llm import create_llm
-from assai.agents.scribe import ScribeAgent
-from assai.agents.stream import StreamTracker
-from assai.chat import ChatStore
-from assai.config import AssaiConfig, ProviderConfig, load_config
-from assai.core.config import load_providers, save_providers
+from assai.core.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
+from assai.core.llm import create_llm
+from assai.core.stream import StreamTracker
+from assai.core.chat import ChatStore
+from assai.core.config import (
+    AssaiConfig, ProviderConfig, load_config, load_providers, save_providers,
+)
+from assai.core.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
 from assai.events import EventBus
-from assai.projects import Project, ProjectStore, scaffold, clone
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tools.registry import ToolRegistry
 from assai.tracker.git import GitTracker
@@ -47,17 +46,25 @@ class Orchestrator:
     Watches for completed ``llm_complete`` items whose results contain
     tool calls, creates ``tool_call`` items for each, and schedules a
     follow-up ``llm_complete`` once all tool results are in.
+
+    Also reaps stuck tasks (``in_progress`` longer than the configured
+    timeout) and retries them when ``retries < max_retries``.
     """
 
     def __init__(self, config: AssaiConfig, queue: WorkQueue,
-                 tasks_dir: str | None = None):
+                 tasks_dir: str | None = None,
+                 socketio_ref: list | None = None,
+                 chat: ChatStore | None = None):
         self.config = config
         self.queue = queue
         self.tasks_dir = tasks_dir or config.worker.tasks_dir
+        self._sio_ref = socketio_ref or [None]
+        self._chat = chat
 
     def run(self):
         while True:
             self._poll()
+            self._reap_stuck()
             time.sleep(self.config.queue.poll_interval)
 
     def _poll(self):
@@ -68,6 +75,12 @@ class Orchestrator:
             if not task.result_path:
                 continue
             self._maybe_chain(task)
+
+    def _conv_id_from_task(self, task) -> str:
+        """Extract conversation id from a task's spec_path."""
+        if task.spec_path and task.spec_path.endswith("conversation.json"):
+            return os.path.basename(os.path.dirname(task.spec_path))
+        return ""
 
     def _maybe_chain(self, task):
         try:
@@ -97,6 +110,7 @@ class Orchestrator:
 
         task_project = task.project or ""
         task_root = task.root_task or task.id
+        conv_id = self._conv_id_from_task(task)
 
         tool_task_ids = []
         for call in tool_calls:
@@ -107,10 +121,26 @@ class Orchestrator:
             except (json.JSONDecodeError, TypeError):
                 tool_args = {}
 
+            if self._chat and conv_id:
+                self._chat.append(conv_id, {
+                    "role": "tool_call",
+                    "content": json.dumps({"tool": tool_name, "args": tool_args}, ensure_ascii=False),
+                    "name": tool_name,
+                })
+
+            sio = self._sio_ref[0]
+            if sio is not None:
+                sio.emit("tool_start", {
+                    "conversation": conv_id,
+                    "tool_name": tool_name,
+                    "args": tool_args,
+                })
+
             payload = {
                 "tool": tool_name,
                 "args": tool_args,
                 "call_id": call.get("id", ""),
+                "conversation": conv_id,
             }
             payload_path = self._write_payload(task.id, call.get("id", ""), payload)
 
@@ -166,6 +196,68 @@ class Orchestrator:
             json.dump(payload, f)
         return path
 
+    # -- Stuck-task reaper / retry ------------------------------------
+
+    def _reap_stuck(self):
+        """Find tasks stuck in ``in_progress`` beyond the timeout and
+        either retry them or mark them failed."""
+        from datetime import datetime, timezone
+
+        timeout_secs = self.config.queue.task_timeout
+        if timeout_secs <= 0:
+            return
+
+        now = datetime.now(timezone.utc)
+        in_progress = self.queue.list(status=TaskStatus.IN_PROGRESS)
+
+        for task in in_progress:
+            if task.started_at is None:
+                continue
+            started = task.started_at
+            if started.tzinfo is None:
+                started = started.replace(tzinfo=timezone.utc)
+            elapsed = (now - started).total_seconds()
+            if elapsed < timeout_secs:
+                continue
+
+            if task.retries < task.max_retries:
+                log.warning(
+                    "task %s stuck for %.0fs — requeueing (retry %d/%d)",
+                    task.id, elapsed, task.retries + 1, task.max_retries,
+                )
+                self.queue.update(
+                    task.id,
+                    status=TaskStatus.READY,
+                    retries=task.retries + 1,
+                    started_at=None,
+                )
+            else:
+                error_msg = (
+                    f"timed out after {elapsed:.0f}s "
+                    f"({task.retries}/{task.max_retries} retries exhausted)"
+                )
+                log.error("task %s failed permanently: %s", task.id, error_msg)
+                self.queue.update(
+                    task.id,
+                    status=TaskStatus.FAILED,
+                    error_log=error_msg,
+                )
+                if self._chat and task.spec_path and task.spec_path.endswith("conversation.json"):
+                    conv_dir = os.path.dirname(task.spec_path)
+                    conv_id = os.path.basename(conv_dir)
+                    self._chat.append(conv_id, {
+                        "role": "assistant",
+                        "content": f"[Error] {error_msg}",
+                    })
+
+            sio = self._sio_ref[0]
+            if sio is not None:
+                sio.emit("task_timeout", {
+                    "task_id": task.id,
+                    "retries": task.retries,
+                    "max_retries": task.max_retries,
+                })
+
 
 # ------------------------------------------------------------------
 # Helper
@@ -189,6 +281,7 @@ def _task_json(task):
         "max_retries":  task.max_retries,
         "created_at":   str(task.created_at) if task.created_at else "",
         "updated_at":   str(task.updated_at) if task.updated_at else "",
+        "started_at":   str(task.started_at) if task.started_at else "",
         "assigned_to":  task.assigned_to,
         "depends_on":   task.depends_on,
         "error_log":    task.error_log,
@@ -263,7 +356,7 @@ def create_blueprint(config: AssaiConfig | None = None,
     tool_registry.merge(_ui_reg)
 
     # Start orchestrator chaining loop in background
-    orc = Orchestrator(config, queue)
+    orc = Orchestrator(config, queue, socketio_ref=_socketio_ref, chat=chat)
     threading.Thread(target=orc.run, daemon=True, name="orchestrator").start()
 
     # ==================================================================
@@ -356,6 +449,35 @@ def create_blueprint(config: AssaiConfig | None = None,
         tracker.register(task.id, conversation)
 
         return jsonify({"task_id": task.id, "conversation": conversation}), 202
+
+    @bp.route("/conversations/<conv_id>/context-stats", methods=["GET"])
+    def conversation_context_stats(conv_id):
+        """Estimate token count for this conversation's context."""
+        messages = chat.read(conv_id)
+        total_chars = sum(len(m.get("content", "")) for m in messages)
+        estimated_tokens = total_chars // 4
+        active = scheduler.select("worker") or config.active_provider()
+        max_context = config.llm.context_window
+        if hasattr(active, "context_window") and active.context_window:
+            max_context = active.context_window
+        return jsonify({
+            "estimated_tokens": estimated_tokens,
+            "max_context": max_context,
+            "message_count": len(messages),
+        })
+
+    @bp.route("/conversations/<conv_id>/inflight", methods=["GET"])
+    def conversation_inflight(conv_id):
+        """Check whether the conversation has any pending/in-progress tasks."""
+        active_statuses = (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.IN_PROGRESS)
+        for status in active_statuses:
+            tasks = queue.list(status=status)
+            for t in tasks:
+                if t.spec_path and t.spec_path.endswith("conversation.json"):
+                    conv_dir = os.path.dirname(t.spec_path)
+                    if os.path.basename(conv_dir) == conv_id:
+                        return jsonify({"inflight": True, "task_id": t.id, "status": t.status})
+        return jsonify({"inflight": False})
 
     @bp.route("/history", methods=["GET"])
     def agent_history():
@@ -520,19 +642,48 @@ def create_blueprint(config: AssaiConfig | None = None,
             json.dump(data.get("raw", result_text), f)
 
         if error:
-            queue.update(
-                task_id, status=TaskStatus.FAILED,
-                result_path=result_path, error_log=error,
-            )
-            if conversation:
-                chat.append(conversation, {
-                    "role": "assistant",
-                    "content": f"[Error] {error}",
-                })
+            if task.retries < task.max_retries:
+                log.warning(
+                    "task %s failed — requeueing (retry %d/%d): %s",
+                    task_id, task.retries + 1, task.max_retries, error,
+                )
+                queue.update(
+                    task_id,
+                    status=TaskStatus.READY,
+                    result_path=result_path,
+                    error_log=error,
+                    retries=task.retries + 1,
+                    started_at=None,
+                )
+            else:
+                queue.update(
+                    task_id, status=TaskStatus.FAILED,
+                    result_path=result_path, error_log=error,
+                )
+                if conversation:
+                    chat.append(conversation, {
+                        "role": "assistant",
+                        "content": f"[Error] {error}",
+                    })
         else:
             queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
             if kind == "llm_complete" and result_text and conversation:
                 chat.append(conversation, {"role": "assistant", "content": result_text})
+            elif kind == "tool_call" and conversation:
+                tool_name = data.get("tool", task.title.replace("tool: ", ""))
+                result_preview = result_text[:500] if result_text else ""
+                chat.append(conversation, {
+                    "role": "tool_result",
+                    "content": result_preview,
+                    "name": tool_name,
+                })
+                sio = _socketio_ref[0]
+                if sio is not None:
+                    sio.emit("tool_end", {
+                        "conversation": conversation,
+                        "tool_name": tool_name,
+                        "result_preview": result_preview[:200],
+                    })
 
         return jsonify({"ok": True})
 
@@ -869,7 +1020,7 @@ def create_blueprint(config: AssaiConfig | None = None,
             if key in data:
                 val = data[key]
                 if key == "sandbox" and isinstance(val, dict):
-                    from assai.agents.agent_store import SandboxConfig
+                    from assai.core.agent_store import SandboxConfig
                     val = SandboxConfig(**val)
                 if key == "max_iterations":
                     val = int(val)

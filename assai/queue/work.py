@@ -79,6 +79,7 @@ class Task(Base):
     max_retries = Column(Integer, default=3)
     created_at  = Column(DateTime(timezone=True), default=_now)
     updated_at  = Column(DateTime(timezone=True), default=_now, onupdate=_now)
+    started_at  = Column(DateTime(timezone=True), nullable=True, default=None)
     assigned_to = Column(String, default="")
     depends_on  = Column(String, default="")
     error_log   = Column(Text, default="")
@@ -117,6 +118,10 @@ class WorkQueue:
             if "agent" not in cols:
                 conn.execute(text(
                     "ALTER TABLE tasks ADD COLUMN agent VARCHAR DEFAULT ''"
+                ))
+            if "started_at" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE tasks ADD COLUMN started_at DATETIME DEFAULT NULL"
                 ))
 
     def session(self) -> Session:
@@ -180,6 +185,8 @@ class WorkQueue:
             task = s.get(Task, task_id)
             if task is None:
                 return
+            if fields.get("status") == TaskStatus.IN_PROGRESS and task.started_at is None:
+                task.started_at = _now()
             for key, value in fields.items():
                 setattr(task, key, value)
             s.commit()

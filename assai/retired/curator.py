@@ -1,8 +1,8 @@
 """Curator agent — prepares context for the Worker.
 
-The Curator polls the work queue for *pending* tasks, scans the specs
-directory for relevant documents, and produces a self-contained context
-bundle that the Worker can execute against.
+.. deprecated::
+    This module has been retired. Context preparation is now handled by
+    the orchestrator's resolve_task / hydrate_task pipeline.
 """
 
 from __future__ import annotations
@@ -12,11 +12,11 @@ import os
 import time
 from typing import TYPE_CHECKING
 
-from assai.agents import Agent, load_prompt
+from assai.retired import Agent, load_prompt
 from assai.events import EventKind
 
 if TYPE_CHECKING:
-    from assai.agents.llm import LLM
+    from assai.core.llm import LLM
     from assai.events import EventBus
     from assai.queue.work import WorkQueue
 
@@ -35,25 +35,18 @@ class CuratorAgent(Agent):
         self.tasks_dir = tasks_dir or config.worker.tasks_dir
         super().__init__(name, config, events, llm)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def process(self, task) -> str:
-        """Build a context bundle for *task* and return the file path."""
         specs = self._list_specs()
         relevant = self._select_relevant(task, specs)
         context = self._build_context(task, relevant)
         return self._write_context(task.id, context)
 
     def run(self, queue: WorkQueue):
-        """Poll the queue for pending tasks — blocking loop."""
         while True:
             task = queue.pop(status="pending")
             if task is None:
                 time.sleep(self.config.queue.poll_interval)
                 continue
-
             queue.update(task.id, status="curating", assigned_to=self.name)
             try:
                 context_path = self.process(task)
@@ -66,12 +59,7 @@ class CuratorAgent(Agent):
                 queue.update(task.id, status="pending",
                              error_log=f"curator error: {exc}")
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
     def _list_specs(self) -> dict[str, str]:
-        """Return ``{filename: content}`` for every file in the specs dir."""
         result = {}
         if not os.path.isdir(self.specs_dir):
             return result
@@ -85,7 +73,6 @@ class CuratorAgent(Agent):
     def _select_relevant(self, task, specs: dict[str, str]) -> dict[str, str]:
         if not specs:
             return {}
-
         doc_list = "\n".join(f"- {name}" for name in specs)
         prompt = SELECT_PROMPT.format(
             title=task.title,
@@ -93,19 +80,16 @@ class CuratorAgent(Agent):
             doc_list=doc_list,
         )
         raw = self.llm.complete([{"role": "user", "content": prompt}])
-
         try:
             selected = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
             selected = list(specs.keys())
-
         return {name: specs[name] for name in selected if name in specs}
 
     def _build_context(self, task, specs: dict[str, str]) -> str:
         refs = ""
         for name, content in specs.items():
             refs += f"\n### {name}\n{content}\n"
-
         return CONTEXT_TEMPLATE.format(
             title=task.title,
             description=task.description,

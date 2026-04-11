@@ -1,19 +1,13 @@
-import { useState, useEffect, useRef, useCallback, KeyboardEvent } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
-    Box, VStack, HStack, Text, Heading, Badge, Textarea, IconButton, Spinner,
-    Input, Button, NativeSelect,
+    Box, VStack, HStack, Text, Heading, Badge, IconButton, Spinner,
+    Input, Button,
 } from '@chakra-ui/react';
-import { getProject, converse, listTasks, createTask, updateTask, getTaskTree, listProviders, listAgents } from '../services/api';
+import { getProject, listTasks, createTask, getTaskTree } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
-import type { AgentDef, Project, Task, AgentMessage, StreamChunk, Provider } from '../services/types';
-import Markdown from './Markdown';
-
-const SendIcon = () => (
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
-        <path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-    </svg>
-);
+import type { Project, Task } from '../services/types';
+import ChatPanel from './ChatPanel';
 
 const BackIcon = () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -117,34 +111,20 @@ const KanbanColumn = ({ label, tasks, color, onTaskClick }: {
 const ProjectView = () => {
     const { name } = useParams<{ name: string }>();
     const navigate = useNavigate();
-    const { tasks: wsTasks, isConnected, onChunk, onStreamEnd, onStreamError } = useAgentSocket();
+    const { tasks: wsTasks, isConnected } = useAgentSocket();
 
     const [project, setProject] = useState<Project | null>(null);
     const [tasks, setTasks] = useState<Task[]>([]);
-    const [messages, setMessages] = useState<AgentMessage[]>([]);
-    const [input, setInput] = useState('');
-    const [isLoading, setIsLoading] = useState(false);
     const [newTaskTitle, setNewTaskTitle] = useState('');
     const [showNewTask, setShowNewTask] = useState(false);
     const [selectedTask, setSelectedTask] = useState<Task | null>(null);
     const [taskTree, setTaskTree] = useState<Task[]>([]);
-    const [providers, setProviders] = useState<Provider[]>([]);
-    const [selectedProvider, setSelectedProvider] = useState('auto');
-    const [agents, setAgents] = useState<AgentDef[]>([]);
-    const [selectedAgent, setSelectedAgent] = useState('default');
-
-    const messagesEndRef = useRef<HTMLDivElement>(null);
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const activeTaskRef = useRef<string | null>(null);
-
-    const convIdRef = useRef<string | null>(null);
+    const [convId, setConvId] = useState<string | null>(null);
 
     useEffect(() => {
         if (!name) return;
         document.title = `${name} - ASSAI`;
         getProject(name).then(setProject).catch(() => navigate('/projects'));
-        listProviders().then(setProviders).catch(() => {});
-        listAgents().then(setAgents).catch(() => {});
     }, [name, navigate]);
 
     useEffect(() => {
@@ -154,61 +134,6 @@ const ProjectView = () => {
             listTasks({ project: name, rootOnly: true }).then(setTasks).catch(() => {});
         }
     }, [wsTasks, isConnected, name]);
-
-    useEffect(() => {
-        messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }, [messages]);
-
-    const handleChunk = useCallback((chunk: StreamChunk) => {
-        if (chunk.task_id !== activeTaskRef.current) return;
-        setMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last && last.isStreaming && last.taskId === chunk.task_id) {
-                copy[copy.length - 1] = { ...last, content: last.content + chunk.token };
-            }
-            return copy;
-        });
-    }, []);
-
-    const handleStreamEnd = useCallback((data: { task_id: string }) => {
-        if (data.task_id !== activeTaskRef.current) return;
-        setMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last && last.isStreaming && last.taskId === data.task_id) {
-                copy[copy.length - 1] = { ...last, isStreaming: false };
-            }
-            return copy;
-        });
-        activeTaskRef.current = null;
-        setIsLoading(false);
-    }, []);
-
-    const handleStreamError = useCallback((data: { task_id: string; error: string }) => {
-        if (data.task_id !== activeTaskRef.current) return;
-        setMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last && last.isStreaming && last.taskId === data.task_id) {
-                copy[copy.length - 1] = {
-                    ...last,
-                    content: `⚠ Error: ${data.error}`,
-                    isStreaming: false,
-                };
-            }
-            return copy;
-        });
-        activeTaskRef.current = null;
-        setIsLoading(false);
-    }, []);
-
-    useEffect(() => {
-        const unsub1 = onChunk(handleChunk);
-        const unsub2 = onStreamEnd(handleStreamEnd);
-        const unsub3 = onStreamError(handleStreamError);
-        return () => { unsub1(); unsub2(); unsub3(); };
-    }, [onChunk, onStreamEnd, onStreamError, handleChunk, handleStreamEnd, handleStreamError]);
 
     const handleCreateTask = async () => {
         const title = newTaskTitle.trim();
@@ -221,7 +146,7 @@ const ProjectView = () => {
         } catch { /* ignore */ }
     };
 
-    const handleTaskClick = async (task: Task) => {
+    const handleTaskClick = useCallback(async (task: Task) => {
         setSelectedTask(task);
         try {
             const tree = await getTaskTree(task.id);
@@ -229,45 +154,7 @@ const ProjectView = () => {
         } catch {
             setTaskTree([task]);
         }
-    };
-
-    const handleSend = async () => {
-        const text = input.trim();
-        if (!text || isLoading || !name) return;
-
-        setInput('');
-        if (textareaRef.current) textareaRef.current.style.height = 'auto';
-
-        setMessages(prev => [...prev, { role: 'user', content: text }]);
-        setIsLoading(true);
-
-        try {
-            const resp = await converse(text, convIdRef.current || '', name || '', '', selectedProvider, selectedAgent);
-            activeTaskRef.current = resp.task_id;
-            convIdRef.current = resp.conversation;
-            setMessages(prev => [
-                ...prev,
-                { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
-            ]);
-        } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Request failed';
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
-            setIsLoading(false);
-        }
-    };
-
-    const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-            handleSend();
-        }
-    };
-
-    const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-        setInput(e.target.value);
-        e.target.style.height = 'auto';
-        e.target.style.height = Math.min(e.target.scrollHeight, 160) + 'px';
-    };
+    }, []);
 
     if (!project) {
         return (
@@ -345,7 +232,7 @@ const ProjectView = () => {
                     </Box>
                 </Box>
 
-                {/* Task Detail Panel (slides in when a task is selected) */}
+                {/* Task Detail Panel */}
                 {selectedTask && (
                     <Box
                         w="360px" flexShrink={0}
@@ -435,123 +322,12 @@ const ProjectView = () => {
                     <Box px={4} py={3} borderBottom="1px solid" borderColor="var(--border-primary)">
                         <Text fontSize="sm" fontWeight="semibold" color="var(--text-secondary)">Chat</Text>
                     </Box>
-
-                    {/* Messages */}
-                    <Box flex={1} overflowY="auto" px={3} py={2} minH={0}>
-                        <VStack gap={2} align="stretch">
-                            {messages.length === 0 && (
-                                <Text fontSize="xs" color="var(--text-muted)" textAlign="center" py={6}>
-                                    Chat with the agent to create tasks, update the project, or ask questions.
-                                </Text>
-                            )}
-                            {messages.map((msg, i) => (
-                                <Box
-                                    key={i}
-                                    alignSelf={msg.role === 'user' ? 'flex-end' : 'flex-start'}
-                                    maxW="90%"
-                                    p={2.5}
-                                    borderRadius="lg"
-                                    bg={msg.role === 'user' ? 'var(--bg-msg-user)' : 'var(--bg-msg-assistant)'}
-                                    border="1px solid"
-                                    borderColor={msg.role === 'user' ? 'var(--border-msg-user)' : 'var(--border-msg-assistant)'}
-                                >
-                                    <Text fontSize="xs" color="var(--text-tertiary)" mb={0.5}>
-                                        {msg.role === 'user' ? 'You' : 'Agent'}
-                                    </Text>
-                                    <Markdown content={msg.content} />
-                                    {msg.isStreaming && (
-                                        <Box as="span" display="inline-block" w="2px" h="0.9em"
-                                            bg="var(--cursor-blink)" ml={0.5}
-                                            animation="blink 1s step-start infinite" />
-                                    )}
-                                </Box>
-                            ))}
-                            {isLoading && !messages.some(m => m.isStreaming) && (
-                                <HStack alignSelf="flex-start" gap={2} p={2}>
-                                    <Spinner size="xs" color="var(--accent)" />
-                                    <Text fontSize="xs" color="var(--text-tertiary)">Thinking...</Text>
-                                </HStack>
-                            )}
-                            <div ref={messagesEndRef} />
-                        </VStack>
-                    </Box>
-
-                    {/* Input */}
-                    <Box px={3} pt={2} pb={2} borderTop="1px solid" borderColor="var(--border-primary)">
-                        <HStack mb={1.5} justify="flex-start" gap={3}>
-                            <NativeSelect.Root size="xs" w="auto">
-                                <NativeSelect.Field
-                                    value={selectedAgent}
-                                    onChange={e => setSelectedAgent(e.target.value)}
-                                    bg="var(--bg-input)"
-                                    color="var(--text-tertiary)"
-                                    borderColor="var(--border-input)"
-                                    fontSize="xs"
-                                    px={2}
-                                    h="24px"
-                                    borderRadius="md"
-                                >
-                                    {agents.map(a => (
-                                        <option key={a.name} value={a.name} style={{ background: 'var(--option-bg)' }}>
-                                            {a.avatar ? `${a.avatar} ${a.name}` : a.name}
-                                        </option>
-                                    ))}
-                                </NativeSelect.Field>
-                            </NativeSelect.Root>
-                            <NativeSelect.Root size="xs" w="auto">
-                                <NativeSelect.Field
-                                    value={selectedProvider}
-                                    onChange={e => setSelectedProvider(e.target.value)}
-                                    bg="var(--bg-input)"
-                                    color="var(--text-tertiary)"
-                                    borderColor="var(--border-input)"
-                                    fontSize="xs"
-                                    px={2}
-                                    h="24px"
-                                    borderRadius="md"
-                                >
-                                    <option value="auto" style={{ background: 'var(--option-bg)' }}>
-                                        Auto
-                                    </option>
-                                    {providers.map(p => (
-                                        <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
-                                            {p.name}
-                                        </option>
-                                    ))}
-                                </NativeSelect.Field>
-                            </NativeSelect.Root>
-                        </HStack>
-                        <HStack gap={2} align="flex-end">
-                            <Textarea
-                                ref={textareaRef}
-                                value={input}
-                                onChange={handleChange}
-                                onKeyDown={handleKeyDown}
-                                placeholder="Ask or instruct..."
-                                disabled={isLoading}
-                                rows={1}
-                                resize="none"
-                                bg="var(--bg-card)" border="1px solid" borderColor="var(--border-secondary)"
-                                _focus={{ borderColor: 'var(--accent)', boxShadow: 'none' }}
-                                py={2} px={3} fontSize="sm" maxH="120px"
-                                overflow="auto" flex={1}
-                                color="var(--text-primary)" _placeholder={{ color: 'var(--text-muted)' }}
-                                borderRadius="lg"
-                            />
-                            <IconButton
-                                aria-label="Send"
-                                onMouseDown={(e) => { e.preventDefault(); handleSend(); }}
-                                disabled={isLoading || !input.trim()}
-                                colorScheme="green"
-                                size="sm"
-                                borderRadius="lg"
-                                type="button"
-                                tabIndex={-1}
-                            >
-                                <SendIcon />
-                            </IconButton>
-                        </HStack>
-                    </Box>
+                    <ChatPanel
+                        conversationId={convId}
+                        onConversationCreated={setConvId}
+                        project={name}
+                        compact
+                    />
                 </Box>
             </HStack>
         </Box>

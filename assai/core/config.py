@@ -178,6 +178,7 @@ class GitConfig:
 class QueueConfig:
     url: str = defaultfield("queue.url", str, "sqlite:///work.db")
     poll_interval: int = defaultfield("queue.poll_interval", int, 5)
+    task_timeout: int = defaultfield("queue.task_timeout", int, 300)
 
 
 def _model_to_slug(model: str) -> str:
@@ -196,6 +197,7 @@ class LLMConfig:
     api_key: str = defaultfield("llm.api_key", str, "")
     server_command: str = defaultfield("llm.server_command", str, "")
     server_port: int = defaultfield("llm.server_port", int, 9123)
+    context_window: int = defaultfield("llm.context_window", int, 128000)
 
     def __post_init__(self):
         if not self.slug:

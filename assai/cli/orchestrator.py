@@ -30,7 +30,7 @@ class Orchestrator(Command):
         config, _ = setup(args)
 
         from flask import Flask
-        from assai.agents.server import routes
+        from assai.core.server import routes
 
         if args.debug:
             config.dump_rendered_request = True

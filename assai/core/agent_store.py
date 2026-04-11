@@ -250,9 +250,14 @@ def resolve_task(task, config: Any, chat: Any, projects: Any) -> dict:
         conv_dir = os.path.dirname(task.spec_path)
         resolved["conversation"] = os.path.basename(conv_dir)
         try:
-            resolved["messages"] = json.loads(resolved["spec_content"])
+            all_messages = json.loads(resolved["spec_content"])
         except (json.JSONDecodeError, TypeError):
-            resolved["messages"] = []
+            all_messages = []
+        _DISPLAY_ROLES = {"tool_call", "tool_result"}
+        resolved["messages"] = [
+            m for m in all_messages
+            if m.get("role") not in _DISPLAY_ROLES
+        ]
 
     resolved["project_obj"] = None
     if resolved["project"] and projects is not None:

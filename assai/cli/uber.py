@@ -39,8 +39,8 @@ class Uber(Command):
         config, _ = setup(args)
 
         from flask import Flask
-        from assai.agents.server import routes
-        from assai.agents.worker import (
+        from assai.core.server import routes
+        from assai.core.worker import (
             WorkerPoller,
             _setup_telemetry,
             create_worker_blueprint,

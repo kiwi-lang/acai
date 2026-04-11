@@ -1,1 +1,1 @@
-"""Core infrastructure: config system, event bus."""
+"""Core infrastructure: config, events, orchestrator, worker, LLM, agents."""

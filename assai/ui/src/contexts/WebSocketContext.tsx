@@ -1,6 +1,6 @@
 import { createContext, useContext, useEffect, useState, useCallback, useRef, useMemo, ReactNode } from 'react';
 import { io, Socket } from 'socket.io-client';
-import type { Task, AgentEvent, AgentStatus, StreamChunk, Capabilities, TelemetryData } from '../services/types';
+import type { Task, AgentEvent, AgentStatus, StreamChunk, Capabilities, TelemetryData, ToolStartEvent, ToolEndEvent } from '../services/types';
 import { toaster } from '../components/ui/toaster';
 
 interface StreamError {
@@ -20,6 +20,8 @@ interface AgentSocketContextType {
     onChunk: (cb: (chunk: StreamChunk) => void) => () => void;
     onStreamEnd: (cb: (data: { task_id: string }) => void) => () => void;
     onStreamError: (cb: (data: StreamError) => void) => () => void;
+    onToolStart: (cb: (data: ToolStartEvent) => void) => () => void;
+    onToolEnd: (cb: (data: ToolEndEvent) => void) => () => void;
 }
 
 const AgentSocketContext = createContext<AgentSocketContextType | undefined>(undefined);
@@ -42,6 +44,8 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
     const chunkListeners = useRef<Set<(chunk: StreamChunk) => void>>(new Set());
     const endListeners = useRef<Set<(data: { task_id: string }) => void>>(new Set());
     const errorListeners = useRef<Set<(data: StreamError) => void>>(new Set());
+    const toolStartListeners = useRef<Set<(data: ToolStartEvent) => void>>(new Set());
+    const toolEndListeners = useRef<Set<(data: ToolEndEvent) => void>>(new Set());
 
     useEffect(() => {
         let wsUrl: string | undefined = import.meta.env.VITE_WS_URL;
@@ -77,6 +81,13 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
         });
         sock.on('stream_error', (data: StreamError) => {
             errorListeners.current.forEach(cb => cb(data));
+        });
+
+        sock.on('tool_start', (data: ToolStartEvent) => {
+            toolStartListeners.current.forEach(cb => cb(data));
+        });
+        sock.on('tool_end', (data: ToolEndEvent) => {
+            toolEndListeners.current.forEach(cb => cb(data));
         });
 
         sock.on('toast', (data: { message: string; title?: string; status?: string; duration?: number }) => {
@@ -116,11 +127,22 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
         return () => { errorListeners.current.delete(cb); };
     }, []);
 
+    const onToolStart = useCallback((cb: (data: ToolStartEvent) => void) => {
+        toolStartListeners.current.add(cb);
+        return () => { toolStartListeners.current.delete(cb); };
+    }, []);
+
+    const onToolEnd = useCallback((cb: (data: ToolEndEvent) => void) => {
+        toolEndListeners.current.add(cb);
+        return () => { toolEndListeners.current.delete(cb); };
+    }, []);
+
     return (
         <AgentSocketContext.Provider value={{
             socket, isConnected, tasks, status, events,
             capabilities, telemetry, requestTelemetry,
             onChunk, onStreamEnd, onStreamError,
+            onToolStart, onToolEnd,
         }}>
             {children}
         </AgentSocketContext.Provider>

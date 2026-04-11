@@ -24,7 +24,7 @@ import requests as http
 from flask import Blueprint, Flask, Response, jsonify, request as flask_request
 from flask_socketio import SocketIO
 
-from assai.agents.llm import LLMServer, LLMServerError, create_llm
+from assai.core.llm import LLMServer, LLMServerError, create_llm
 from assai.tools.builtins import registry as builtin_registry
 from assai.tools.registry import ToolRegistry
 from assai.tools.ui import registry as ui_registry
@@ -436,6 +436,7 @@ class WorkerPoller:
                 "result": result_text,
                 "kind": kind,
                 "conversation": work.get("conversation", ""),
+                "tool": work.get("tool", ""),
                 "raw": result,
             }
             if error:

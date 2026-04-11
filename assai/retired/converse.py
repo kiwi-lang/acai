@@ -6,6 +6,10 @@ Responsibilities:
     * Detect significant events (new requirement, contradiction, …)
       and relay them to the Scribe via the EventBus.
     * Create tasks in the work queue when the human requests work.
+
+.. deprecated::
+    This module has been retired. Conversation handling is now done via
+    the orchestrator work queue and configurable agents.
 """
 
 from __future__ import annotations
@@ -14,11 +18,11 @@ import json
 import os
 from typing import TYPE_CHECKING
 
-from assai.agents import Agent, load_prompt
+from assai.retired import Agent, load_prompt
 from assai.events import EventKind
 
 if TYPE_CHECKING:
-    from assai.agents.llm import LLM
+    from assai.core.llm import LLM
     from assai.events import EventBus
 
 
@@ -35,10 +39,6 @@ class ConverseAgent(Agent):
         self.history: list[dict] = []
         super().__init__(name, config, events, llm)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def respond(self, message: str) -> str:
         """Take a human message and return the assistant's reply."""
         self.history.append({"role": "user", "content": message})
@@ -52,12 +52,7 @@ class ConverseAgent(Agent):
         self._detect_and_emit_events(message, response, spec)
         return response
 
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
-
     def _load_spec(self) -> str:
-        """Read the current spec file (if it exists)."""
         path = os.path.join(self.specs_dir, "spec.md")
         if os.path.isfile(path):
             with open(path) as f:
@@ -73,7 +68,6 @@ class ConverseAgent(Agent):
         return [{"role": "system", "content": system}] + self.history
 
     def _detect_and_emit_events(self, human: str, assistant: str, spec: str):
-        """Ask the LLM to classify events, then publish them."""
         prompt = EVENT_CLASSIFIER_PROMPT.format(
             human=human, assistant=assistant, spec=spec,
         )

@@ -242,3 +242,13 @@ export interface ToolNamespace {
 export async function listToolNamespaces(): Promise<ToolNamespace[]> {
     return request<ToolNamespace[]>('/tools/namespaces');
 }
+
+// Conversation inflight check
+export async function checkInflight(convId: string): Promise<{ inflight: boolean; task_id?: string; status?: string }> {
+    return request(`/conversations/${convId}/inflight`);
+}
+
+// Context stats
+export async function getContextStats(convId: string): Promise<{ estimated_tokens: number; max_context: number }> {
+    return request(`/conversations/${convId}/context-stats`);
+}

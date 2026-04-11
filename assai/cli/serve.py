@@ -57,7 +57,7 @@ class Serve(Command):
         if args.server_command:
             config.llm.server_command = args.server_command
 
-        from assai.agents.llm import LLMServer, LLMServerError
+        from assai.core.llm import LLMServer, LLMServerError
 
         server = LLMServer(config.llm, workspace=config.workspace)
 

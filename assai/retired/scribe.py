@@ -1,9 +1,8 @@
 """Scribe agent — distils conversation events into living spec documents.
 
-The Scribe subscribes to conversation events (new_requirement, clarification,
-decision, contradiction) and uses an LLM to incrementally refine a spec file.
-
-The spec is the single source of truth.  Git tracks every revision.
+.. deprecated::
+    This module has been retired. Spec management will be handled via
+    the task queue and configurable agents.
 """
 
 from __future__ import annotations
@@ -11,17 +10,16 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING
 
-from assai.agents import Agent, load_prompt
+from assai.retired import Agent, load_prompt
 from assai.events import EventKind
 
 if TYPE_CHECKING:
-    from assai.agents.llm import LLM
+    from assai.core.llm import LLM
     from assai.events import EventBus
     from assai.tracker.git import GitTracker
 
 
 REFINE_PROMPT = load_prompt("scribe_refine.md")
-
 
 CONVERSATION_EVENTS = (
     EventKind.NEW_REQUIREMENT,
@@ -47,14 +45,8 @@ class ScribeAgent(Agent):
         for kind in CONVERSATION_EVENTS:
             self.events.subscribe(kind, self.handle)
 
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
-
     def handle(self, event):
-        """React to a conversation event by updating the spec."""
         spec = self._read_spec()
-
         updated = self._refine(
             spec=spec,
             kind=event.kind.value,
@@ -62,13 +54,8 @@ class ScribeAgent(Agent):
             human=event.data.get("human", ""),
             assistant=event.data.get("assistant", ""),
         )
-
         self._write_spec(updated)
         self.emit(EventKind.SPEC_UPDATED, {"path": self._spec_path()})
-
-    # ------------------------------------------------------------------
-    # Internals
-    # ------------------------------------------------------------------
 
     def _spec_path(self) -> str:
         return os.path.join(self.specs_dir, "spec.md")
@@ -85,7 +72,6 @@ class ScribeAgent(Agent):
         path = self._spec_path()
         with open(path, "w") as f:
             f.write(content)
-
         if self.git and self.config.git.auto_commit:
             self.git.commit(message="scribe: update spec", files=[path])
 
