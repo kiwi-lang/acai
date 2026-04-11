@@ -23,9 +23,9 @@ class ServeArguments(CommonArguments):
     model: str = argument(default=None, help="override model name/path")
     backend: str = argument(default=None, help="override backend (vllm, llamacpp)")
     port: int = argument(default=None, help="override server port")
-    server_command: str = argument(
+    launch_template: str = argument(
         default=None,
-        help="provide an explicit server_command instead of auto-generating one",
+        help="provide an explicit launch command template instead of auto-generating one",
     )
 
 
@@ -45,21 +45,23 @@ class Serve(Command):
     def execute(args) -> int:
         config, _ = setup(args)
 
+        provider = config.local_provider() or config.active_provider()
+
         if args.model:
-            config.llm.model = args.model
             from assai.core.config import _model_to_slug
-            config.llm.slug = _model_to_slug(args.model)
+            provider.model = args.model
+            provider.slug = _model_to_slug(args.model)
         if args.backend:
-            config.llm.backend = args.backend
+            provider.backend = args.backend
         if args.port:
-            config.llm.server_port = args.port
-            config.llm.endpoint = f"http://127.0.0.1:{args.port}"
-        if args.server_command:
-            config.llm.server_command = args.server_command
+            provider.server_port = args.port
+            provider.endpoint = f"http://127.0.0.1:{args.port}"
+        if args.launch_template:
+            provider.launch_template = args.launch_template
 
         from assai.core.llm import LLMServer, LLMServerError
 
-        server = LLMServer(config.llm, workspace=config.workspace)
+        server = LLMServer(provider, workspace=config.workspace)
 
         def _shutdown(sig, frame):
             print(f"\nReceived signal {sig}, shutting down LLM server...")
@@ -69,8 +71,8 @@ class Serve(Command):
         signal.signal(signal.SIGINT, _shutdown)
         signal.signal(signal.SIGTERM, _shutdown)
 
-        print(f"Launching LLM server  model={config.llm.model}  backend={config.llm.backend}")
-        print(f"Endpoint will be at {config.llm.endpoint}")
+        print(f"Launching LLM server  model={provider.model}  backend={provider.backend}")
+        print(f"Endpoint will be at {provider.endpoint}")
 
         try:
             server.start()

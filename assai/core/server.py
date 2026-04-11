@@ -457,9 +457,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         total_chars = sum(len(m.get("content", "")) for m in messages)
         estimated_tokens = total_chars // 4
         active = scheduler.select("worker") or config.active_provider()
-        max_context = config.llm.context_window
-        if hasattr(active, "context_window") and active.context_window:
-            max_context = active.context_window
+        max_context = active.context_window
         return jsonify({
             "estimated_tokens": estimated_tokens,
             "max_context": max_context,
@@ -534,17 +532,8 @@ def create_blueprint(config: AssaiConfig | None = None,
         if prov.name == active.name:
             return None
 
-        return {
-            "name": prov.name,
-            "backend": prov.backend,
-            "model": prov.model,
-            "slug": prov.slug,
-            "endpoint": prov.endpoint or f"http://127.0.0.1:{prov.server_port}",
-            "api_key": prov.api_key,
-            "max_tokens": prov.max_tokens,
-            "temperature": prov.temperature,
-            "server_port": prov.server_port,
-        }
+        from dataclasses import asdict as _asdict
+        return _asdict(prov)
 
     def _do_pop() -> dict | None:
         """Pop and hydrate the next ready work item.
@@ -799,7 +788,8 @@ def create_blueprint(config: AssaiConfig | None = None,
     # ==================================================================
 
     def _provider_json(p: ProviderConfig, active_name: str = "") -> dict:
-        d = p.to_dict()
+        from dataclasses import asdict as _asdict
+        d = _asdict(p)
         d["active"] = (p.name == active_name)
         return d
 
@@ -840,13 +830,13 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         data = request.get_json(silent=True) or {}
         for key in ("backend", "model", "slug", "endpoint", "api_key",
-                     "server_port", "server_command", "max_tokens",
-                     "temperature", "priority", "roles"):
+                     "server_port", "launch_template", "max_tokens",
+                     "temperature", "context_window", "priority", "roles"):
             if key in data:
                 val = data[key]
                 if key == "roles" and isinstance(val, str):
                     val = [r.strip() for r in val.split(",") if r.strip()]
-                if key in ("server_port", "max_tokens", "priority"):
+                if key in ("server_port", "max_tokens", "context_window", "priority"):
                     val = int(val)
                 if key == "temperature":
                     val = float(val)
@@ -874,9 +864,8 @@ def create_blueprint(config: AssaiConfig | None = None,
         prov = config.get_provider(name)
         if prov is None:
             return jsonify({"error": "not found"}), 404
-        config.llm = prov.to_llm_config()
-        active = config.active_provider()
-        return jsonify(_provider_json(prov, active.name))
+        config.set_active(name)
+        return jsonify(_provider_json(prov, name))
 
     # ==================================================================
     # Status
@@ -892,8 +881,8 @@ def create_blueprint(config: AssaiConfig | None = None,
         return jsonify({
             "queue": counts,
             "events": len(events.history),
-            "llm_backend": config.llm.backend,
-            "llm_endpoint": config.llm.endpoint,
+            "llm_backend": active.backend,
+            "llm_endpoint": active.endpoint,
             "active_provider": active.name,
             "providers_count": len(config.providers),
         })
@@ -1139,8 +1128,8 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
                 socketio.emit("status", {
                     "queue": counts,
                     "events": len(events.history),
-                    "llm_backend": config.llm.backend,
-                    "llm_endpoint": config.llm.endpoint,
+                    "llm_backend": active.backend,
+                    "llm_endpoint": active.endpoint,
                     "active_provider": active.name,
                     "providers_count": len(config.providers),
                 })

@@ -186,27 +186,71 @@ def _model_to_slug(model: str) -> str:
     return model.rsplit("/", 1)[-1].lower().replace("_", "-")
 
 
-@dataclass
-class LLMConfig:
-    backend: str = defaultfield("llm.backend", str, "vllm")
-    model: str = defaultfield("llm.model", str, "Qwen/Qwen3-Coder-Next-FP8")
-    slug: str = defaultfield("llm.slug", str, "")
-    endpoint: str = defaultfield("llm.endpoint", str, "http://127.0.0.1:9123")
-    max_tokens: int = defaultfield("llm.max_tokens", int, 4096)
-    temperature: float = defaultfield("llm.temperature", float, 0.7)
-    api_key: str = defaultfield("llm.api_key", str, "")
-    server_command: str = defaultfield("llm.server_command", str, "")
-    server_port: int = defaultfield("llm.server_port", int, 9123)
-    context_window: int = defaultfield("llm.context_window", int, 128000)
+# ---------------------------------------------------------------------------
+# Tool-call parser heuristics (used by the default vLLM launch template)
+# ---------------------------------------------------------------------------
 
-    def __post_init__(self):
-        if not self.slug:
-            self.slug = _model_to_slug(self.model)
+_MODEL_PARSER_MAP: list[tuple[str, str]] = [
+    ("qwen3-coder", "qwen3_xml"),
+    ("qwen3_coder", "qwen3_xml"),
+    ("qwen2.5", "hermes"),
+    ("qwq", "hermes"),
+    ("llama-4", "llama4_pythonic"),
+    ("llama-3", "llama3_json"),
+    ("mistral", "mistral"),
+    ("deepseek-v3", "deepseek_v3"),
+    ("deepseek-r1", "deepseek_v3"),
+    ("granite-4", "granite4"),
+    ("granite-3", "granite"),
+    ("hermes", "hermes"),
+]
+
+
+def _guess_tool_parser(model: str) -> str:
+    lower = model.lower().replace("/", "-").replace("_", "-")
+    for pattern, parser in _MODEL_PARSER_MAP:
+        if pattern in lower:
+            return parser
+    return "hermes"
+
+
+def _default_vllm_template(model: str) -> str:
+    """Build the default vLLM launch template for a given model."""
+    parser = _guess_tool_parser(model)
+    parts = [
+        "vllm serve {model}",
+        "--served-model-name {slug}",
+        "--port {server_port}",
+        "--enable-auto-tool-choice",
+        f"--tool-call-parser {parser}",
+        "--enable-prefix-caching",
+        "--kv-cache-dtype fp8",
+        "--max-num-seqs 1",
+    ]
+    if "qwen3-coder" in model.lower().replace("/", "-"):
+        parts += [
+            "--max-model-len 170000",
+            "--gpu-memory-utilization 0.90",
+            "--attention-backend flashinfer",
+        ]
+    return " ".join(parts)
+
+
+_DEFAULT_TEMPLATES: dict[str, str] = {
+    "llamacpp": "llama-server -m {model} --host 0.0.0.0 --port {server_port}",
+    "local": "llama-server -m {model} --host 0.0.0.0 --port {server_port}",
+}
 
 
 @dataclass
 class ProviderConfig:
-    """An LLM provider (local or remote API)."""
+    """An LLM provider -- local server or remote API.
+
+    ``launch_template`` is a Python format string resolved via
+    ``template.format(**asdict(self))``.  When empty, a backend-specific
+    default is used (vLLM, llama.cpp).  When no default exists for the
+    backend the provider is treated as *unmanaged* (remote endpoint).
+    """
 
     name: str = ""
     backend: str = "openai"
@@ -215,32 +259,38 @@ class ProviderConfig:
     endpoint: str = ""
     api_key: str = ""
     server_port: int = 9123
-    server_command: str = ""
+    launch_template: str = ""
     max_tokens: int = 4096
     temperature: float = 0.7
+    context_window: int = 128000
     priority: int = 0
     roles: list[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.model and not self.slug:
             self.slug = _model_to_slug(self.model)
+        if not self.endpoint and self.server_port:
+            self.endpoint = f"http://127.0.0.1:{self.server_port}"
 
-    def to_llm_config(self) -> LLMConfig:
-        """Convert to an ``LLMConfig`` for the worker/LLM server."""
-        return LLMConfig(
-            backend=self.backend,
-            model=self.model,
-            slug=self.slug,
-            endpoint=self.endpoint or f"http://127.0.0.1:{self.server_port}",
-            max_tokens=self.max_tokens,
-            temperature=self.temperature,
-            api_key=self.api_key,
-            server_command=self.server_command,
-            server_port=self.server_port,
-        )
+    # -- command building --------------------------------------------------
 
-    def to_dict(self) -> dict:
-        return asdict(self)
+    def build_command(self) -> str:
+        """Return the resolved server launch command, or ``""`` if unmanaged."""
+        if self.launch_template:
+            return self.launch_template.format(**asdict(self))
+        if self.backend == "vllm":
+            return _default_vllm_template(self.model).format(**asdict(self))
+        tpl = _DEFAULT_TEMPLATES.get(self.backend, "")
+        if tpl:
+            return tpl.format(**asdict(self))
+        return ""
+
+    @property
+    def managed(self) -> bool:
+        """True when this provider requires a local server process."""
+        return bool(self.build_command())
+
+    # -- serialization -----------------------------------------------------
 
     @classmethod
     def from_dict(cls, d: dict) -> ProviderConfig:
@@ -255,32 +305,32 @@ class ProviderConfig:
             endpoint=d.get("endpoint", ""),
             api_key=d.get("api_key", ""),
             server_port=int(d.get("server_port", 9123)),
-            server_command=d.get("server_command", ""),
+            launch_template=d.get("launch_template", d.get("server_command", "")),
             max_tokens=int(d.get("max_tokens", 4096)),
             temperature=float(d.get("temperature", 0.7)),
+            context_window=int(d.get("context_window", 128000)),
             priority=int(d.get("priority", 0)),
             roles=roles if isinstance(roles, list) else [],
         )
 
-    @classmethod
-    def from_llm_config(cls, llm: LLMConfig, name: str = "",
-                        priority: int = 0,
-                        roles: list[str] | None = None) -> ProviderConfig:
-        """Build a provider from the legacy ``LLMConfig``."""
-        return cls(
-            name=name or llm.slug,
-            backend=llm.backend,
-            model=llm.model,
-            slug=llm.slug,
-            endpoint=llm.endpoint,
-            api_key=llm.api_key,
-            server_port=llm.server_port,
-            server_command=llm.server_command,
-            max_tokens=llm.max_tokens,
-            temperature=llm.temperature,
-            priority=priority,
-            roles=roles or ["worker"],
-        )
+
+def _default_provider() -> ProviderConfig:
+    """Build a single default provider from ``llm.*`` config keys (backward compat)."""
+    return ProviderConfig(
+        name=option("llm.slug", str, "") or _model_to_slug(option("llm.model", str, "Qwen/Qwen3-Coder-Next-FP8") or ""),
+        backend=option("llm.backend", str, "vllm") or "vllm",
+        model=option("llm.model", str, "Qwen/Qwen3-Coder-Next-FP8") or "",
+        slug=option("llm.slug", str, "") or "",
+        endpoint=option("llm.endpoint", str, "") or "",
+        api_key=option("llm.api_key", str, "") or "",
+        server_port=option("llm.server_port", int, 9123) or 9123,
+        launch_template=option("llm.server_command", str, "") or "",
+        max_tokens=option("llm.max_tokens", int, 4096) or 4096,
+        temperature=option("llm.temperature", float, 0.7) or 0.7,
+        context_window=option("llm.context_window", int, 128000) or 128000,
+        priority=100,
+        roles=["worker"],
+    )
 
 
 def _load_providers_from_global() -> list[ProviderConfig]:
@@ -301,8 +351,8 @@ class AssaiConfig:
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     git: GitConfig = field(default_factory=GitConfig)
     queue: QueueConfig = field(default_factory=QueueConfig)
-    llm: LLMConfig = field(default_factory=LLMConfig)
     providers: list[ProviderConfig] = field(default_factory=_load_providers_from_global)
+    _active_name: str = ""
 
     def __post_init__(self):
         ws = os.path.abspath(self.workspace)
@@ -324,21 +374,28 @@ class AssaiConfig:
             if not os.path.isabs(db_path):
                 self.queue.url = f"sqlite:///{os.path.join(ws, db_path)}"
 
-        if self.llm.backend != "openai" and self.llm.endpoint == "http://127.0.0.1:9123":
-            self.llm.endpoint = f"http://127.0.0.1:{self.llm.server_port}"
-
         if not self.providers:
-            self.providers = [
-                ProviderConfig.from_llm_config(self.llm, priority=100, roles=["worker"]),
-            ]
+            self.providers = [_default_provider()]
 
     def active_provider(self) -> ProviderConfig:
-        """Return the provider matching ``config.llm``, or the highest-priority one."""
-        for p in self.providers:
-            if p.slug == self.llm.slug and p.backend == self.llm.backend:
+        """Return the explicitly activated provider, or the highest-priority one."""
+        if self._active_name:
+            p = self.get_provider(self._active_name)
+            if p:
                 return p
         best = sorted(self.providers, key=lambda p: -p.priority)
-        return best[0] if best else ProviderConfig.from_llm_config(self.llm)
+        return best[0] if best else _default_provider()
+
+    def set_active(self, name: str) -> None:
+        """Explicitly activate a provider by name."""
+        self._active_name = name
+
+    def local_provider(self) -> ProviderConfig | None:
+        """Return the highest-priority managed provider, or ``None``."""
+        managed = [p for p in self.providers if p.managed]
+        if not managed:
+            return None
+        return sorted(managed, key=lambda p: -p.priority)[0]
 
     def get_provider(self, name: str) -> ProviderConfig | None:
         """Look up a provider by name."""
@@ -386,7 +443,7 @@ def save_providers(workspace: str, providers: list[ProviderConfig]) -> None:
         with open(path, encoding="utf-8") as f:
             existing = yaml.safe_load(f) or {}
 
-    existing["providers"] = [p.to_dict() for p in providers]
+    existing["providers"] = [asdict(p) for p in providers]
 
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

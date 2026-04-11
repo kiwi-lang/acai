@@ -76,7 +76,8 @@ class Uber(Command):
         threading.Thread(target=poller.run, daemon=True, name="poller").start()
 
         if args.extern_llm:
-            print(f"Uber server on http://{args.host}:{args.port} (external LLM at {config.llm.endpoint})")
+            active = config.active_provider()
+            print(f"Uber server on http://{args.host}:{args.port} (external LLM at {active.endpoint})")
         else:
             print(f"Uber server on http://{args.host}:{args.port}")
         socketio.run(app, host=args.host, port=args.port, debug=args.debug)

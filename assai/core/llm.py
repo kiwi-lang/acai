@@ -6,8 +6,8 @@ protocol, which covers OpenAI, llama.cpp, vLLM, and any compatible
 endpoint.
 
 ``LLMServer`` manages a local server process (vLLM, llama.cpp, …) on
-the GPU.  It auto-generates the serve command from the config when
-``server_command`` is empty.
+the GPU.  The serve command is resolved via
+``ProviderConfig.build_command()``.
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import TYPE_CHECKING, Generator
 import requests
 
 if TYPE_CHECKING:
-    from assai.core.config import LLMConfig
+    from assai.core.config import ProviderConfig
 
 log = logging.getLogger(__name__)
 
@@ -65,46 +65,18 @@ class LLMServerError(RuntimeError):
 
 
 # ---------------------------------------------------------------------------
-# Tool-call parser heuristics
-# ---------------------------------------------------------------------------
-
-_MODEL_PARSER_MAP: list[tuple[str, str]] = [
-    ("qwen3-coder", "qwen3_xml"),
-    ("qwen3_coder", "qwen3_xml"),
-    ("qwen2.5", "hermes"),
-    ("qwq", "hermes"),
-    ("llama-4", "llama4_pythonic"),
-    ("llama-3", "llama3_json"),
-    ("mistral", "mistral"),
-    ("deepseek-v3", "deepseek_v3"),
-    ("deepseek-r1", "deepseek_v3"),
-    ("granite-4", "granite4"),
-    ("granite-3", "granite"),
-    ("hermes", "hermes"),
-]
-
-
-def _guess_tool_parser(model: str) -> str:
-    lower = model.lower().replace("/", "-").replace("_", "-")
-    for pattern, parser in _MODEL_PARSER_MAP:
-        if pattern in lower:
-            return parser
-    return "hermes"
-
-
-# ---------------------------------------------------------------------------
 # LLMServer — manages a local server process
 # ---------------------------------------------------------------------------
 
 class LLMServer:
-    """Manages the lifecycle of a local LLM server process (vLLM, llama.cpp, …).
+    """Manages the lifecycle of a local LLM server process.
 
-    When ``server_command`` is empty in the config, the command is
-    auto-generated from ``backend`` and ``model``.  For ``backend=openai``
-    no process is managed (remote endpoint).
+    The launch command is resolved via ``ProviderConfig.build_command()``.
+    Providers whose ``managed`` property is False (no launch command)
+    are treated as remote endpoints and no process is spawned.
     """
 
-    def __init__(self, config: LLMConfig, workspace: str = "workspace"):
+    def __init__(self, config: ProviderConfig, workspace: str = "workspace"):
         self.config = config
         self.process: subprocess.Popen | None = None
         self._ws = os.path.abspath(workspace)
@@ -120,7 +92,7 @@ class LLMServer:
     @property
     def managed(self) -> bool:
         """True if this server manages a local process (not a remote endpoint)."""
-        return self.config.backend not in ("openai",)
+        return self.config.managed
 
     def is_running(self) -> bool:
         if self.process is not None and self.process.poll() is None:
@@ -219,7 +191,7 @@ class LLMServer:
 
         from assai.core.env import build_env
 
-        cmd = self._build_command()
+        cmd = self.config.build_command()
         env = build_env()
 
         os.makedirs(self._log_dir, exist_ok=True)
@@ -369,48 +341,6 @@ class LLMServer:
             f"Check logs: {self._current_log_path}"
         )
 
-    # ------------------------------------------------------------------
-    # Command generation
-    # ------------------------------------------------------------------
-
-    def _build_command(self) -> str:
-        cfg = self.config
-        if cfg.server_command:
-            return cfg.server_command
-
-        if cfg.backend == "vllm":
-            return self._vllm_command()
-        if cfg.backend in ("llamacpp", "local"):
-            return (
-                f"llama-server -m {cfg.model} "
-                f"--host 0.0.0.0 --port {cfg.server_port}"
-            )
-        return cfg.server_command or ""
-
-    def _vllm_command(self) -> str:
-        cfg = self.config
-        parser = _guess_tool_parser(cfg.model)
-
-        parts = [
-            "vllm", "serve", shlex.quote(cfg.model),
-            "--served-model-name", cfg.slug,
-            "--port", str(cfg.server_port),
-            "--enable-auto-tool-choice",
-            "--tool-call-parser", parser,
-            "--enable-prefix-caching",
-            "--kv-cache-dtype", "fp8",
-            "--max-num-seqs", "1",
-        ]
-
-        if "qwen3-coder" in cfg.model.lower().replace("/", "-"):
-            parts += [
-                "--max-model-len", "170000",
-                "--gpu-memory-utilization", "0.90",
-                "--attention-backend", "flashinfer",
-            ]
-
-        return " ".join(parts)
-
 
 # ---------------------------------------------------------------------------
 # LLM client
@@ -544,14 +474,12 @@ class OpenAICompatibleLLM(LLM):
             ]
 
 
-def create_llm(config: LLMConfig) -> LLM:
-    """Factory: build an LLM from an ``LLMConfig``."""
-    if config.backend in ("openai", "llamacpp", "vllm", "local"):
-        return OpenAICompatibleLLM(
-            endpoint=config.endpoint,
-            model=config.slug,
-            max_tokens=config.max_tokens,
-            temperature=config.temperature,
-            api_key=config.api_key,
-        )
-    raise ValueError(f"Unknown LLM backend: {config.backend}")
+def create_llm(config: ProviderConfig) -> LLM:
+    """Factory: build an LLM client from a ``ProviderConfig``."""
+    return OpenAICompatibleLLM(
+        endpoint=config.endpoint,
+        model=config.slug,
+        max_tokens=config.max_tokens,
+        temperature=config.temperature,
+        api_key=config.api_key,
+    )

@@ -55,14 +55,15 @@ def create_worker_blueprint(
     """
     bp = Blueprint("worker", __name__, url_prefix=prefix)
 
-    llm_server = LLMServer(config.llm, workspace=config.workspace)
+    provider = config.local_provider() or config.active_provider()
+    llm_server = LLMServer(provider, workspace=config.workspace)
     registry = ToolRegistry()
     registry.merge(builtin_registry)
     registry.merge(ui_registry)
 
     log.info(
         "worker blueprint created  model=%s  backend=%s  tools=%d  extern_llm=%s",
-        config.llm.model, config.llm.backend, len(registry.all_tools()), extern_llm,
+        provider.model, provider.backend, len(registry.all_tools()), extern_llm,
     )
 
     # ------------------------------------------------------------------
@@ -84,22 +85,12 @@ def create_worker_blueprint(
         )
 
         if isinstance(provider_override, dict) and provider_override.get("endpoint"):
-            from assai.core.config import LLMConfig
-            override_cfg = LLMConfig(
-                backend=provider_override.get("backend", "openai"),
-                model=provider_override.get("model", ""),
-                slug=provider_override.get("slug", ""),
-                endpoint=provider_override["endpoint"],
-                max_tokens=int(provider_override.get("max_tokens", config.llm.max_tokens)),
-                temperature=float(provider_override.get("temperature", config.llm.temperature)),
-                api_key=provider_override.get("api_key", ""),
-                server_command="",
-                server_port=int(provider_override.get("server_port", 9123)),
-            )
+            from assai.core.config import ProviderConfig
+            override_cfg = ProviderConfig.from_dict(provider_override)
             llm_cfg = override_cfg
             use_local = False
         else:
-            llm_cfg = config.llm
+            llm_cfg = provider
             use_local = True
 
         if use_local and not extern_llm and not llm_server.is_running() and llm_server.managed:
@@ -168,28 +159,27 @@ def create_worker_blueprint(
         endpoint, api_key, server_port, etc.).  For local backends the
         current server is stopped and restarted with the new config.
         """
-        from assai.core.config import LLMConfig, ProviderConfig, _model_to_slug
+        from assai.core.config import ProviderConfig
 
         data = flask_request.get_json(silent=True) or {}
-        prov = ProviderConfig.from_dict(data)
-        new_llm = prov.to_llm_config()
+        new_prov = ProviderConfig.from_dict(data)
 
         if not extern_llm and llm_server.is_running():
             log.info("switch-model: stopping current LLM server")
             llm_server.stop()
 
-        config.llm = new_llm
-        llm_server.config = new_llm
+        llm_server.config = new_prov
+        config.set_active(new_prov.name)
 
         if not extern_llm and llm_server.managed:
-            log.info("switch-model: starting LLM server for %s", new_llm.model)
+            log.info("switch-model: starting LLM server for %s", new_prov.model)
             try:
                 llm_server.start()
             except LLMServerError as exc:
                 return jsonify({"error": str(exc)}), 503
 
-        log.info("switch-model: now using %s (%s)", new_llm.slug, new_llm.backend)
-        return jsonify({"ok": True, "model": new_llm.model, "slug": new_llm.slug})
+        log.info("switch-model: now using %s (%s)", new_prov.slug, new_prov.backend)
+        return jsonify({"ok": True, "model": new_prov.model, "slug": new_prov.slug})
 
     # ------------------------------------------------------------------
     # GET /worker/logs
@@ -211,14 +201,15 @@ def create_worker_blueprint(
 
     @bp.route("/status", methods=["GET"])
     def worker_status():
+        active = config.active_provider()
         return jsonify({
             "telemetry": True,
             "tools": [td.qualified_name for td in registry.all_tools()],
             "namespaces": registry.namespaces(),
             "llm_running": llm_server.is_running(),
             "llm_pid": llm_server.pid,
-            "llm_model": config.llm.model,
-            "llm_backend": config.llm.backend,
+            "llm_model": active.model,
+            "llm_backend": active.backend,
             "extern_llm": extern_llm,
             "log_path": llm_server.latest_log_path(),
         })
