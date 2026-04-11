@@ -31,6 +31,9 @@ class Tools(Command):
         from assai.core.tools import discover_tools
 
         registry = discover_tools()
+        from assai.tools.meta import _configure as configure_meta_tools
+
+        configure_meta_tools(registry)
 
         for ns in registry.namespaces():
             print(ns)

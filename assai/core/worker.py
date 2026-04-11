@@ -58,6 +58,9 @@ def create_worker_blueprint(
     provider = config.local_provider() or config.active_provider()
     llm_server = LLMServer(provider, workspace=config.workspace)
     registry = discover_tools()
+    from assai.tools.meta import _configure as configure_meta_tools
+
+    configure_meta_tools(registry)
 
     log.info(
         "worker blueprint created  model=%s  backend=%s  tools=%d  extern_llm=%s",
@@ -593,20 +596,30 @@ def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None,
 # ------------------------------------------------------------------
 
 def _setup_telemetry(socketio: SocketIO):
-    """Register telemetry SocketIO handlers."""
+    """Register telemetry SocketIO handlers.
+
+    Initializes the system monitor eagerly in a background thread so
+    the first ``request_telemetry`` from the frontend gets an instant
+    response instead of blocking on hardware probing.
+    """
     _observer = None
+
+    def _init_observer():
+        nonlocal _observer
+        try:
+            from assai.core.system_monitor import system_monitor
+            _observer = system_monitor()
+            log.info("system monitor initialized")
+        except Exception:
+            log.debug("system_monitor not available", exc_info=True)
+
+    threading.Thread(target=_init_observer, daemon=True, name="telemetry-init").start()
 
     @socketio.on("request_telemetry")
     def handle_request_telemetry():
-        nonlocal _observer
         if _observer is None:
-            try:
-                from assai.tools.system_monitor import system_monitor
-                _observer = system_monitor()
-            except Exception:
-                log.debug("system_monitor not available")
-                socketio.emit("telemetry_error", {"error": "not available"})
-                return
+            socketio.emit("telemetry_error", {"error": "not available yet"})
+            return
 
         try:
             data = _observer()

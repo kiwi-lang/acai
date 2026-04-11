@@ -564,7 +564,6 @@ const TelemetryDisplay = () => {
         <Box
             w="100%"
             pt={3}
-            borderTop="1px solid"
             borderColor="var(--border-primary)"
         >
             <VStack gap={1.5} align="flex-start">

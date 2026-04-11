@@ -149,6 +149,13 @@ export async function getProject(id: string): Promise<Project> {
     return request<Project>(`/projects/${id}`);
 }
 
+export async function updateProject(name: string, data: Partial<Omit<Project, 'id' | 'name' | 'source' | 'created_at'>>): Promise<Project> {
+    return request<Project>(`/projects/${name}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+    });
+}
+
 export async function deleteProject(id: string): Promise<void> {
     await request(`/projects/${id}`, { method: 'DELETE' });
 }

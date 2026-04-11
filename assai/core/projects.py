@@ -27,6 +27,7 @@ class Project:
     path: str = ""                          # actual code location (worktree)
     python_version: str = "3.12"
     venv_path: str = ".venv"
+    refiner: str = "refiner"
     created_at: str = ""
 
     def __post_init__(self):

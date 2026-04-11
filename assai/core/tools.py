@@ -367,9 +367,6 @@ def _module_namespace(module_name: str) -> str:
 
 _SKIP_MODULES = {
     "assai.tools.registry",
-    "assai.tools.input",
-    "assai.tools.remote",
-    "assai.tools.system_monitor",
 }
 
 

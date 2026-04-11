@@ -104,6 +104,84 @@ def push(cwd: str = ".", remote: str = "origin") -> str:
         return json.dumps({"error": str(exc)})
 
 
+def worktree_list(cwd: str = ".") -> str:
+    """List git worktrees for the repository.
+
+    Args:
+        cwd: Path inside a git worktree / repository.
+    """
+    try:
+        proc = subprocess.run(
+            ["git", "worktree", "list", "--porcelain"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        if proc.returncode != 0:
+            return json.dumps({"error": proc.stderr.strip() or proc.stdout.strip()})
+        return json.dumps({"listing": proc.stdout.strip()})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+def worktree_add(
+    worktree_path: str,
+    branch: str = "",
+    cwd: str = ".",
+) -> str:
+    """Create a new linked worktree (optionally a new branch).
+
+    Args:
+        worktree_path: Filesystem path for the new worktree.
+        branch: Branch to check out; if empty, HEAD is detached at current commit.
+        cwd: Path inside the main repository.
+    """
+    try:
+        cmd = ["git", "worktree", "add"]
+        if branch:
+            cmd.extend([worktree_path, branch])
+        else:
+            cmd.append(worktree_path)
+        proc = subprocess.run(
+            cmd,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if proc.returncode != 0:
+            return json.dumps({"error": proc.stderr.strip() or proc.stdout.strip()})
+        return json.dumps({"ok": True, "stdout": proc.stdout.strip()})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
+def worktree_remove(worktree_path: str, force: bool = False) -> str:
+    """Remove a worktree directory registration (``git worktree remove``).
+
+    Args:
+        worktree_path: Path of the worktree to remove.
+        force: Pass ``--force`` to delete even if not clean.
+    """
+    try:
+        cmd = ["git", "worktree", "remove"]
+        if force:
+            cmd.append("--force")
+        cmd.append(worktree_path)
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if proc.returncode != 0:
+            return json.dumps({"error": proc.stderr.strip() or proc.stdout.strip()})
+        return json.dumps({"ok": True})
+    except Exception as exc:
+        return json.dumps({"error": str(exc)})
+
+
 def log(cwd: str = ".", count: int = 10) -> str:
     """Show recent git log entries.
 

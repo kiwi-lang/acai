@@ -85,7 +85,10 @@ class Serve(Command):
         print("Press Ctrl+C to stop.\n")
 
         try:
-            server.process.wait()
+            if server.process is not None:
+                server.process.wait()
+            else:
+                signal.pause()
         except KeyboardInterrupt:
             _shutdown(signal.SIGINT, None)
 

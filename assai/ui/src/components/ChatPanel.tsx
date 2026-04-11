@@ -123,6 +123,8 @@ export interface ChatPanelProps {
     conversationId: string | null;
     onConversationCreated?: (id: string) => void;
     project?: string;
+    /** When `project` is set, default chat agent comes from project definition (`refiner`); this overrides the fallback slug. */
+    refinerAgent?: string;
     compact?: boolean;
     initialProvider?: string;
     initialAgent?: string;
@@ -134,19 +136,23 @@ const ChatPanel = ({
     conversationId,
     onConversationCreated,
     project,
+    refinerAgent,
     compact = false,
     initialProvider = 'auto',
-    initialAgent = 'default',
+    initialAgent,
     onProviderChange,
     onAgentChange,
 }: ChatPanelProps) => {
+    const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
+    const resolvedInitialAgent = initialAgent ?? fallbackAgent;
+
     const [messages, setMessages] = useState<AgentMessage[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [providers, setProviders] = useState<Provider[]>([]);
     const [selectedProvider, setSelectedProvider] = useState(initialProvider);
     const [agents, setAgents] = useState<AgentDef[]>([]);
-    const [selectedAgent, setSelectedAgent] = useState(initialAgent);
+    const [selectedAgent, setSelectedAgent] = useState(resolvedInitialAgent);
     const [contextStats, setContextStats] = useState<{ estimated_tokens: number; max_context: number } | null>(null);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -158,9 +164,17 @@ const ChatPanel = ({
     const justCreatedRef = useRef(false);
 
     const initialProviderRef = useRef(initialProvider);
-    const initialAgentRef = useRef(initialAgent);
+    const initialAgentRef = useRef(resolvedInitialAgent);
     initialProviderRef.current = initialProvider;
-    initialAgentRef.current = initialAgent;
+    initialAgentRef.current = resolvedInitialAgent;
+
+    useEffect(() => {
+        if (conversationId) return;
+        const fb = project ? (refinerAgent ?? 'refiner') : 'default';
+        const next = initialAgent ?? fb;
+        initialAgentRef.current = next;
+        setSelectedAgent(next);
+    }, [conversationId, project, refinerAgent, initialAgent]);
 
     const onProviderChangeRef = useRef(onProviderChange);
     const onAgentChangeRef = useRef(onAgentChange);

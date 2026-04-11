@@ -49,7 +49,7 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
 
     useEffect(() => {
         let wsUrl: string | undefined = import.meta.env.VITE_WS_URL;
-        if (!wsUrl && !import.meta.env.DEV) {
+        if (!wsUrl) {
             const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
             wsUrl = `${protocol}//${window.location.hostname}:5050`;
         }

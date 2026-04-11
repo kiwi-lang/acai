@@ -126,6 +126,8 @@ export interface Project {
     path: string;
     python_version: string;
     venv_path: string;
+    /** Default agent slug for project chat (task refinement, etc.). */
+    refiner?: string;
     created_at: string;
 }
 
@@ -165,6 +167,8 @@ export interface ConversationMeta {
     project: string;
     provider: string;
     agent: string;
+    /** Present when `project` is set: copy of that project's `refiner` agent slug. */
+    refiner?: string;
     created_at: number;
 }
 

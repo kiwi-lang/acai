@@ -133,7 +133,7 @@ const Home = () => {
                     refreshList();
                 }}
                 initialProvider={conv?.provider || 'auto'}
-                initialAgent={conv?.agent || 'default'}
+                initialAgent={conv?.agent || (conv?.project ? (conv?.refiner || 'refiner') : 'default')}
                 onProviderChange={(v) => {
                     if (activeConv) updateConversation(activeConv, { provider: v }).catch(() => {});
                 }}

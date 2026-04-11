@@ -350,6 +350,9 @@ def create_blueprint(config: AssaiConfig | None = None,
 
     from assai.core.tools import discover_tools
     tool_registry = discover_tools()
+    from assai.tools.meta import _configure as configure_meta_tools
+
+    configure_meta_tools(tool_registry)
 
     # Start orchestrator chaining loop in background
     orc = Orchestrator(config, queue, socketio_ref=_socketio_ref, chat=chat)
@@ -359,20 +362,42 @@ def create_blueprint(config: AssaiConfig | None = None,
     # Conversations CRUD
     # ==================================================================
 
+    def _default_agent_for_project(proj_name: str) -> str:
+        """Agent slug to use when none is stored on the conversation (from project.refiner)."""
+        pn = (proj_name or "").strip()
+        if not pn:
+            return "default"
+        p = projects.get(pn)
+        if p is None:
+            return "refiner"
+        r = (getattr(p, "refiner", "") or "").strip()
+        return r or "refiner"
+
+    def _enrich_conversation_dict(meta: dict) -> dict:
+        out = dict(meta)
+        pn = (out.get("project") or "").strip()
+        if pn:
+            p = projects.get(pn)
+            if p is not None:
+                out["refiner"] = (getattr(p, "refiner", "") or "").strip() or "refiner"
+        return out
+
     @bp.route("/conversations", methods=["GET"])
     def list_conversations():
-        return jsonify(chat.list())
+        return jsonify([_enrich_conversation_dict(m) for m in chat.list()])
 
     @bp.route("/conversations", methods=["POST"])
     def create_conversation():
         data = request.get_json(silent=True) or {}
+        proj = data.get("project", "")
+        default_agent = _default_agent_for_project(proj)
         meta = chat.create(
             title=data.get("title", ""),
-            project=data.get("project", ""),
+            project=proj,
             provider=data.get("provider", "auto"),
-            agent=data.get("agent", ""),
+            agent=data.get("agent", "") or default_agent,
         )
-        return jsonify(meta.to_dict()), 201
+        return jsonify(_enrich_conversation_dict(meta.to_dict())), 201
 
     @bp.route("/conversations/<conv_id>", methods=["PATCH"])
     def update_conversation(conv_id):
@@ -384,14 +409,14 @@ def create_blueprint(config: AssaiConfig | None = None,
         updated = chat.update_meta(conv_id, **fields)
         if updated is None:
             return jsonify({"error": "not found"}), 404
-        return jsonify(updated)
+        return jsonify(_enrich_conversation_dict(updated))
 
     @bp.route("/conversations/<conv_id>", methods=["GET"])
     def get_conversation(conv_id):
         meta = chat.get_meta(conv_id)
         if meta is None:
             return jsonify({"error": "not found"}), 404
-        return jsonify(meta)
+        return jsonify(_enrich_conversation_dict(meta))
 
     @bp.route("/conversations/<conv_id>", methods=["DELETE"])
     def delete_conversation(conv_id):
@@ -415,9 +440,10 @@ def create_blueprint(config: AssaiConfig | None = None,
             return jsonify({"error": "message is required"}), 400
 
         if not conversation:
+            default_agent = _default_agent_for_project(project)
             meta = chat.create(title=message[:80], project=project,
                                provider=provider_name or "auto",
-                               agent=agent_name or "default")
+                               agent=agent_name or default_agent)
             conversation = meta.id
         else:
             updates: dict = {}
@@ -430,14 +456,20 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         chat.append(conversation, {"role": "user", "content": message})
 
+        conv_meta = chat.get_meta(conversation) or {}
+        proj = (project or conv_meta.get("project") or "").strip()
+        default_agent = _default_agent_for_project(proj)
+        meta_agent = (conv_meta.get("agent") or "").strip()
+        effective_agent = agent_name or meta_agent or default_agent
+
         root = queue.resolve_root(parent_task) if parent_task else ""
         conv_path = chat._msg_path(conversation)
         task = queue.push(
             title=f"converse: {message[:60]}",
             kind="llm_complete",
             spec_path=conv_path,
-            project=project,
-            agent=agent_name or "default",
+            project=project or proj,
+            agent=effective_agent,
             parent_task=parent_task,
             root_task=root,
         )
@@ -929,6 +961,7 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         slug = name.replace(" ", "-").lower()
 
+        refiner = (data.get("refiner") or "refiner").strip() or "refiner"
         proj = Project(
             name=slug,
             language=data.get("language", "python"),
@@ -939,6 +972,7 @@ def create_blueprint(config: AssaiConfig | None = None,
             python_version=data.get("python_version", "3.12"),
             venv_path=data.get("venv_path", ".venv"),
             path=os.path.join(config.git.worktree_dir, slug),
+            refiner=refiner,
         )
 
         try:
@@ -957,6 +991,20 @@ def create_blueprint(config: AssaiConfig | None = None,
         proj = projects.get(name)
         if proj is None:
             return jsonify({"error": "not found"}), 404
+        return jsonify(_project_json(proj))
+
+    @bp.route("/projects/<name>", methods=["PATCH"])
+    def update_project(name):
+        proj = projects.get(name)
+        if proj is None:
+            return jsonify({"error": "not found"}), 404
+        data = request.get_json(silent=True) or {}
+        _STR_FIELDS = ("language", "template", "repo_url", "provider",
+                        "python_version", "venv_path", "refiner", "path")
+        for key in _STR_FIELDS:
+            if key in data:
+                setattr(proj, key, str(data[key] or "").strip())
+        projects.save(proj)
         return jsonify(_project_json(proj))
 
     @bp.route("/projects/<name>", methods=["DELETE"])

@@ -6,16 +6,65 @@ import json
 import os
 
 
-def read_file(path: str, encoding: str = "utf-8") -> str:
-    """Read the contents of a file.
+def read_file(
+    path: str,
+    encoding: str = "utf-8",
+    line_start: int = 0,
+    line_limit: int = 0,
+) -> str:
+    """Read the contents of a file, optionally a slice of lines (1-based).
 
     Args:
         path: Path to the file.
         encoding: Text encoding to use.
+        line_start: First line to include (1-based). Use 0 to read the whole file.
+        line_limit: Maximum number of lines to return after line_start. Use 0 for no limit (only applies when line_start > 0).
     """
     try:
         with open(path, encoding=encoding) as f:
-            return f.read()
+            if line_start <= 0:
+                return f.read()
+            lines = f.readlines()
+            start = max(line_start - 1, 0)
+            end = len(lines) if line_limit <= 0 else start + line_limit
+            chunk = lines[start:end]
+            text = "".join(chunk)
+            return text
+    except OSError as exc:
+        return json.dumps({"error": str(exc)})
+
+
+def edit_file(
+    path: str,
+    old_string: str,
+    new_string: str,
+    replace_all: bool = False,
+) -> str:
+    """Edit a file by exact string replacement (like a minimal patch).
+
+    Args:
+        path: Path to the file.
+        old_string: Text to find.
+        new_string: Replacement text.
+        replace_all: If true, replace every occurrence; otherwise exactly one.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            content = f.read()
+        if old_string not in content:
+            return json.dumps({"error": "old_string not found", "path": path})
+        if replace_all:
+            new_content = content.replace(old_string, new_string)
+            n = content.count(old_string)
+        else:
+            idx = content.index(old_string)
+            new_content = (
+                content[:idx] + new_string + content[idx + len(old_string):]
+            )
+            n = 1
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(new_content)
+        return json.dumps({"ok": True, "path": path, "replacements": n})
     except OSError as exc:
         return json.dumps({"error": str(exc)})
 
