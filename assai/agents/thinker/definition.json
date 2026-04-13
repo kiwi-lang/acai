@@ -1,0 +1,8 @@
+{
+  "name": "thinker",
+  "description": "a reasoning specialist that thinks deeply about tasks before they are executed",
+  "role": "system",
+  "provider": "auto",
+  "output_format": "text",
+  "compressor": ""
+}

@@ -248,9 +248,17 @@ def _default_vllm_template(model: str) -> str:
         "--kv-cache-dtype fp8",
         "--max-num-seqs 1",
     ]
-    reasoning_parser = _guess_reasoning_parser(model)
-    if reasoning_parser:
-        parts.append(f"--reasoning-parser {reasoning_parser}")
+    supports_reasoning = False
+
+    if supports_reasoning:
+        reasoning_parser = _guess_reasoning_parser(model)
+        if reasoning_parser:
+            parts.append(f"--reasoning-parser {reasoning_parser}")
+            parts.append("--default-chat-template-kwargs '{{\"enable_thinking\": false}}'")
+            parts.append(
+                "--reasoning-config '{{\"reasoning_start_str\": \"<think>\", \"reasoning_end_str\": \"I have to give the solution based on the reasoning directly now.</think>\"}}'"
+            )
+
     if "qwen3-coder" in model.lower().replace("/", "-"):
         parts += [
             "--max-model-len 170000",

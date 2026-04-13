@@ -19,11 +19,14 @@ from assai.scheduler.base import AgentContext, AsyncTask, BaseScheduler
 if TYPE_CHECKING:
     from assai.core.config import ProviderConfig
 
+from assai.scheduler.thinking import ThinkingScheduler
+
 __all__ = [
     "AgentContext",
     "AsyncTask",
     "BaseScheduler",
     "ProviderScheduler",
+    "ThinkingScheduler",
 ]
 
 

@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Box, HStack, Text, IconButton } from '@chakra-ui/react';
 import {
-    listConversations, updateConversation, deleteConversation, converse,
+    listConversations, updateConversation, deleteConversation, converse, thinkConverse,
 } from '../services/api';
 import type { ConversationMeta } from '../services/types';
 import { ConversationSidebar, EditModal } from './ConversationSidebar';
@@ -37,11 +37,14 @@ const ConversationsPage = () => {
             sendingRef.current = true;
             navigate(location.pathname, { replace: true, state: {} });
 
-            const thinking = state.enableThinking !== undefined
-                ? state.enableThinking === true || state.enableThinking === 'true'
-                : undefined;
-            converse(state.pendingMessage, convId, '', '',
-                     state.provider || 'auto', state.agent || 'default', thinking)
+            const mode = (state.thinkingMode as string) || 'native';
+            const converseCall = mode === 'emulated'
+                ? thinkConverse(state.pendingMessage, convId, '', '',
+                    state.provider || 'auto', state.agent || 'default')
+                : converse(state.pendingMessage, convId, '', '',
+                    state.provider || 'auto', state.agent || 'default',
+                    mode === 'native' ? true : undefined);
+            converseCall
                 .then(() => {
                     sendingRef.current = false;
                     setReadyConvId(convId);

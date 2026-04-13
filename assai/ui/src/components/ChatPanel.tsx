@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
-import { converse, getHistory, listProviders, listAgents, checkInflight, getContextStats } from '../services/api';
+import { converse, thinkConverse, getHistory, listProviders, listAgents, checkInflight, getContextStats } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentDef, AgentMessage, Provider } from '../services/types';
 import Markdown from './Markdown';
@@ -64,14 +64,7 @@ const ToolIcon = () => (
     </svg>
 );
 
-const ThinkingIcon = ({ active }: { active: boolean }) => (
-    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
-        stroke={active ? 'var(--accent)' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z" />
-        <line x1="9" y1="21" x2="15" y2="21" />
-        <line x1="10" y1="24" x2="14" y2="24" />
-    </svg>
-);
+type ThinkingMode = 'off' | 'native' | 'emulated';
 
 export const ContextRing = ({ tokens, maxTokens }: { tokens: number; maxTokens: number }) => {
     const ratio = Math.min(tokens / maxTokens, 1);
@@ -187,8 +180,10 @@ export interface ChatPanelProps {
     onResponseComplete?: () => void;
     /** Custom placeholder for the text input. */
     placeholder?: string;
-    /** Initial state for the thinking toggle (from conversation metadata). */
+    /** Initial thinking mode (from conversation metadata). */
     initialThinking?: boolean;
+    /** Initial thinking mode string — takes precedence over initialThinking boolean. */
+    initialThinkingMode?: ThinkingMode;
 }
 
 const ChatPanel = ({
@@ -205,8 +200,9 @@ const ChatPanel = ({
     statusBar,
     disabled: externalDisabled,
     onResponseComplete,
-    placeholder: customPlaceholder,
+    placeholder:     customPlaceholder,
     initialThinking,
+    initialThinkingMode,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -219,7 +215,9 @@ const ChatPanel = ({
     const [agents, setAgents] = useState<AgentDef[]>([]);
     const [selectedAgent, setSelectedAgent] = useState(resolvedInitialAgent);
     const [contextStats, setContextStats] = useState<{ estimated_tokens: number; max_context: number } | null>(null);
-    const [enableThinking, setEnableThinking] = useState(initialThinking ?? true);
+    const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
+        initialThinkingMode ?? (initialThinking === false ? 'off' : 'native'),
+    );
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -368,7 +366,7 @@ const ChatPanel = ({
 
         setSelectedProvider(initialProviderRef.current);
         setSelectedAgent(initialAgentRef.current);
-        setEnableThinking(initialThinking ?? true);
+        setThinkingMode(initialThinkingMode ?? (initialThinking === false ? 'off' : 'native'));
         setMessages([]);
         setIsLoading(false);
         activeTaskRef.current = null;
@@ -449,7 +447,10 @@ const ChatPanel = ({
 
         setIsLoading(true);
         try {
-            const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent, enableThinking);
+            const resp = thinkingMode === 'emulated'
+                ? await thinkConverse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent)
+                : await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
+                    thinkingMode === 'native' ? true : undefined);
             activeTaskRef.current = resp.task_id;
             setMessages(prev => [
                 ...prev,
@@ -461,7 +462,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
             setIsLoading(false);
         }
-    }, [isLoading, messages, project, selectedProvider, selectedAgent, enableThinking, openEventSource]);
+    }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, openEventSource]);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -482,9 +483,15 @@ const ChatPanel = ({
         setIsLoading(true);
 
         try {
-            const resp = customSend
-                ? await customSend(text, prevConvId || '', selectedProvider, selectedAgent)
-                : await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent, enableThinking);
+            let resp;
+            if (customSend) {
+                resp = await customSend(text, prevConvId || '', selectedProvider, selectedAgent);
+            } else if (thinkingMode === 'emulated') {
+                resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
+            } else {
+                resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
+                    thinkingMode === 'native' ? true : undefined);
+            }
 
             activeTaskRef.current = resp.task_id;
             convIdRef.current = resp.conversation;
@@ -688,17 +695,19 @@ const ChatPanel = ({
                             ))}
                         </NativeSelect.Field>
                     </NativeSelect.Root>
-                    <IconButton
-                        aria-label={enableThinking ? 'Disable reasoning' : 'Enable reasoning'}
-                        onClick={() => setEnableThinking(v => !v)}
-                        variant="ghost" size="xs"
-                        color={enableThinking ? 'var(--accent)' : 'var(--text-muted)'}
-                        _hover={{ bg: 'var(--bg-hover)' }}
-                        title={enableThinking ? 'Thinking: ON' : 'Thinking: OFF'}
-                        borderRadius="md"
-                        h={compact ? '24px' : '26px'} w={compact ? '24px' : '26px'}>
-                        <ThinkingIcon active={enableThinking} />
-                    </IconButton>
+                    <NativeSelect.Root size="xs" w="auto">
+                        <NativeSelect.Field
+                            value={thinkingMode}
+                            onChange={e => setThinkingMode(e.target.value as ThinkingMode)}
+                            bg="var(--bg-input)"
+                            color={thinkingMode === 'off' ? 'var(--text-tertiary)' : 'var(--accent)'}
+                            borderColor="var(--border-input)"
+                            fontSize="xs" px={2} h={compact ? '24px' : '26px'} borderRadius="md">
+                            <option value="off" style={{ background: 'var(--option-bg)' }}>Think: Off</option>
+                            <option value="native" style={{ background: 'var(--option-bg)' }}>Think: Native</option>
+                            <option value="emulated" style={{ background: 'var(--option-bg)' }}>Think: Emulated</option>
+                        </NativeSelect.Field>
+                    </NativeSelect.Root>
                     {contextStats && convIdRef.current && (
                         <ContextRing tokens={contextStats.estimated_tokens} maxTokens={contextStats.max_context} />
                     )}

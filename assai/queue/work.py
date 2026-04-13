@@ -90,7 +90,7 @@ class Task(Base):
     parent_task = Column(String, ForeignKey("tasks.id"), nullable=True, default=None)
     root_task   = Column(String, ForeignKey("tasks.id"), nullable=True, default=None, index=True)
     enable_thinking = Column(Boolean, nullable=True, default=None)
-    conversation = Column(String, default="", index=True)
+    conversation = Column(String, default="", index=True) # FIXME I don't like this
     ext = Column(JSON)
 # ---------------------------------------------------------------------------
 # Queue
@@ -133,6 +133,10 @@ class WorkQueue:
             if "conversation" not in cols:
                 conn.execute(text(
                     "ALTER TABLE tasks ADD COLUMN conversation VARCHAR DEFAULT ''"
+                ))
+            if "ext" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE tasks ADD COLUMN ext JSON DEFAULT NULL"
                 ))
 
     def session(self) -> Session:

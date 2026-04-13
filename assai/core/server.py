@@ -28,6 +28,7 @@ from assai.core.config import (
 )
 from assai.core.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
+from assai.scheduler.thinking import ThinkingScheduler
 from assai.scheduler.uber import UberScheduler
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
@@ -183,6 +184,7 @@ class Orchestrator:
                 spec_path=followup_path,
                 depends_on=tool_task_ids,
                 project=task_project,
+                agent=task.agent or "",
                 parent_task=task.id,
                 root_task=task_root,
                 enable_thinking=task.enable_thinking,
@@ -351,6 +353,7 @@ def create_blueprint(config: AssaiConfig | None = None,
     scheduler = ProviderScheduler(config.providers)
 
     uber_scheduler = UberScheduler(config, chat, queue, tracker)
+    thinking_scheduler = ThinkingScheduler(chat, queue, tracker)
 
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
@@ -545,6 +548,62 @@ def create_blueprint(config: AssaiConfig | None = None,
         return jsonify(result), 202
 
     # ==================================================================
+    # Think-then-generate conversation
+    # ==================================================================
+
+    @bp.route("/think/converse", methods=["POST"])
+    def think_converse():
+        """Like ``/converse`` but chains a thinker step before the main agent.
+
+        The scheduler pushes a thinker task whose tokens stream as
+        reasoning events.  When the thinker finishes the scheduler
+        automatically chains the main-agent task with reasoning injected.
+        """
+        data = request.get_json(silent=True) or {}
+        message = data.get("message", "")
+        conversation = data.get("conversation", "")
+        project = data.get("project", "")
+        parent_task = data.get("parent_task", "")
+        provider_name = data.get("provider", "")
+        agent_name = data.get("agent", "")
+        if not message:
+            return jsonify({"error": "message is required"}), 400
+
+        if not conversation:
+            default_agent = _default_agent_for_project(project)
+            meta = chat.create(
+                title=message[:80], project=project,
+                provider=provider_name or "auto",
+                agent=agent_name or default_agent,
+            )
+            conversation = meta.id
+        else:
+            updates: dict = {}
+            if provider_name:
+                updates["provider"] = provider_name
+            if agent_name:
+                updates["agent"] = agent_name
+            if updates:
+                chat.update_meta(conversation, **updates)
+
+        chat.append(conversation, {"role": "user", "content": message})
+
+        conv_meta = chat.get_meta(conversation) or {}
+        proj = (project or conv_meta.get("project") or "").strip()
+        default_agent = _default_agent_for_project(proj)
+        meta_agent = (conv_meta.get("agent") or "").strip()
+        effective_agent = agent_name or meta_agent or default_agent
+
+        result = thinking_scheduler.schedule(
+            conversation=conversation,
+            agent=effective_agent,
+            project=project or proj,
+            parent_task=parent_task,
+            title=f"think: {message[:60]}",
+        )
+        return jsonify(result), 202
+
+    # ==================================================================
     # History
     # ==================================================================
 
@@ -682,6 +741,23 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         if task.enable_thinking is not None:
             result["enable_thinking"] = task.enable_thinking
+
+        ext = task.ext or {}
+        injected_reasoning = ext.get("injected_reasoning")
+        if injected_reasoning:
+            reasoning_msg = {
+                "role": "system",
+                "content": (
+                    "## Prior Reasoning\n"
+                    "The following analysis was produced about this task. "
+                    "Use it to inform your response.\n\n"
+                    + injected_reasoning
+                ),
+            }
+            msgs = result["messages"]
+            pos = 1 if msgs and msgs[0].get("role") == "system" else 0
+            msgs.insert(pos, reasoning_msg)
+
         return result
 
     @bp.route("/work/pop", methods=["GET"])
@@ -862,6 +938,7 @@ def create_blueprint(config: AssaiConfig | None = None,
             tracker.push(conv_id, {"event_type": "reasoning", "data": event_data})
 
         elif event_type == "token":
+            is_thinker = thinking_scheduler.is_thinking_task(task_id)
             with _active_streams_lock:
                 if task_id not in _active_streams:
                     _active_streams[task_id] = {
@@ -874,7 +951,10 @@ def create_blueprint(config: AssaiConfig | None = None,
                     }
                 _active_streams[task_id]["text"] += event_data.get("token", "")
 
-            tracker.push(conv_id, {"event_type": "token", "data": event_data})
+            if is_thinker:
+                tracker.push(conv_id, {"event_type": "reasoning", "data": event_data})
+            else:
+                tracker.push(conv_id, {"event_type": "token", "data": event_data})
 
         elif event_type == "tool_call_delta":
             with _active_streams_lock:
@@ -916,6 +996,10 @@ def create_blueprint(config: AssaiConfig | None = None,
             with _active_streams_lock:
                 ss = _active_streams.pop(task_id, None)
 
+            reasoning = (ss or {}).get("text", "")
+            if thinking_scheduler.on_complete(task_id, reasoning):
+                return
+
             if ss:
                 for idx in sorted(ss["tool_calls"]):
                     _flush_tool_call(task_id, conv_id, ss, idx)
@@ -953,6 +1037,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                     followup_path = orc._write_payload(task_id, "followup", followup_messages)
                     task_thinking = task.enable_thinking if task else None
                     task_conv = (task.conversation or "") if task else conv_id
+                    task_agent = (task.agent or "") if task else ""
                     followup = queue.push(
                         title=f"followup: tool results",
                         kind="llm_complete",
@@ -960,6 +1045,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                         spec_path=followup_path,
                         depends_on=ss["tool_task_ids"],
                         project=task_project,
+                        agent=task_agent,
                         parent_task=task_id,
                         root_task=task_root,
                         enable_thinking=task_thinking,

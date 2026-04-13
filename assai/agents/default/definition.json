@@ -4,5 +4,5 @@
   "role": "worker",
   "provider": "auto",
   "output_format": "messages",
-  "tools": []
+  "tools": ["ui"]
 }

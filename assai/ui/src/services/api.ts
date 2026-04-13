@@ -55,6 +55,22 @@ export async function converse(
     });
 }
 
+// Think-then-converse (emulated reasoning for models without native thinking)
+export async function thinkConverse(
+    message: string,
+    conversation = '',
+    project = '',
+    parent_task = '',
+    provider = '',
+    agent = '',
+): Promise<{ task_id: string; conversation: string }> {
+    const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
+    return request<{ task_id: string; conversation: string }>('/think/converse', {
+        method: 'POST',
+        body: JSON.stringify(body),
+    });
+}
+
 export interface HistoryResponse {
     messages: AgentMessage[];
     streaming: { task_id: string; partial: string } | null;
