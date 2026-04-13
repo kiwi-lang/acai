@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffec
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
 import { converse, getHistory, listProviders, listAgents, checkInflight, getContextStats } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
-import type { AgentDef, AgentMessage, StreamChunk, Provider, ToolStartEvent, ToolEndEvent } from '../services/types';
+import type { AgentDef, AgentMessage, Provider } from '../services/types';
 import Markdown from './Markdown';
 
 /* ─── Icons ──────────────────────────────────────────────────────── */
@@ -159,7 +159,7 @@ const ChatPanel = ({
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const shouldRestoreFocusRef = useRef(false);
     const activeTaskRef = useRef<string | null>(null);
-    const chunkBufferRef = useRef<StreamChunk[]>([]);
+    const eventSourceRef = useRef<EventSource | null>(null);
     const convIdRef = useRef<string | null>(conversationId);
     const justCreatedRef = useRef(false);
 
@@ -181,27 +181,98 @@ const ChatPanel = ({
     onProviderChangeRef.current = onProviderChange;
     onAgentChangeRef.current = onAgentChange;
 
-    const { onChunk, onStreamEnd, onStreamError, onToolStart, onToolEnd, joinConversation, leaveConversation } = useAgentSocket();
+    const { joinConversation, leaveConversation } = useAgentSocket();
 
     useEffect(() => {
         listProviders().then(setProviders).catch(() => {});
         listAgents().then(setAgents).catch(() => {});
     }, []);
 
-    const flushBuffer = useCallback((taskId: string) => {
-        const buffered = chunkBufferRef.current.filter(c => c.task_id === taskId);
-        chunkBufferRef.current = [];
-        if (buffered.length === 0) return;
-        setMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last && last.isStreaming && last.taskId === taskId) {
-                const extra = buffered.map(c => c.token).join('');
-                copy[copy.length - 1] = { ...last, content: last.content + extra };
-            }
-            return copy;
-        });
+    const closeEventSource = useCallback(() => {
+        if (eventSourceRef.current) {
+            eventSourceRef.current.close();
+            eventSourceRef.current = null;
+        }
     }, []);
+
+    const openEventSource = useCallback((convId: string) => {
+        closeEventSource();
+        const es = new EventSource(`/api/agent/stream/${convId}`);
+        eventSourceRef.current = es;
+
+        es.addEventListener('token', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.isStreaming) {
+                    copy[copy.length - 1] = { ...last, content: last.content + (data.token || '') };
+                }
+                return copy;
+            });
+        });
+
+        es.addEventListener('tool_start', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            setMessages(prev => [...prev, {
+                role: 'tool_call' as const,
+                content: JSON.stringify({ tool: data.tool_name, args: data.args }, null, 2),
+                name: data.tool_name,
+            }]);
+        });
+
+        es.addEventListener('tool_end', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            setMessages(prev => [...prev, {
+                role: 'tool_result' as const,
+                content: data.result_preview || '(done)',
+                name: data.tool_name,
+            }]);
+        });
+
+        es.addEventListener('done', () => {
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.isStreaming) {
+                    copy[copy.length - 1] = { ...last, isStreaming: false };
+                }
+                return copy;
+            });
+            activeTaskRef.current = null;
+            setIsLoading(false);
+            closeEventSource();
+        });
+
+        es.addEventListener('error', (e: MessageEvent) => {
+            let errorMsg = 'Stream error';
+            try {
+                const data = JSON.parse(e.data);
+                errorMsg = data.error || errorMsg;
+            } catch { /* raw error event from EventSource */ }
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.isStreaming) {
+                    copy[copy.length - 1] = { ...last, content: `Error: ${errorMsg}`, isStreaming: false };
+                }
+                return copy;
+            });
+            activeTaskRef.current = null;
+            setIsLoading(false);
+            closeEventSource();
+        });
+
+        es.onerror = () => {
+            activeTaskRef.current = null;
+            setIsLoading(false);
+            closeEventSource();
+        };
+    }, [closeEventSource]);
+
+    useEffect(() => {
+        return () => closeEventSource();
+    }, [closeEventSource]);
 
     useEffect(() => {
         convIdRef.current = conversationId;
@@ -216,7 +287,7 @@ const ChatPanel = ({
         setMessages([]);
         setIsLoading(false);
         activeTaskRef.current = null;
-        chunkBufferRef.current = [];
+        closeEventSource();
 
         if (!conversationId) return;
 
@@ -230,10 +301,10 @@ const ChatPanel = ({
                     ...prev,
                     { role: 'assistant', content: resp.streaming!.partial, isStreaming: true, taskId: tid },
                 ]);
-                flushBuffer(tid);
+                openEventSource(conversationId);
             }
         }).catch(() => {});
-    }, [conversationId, flushBuffer]);
+    }, [conversationId, closeEventSource, openEventSource]);
 
     useEffect(() => {
         if (conversationId) joinConversation(conversationId);
@@ -270,80 +341,6 @@ const ChatPanel = ({
         }
     }, [input, isLoading]);
 
-    /* ── Streaming ── */
-
-    const handleChunk = useCallback((chunk: StreamChunk) => {
-        if (activeTaskRef.current === null) {
-            chunkBufferRef.current.push(chunk);
-            return;
-        }
-        if (chunk.task_id !== activeTaskRef.current) return;
-        setMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last && last.isStreaming && last.taskId === chunk.task_id) {
-                copy[copy.length - 1] = { ...last, content: last.content + chunk.token };
-            }
-            return copy;
-        });
-    }, []);
-
-    const handleStreamEnd = useCallback((data: { task_id: string }) => {
-        if (data.task_id !== activeTaskRef.current) return;
-        setMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last && last.isStreaming && last.taskId === data.task_id) {
-                copy[copy.length - 1] = { ...last, isStreaming: false };
-            }
-            return copy;
-        });
-        activeTaskRef.current = null;
-        setIsLoading(false);
-    }, []);
-
-    const handleStreamError = useCallback((data: { task_id: string; error: string }) => {
-        if (data.task_id !== activeTaskRef.current) return;
-        setMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last && last.isStreaming && last.taskId === data.task_id) {
-                copy[copy.length - 1] = { ...last, content: `⚠ Error: ${data.error}`, isStreaming: false };
-            }
-            return copy;
-        });
-        activeTaskRef.current = null;
-        setIsLoading(false);
-    }, []);
-
-    const handleToolStart = useCallback((data: ToolStartEvent) => {
-        if (data.conversation !== convIdRef.current) return;
-        setMessages(prev => [...prev, {
-            role: 'tool_call' as const,
-            content: JSON.stringify({ tool: data.tool_name, args: data.args }, null, 2),
-            name: data.tool_name,
-        }]);
-    }, []);
-
-    const handleToolEnd = useCallback((data: ToolEndEvent) => {
-        if (data.conversation !== convIdRef.current) return;
-        setMessages(prev => [...prev, {
-            role: 'tool_result' as const,
-            content: data.result_preview || '(done)',
-            name: data.tool_name,
-        }]);
-    }, []);
-
-    useEffect(() => {
-        const unsub1 = onChunk(handleChunk);
-        const unsub2 = onStreamEnd(handleStreamEnd);
-        const unsub3 = onStreamError(handleStreamError);
-        const unsub4 = onToolStart(handleToolStart);
-        const unsub5 = onToolEnd(handleToolEnd);
-        return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
-    }, [onChunk, onStreamEnd, onStreamError, onToolStart, onToolEnd,
-        handleChunk, handleStreamEnd, handleStreamError, handleToolStart, handleToolEnd]);
-
     /* ── Actions ── */
 
     const handleProviderChangeInternal = useCallback((value: string) => {
@@ -373,12 +370,13 @@ const ChatPanel = ({
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
             ]);
+            openEventSource(cid);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
             setIsLoading(false);
         }
-    }, [isLoading, messages, project, selectedProvider, selectedAgent]);
+    }, [isLoading, messages, project, selectedProvider, selectedAgent, openEventSource]);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -410,6 +408,8 @@ const ChatPanel = ({
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
             ]);
+
+            openEventSource(resp.conversation);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);

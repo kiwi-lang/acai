@@ -1,4 +1,4 @@
-import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, Task, Worktree } from './types';
+import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, Task, UberRouteResponse, Worktree } from './types';
 
 const API_BASE = '/api/agent';
 
@@ -163,7 +163,7 @@ export async function deleteProject(id: string): Promise<void> {
 // Conversations update
 export async function updateConversation(
     id: string,
-    fields: { title?: string; provider?: string; agent?: string },
+    fields: { title?: string; description?: string; provider?: string; agent?: string; tags?: string[] },
 ): Promise<ConversationMeta> {
     return request<ConversationMeta>(`/conversations/${id}`, {
         method: 'PATCH',
@@ -248,6 +248,19 @@ export interface ToolNamespace {
 
 export async function listToolNamespaces(): Promise<ToolNamespace[]> {
     return request<ToolNamespace[]>('/tools/namespaces');
+}
+
+// Uber conversation routing
+export async function uberConverse(
+    message: string,
+    currentConversation = '',
+    provider = '',
+    agent = '',
+): Promise<UberRouteResponse> {
+    return request<UberRouteResponse>('/uber/converse', {
+        method: 'POST',
+        body: JSON.stringify({ message, current_conversation: currentConversation, provider, agent }),
+    });
 }
 
 // Conversation inflight check

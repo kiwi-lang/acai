@@ -17,7 +17,7 @@ import os
 import threading
 import time
 
-from flask import Blueprint, Flask, jsonify, request
+from flask import Blueprint, Flask, Response, jsonify, request
 from flask_socketio import SocketIO, join_room, leave_room
 
 from assai.core.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
@@ -28,6 +28,7 @@ from assai.core.config import (
 )
 from assai.core.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
+from assai.scheduler.uber import UberScheduler
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
@@ -345,6 +346,8 @@ def create_blueprint(config: AssaiConfig | None = None,
     chat = ChatStore(config.workspace)
     scheduler = ProviderScheduler(config.providers)
 
+    uber_scheduler = UberScheduler(config, chat, queue, tracker)
+
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
     agent_store.ensure_default()
@@ -404,10 +407,12 @@ def create_blueprint(config: AssaiConfig | None = None,
     @bp.route("/conversations/<conv_id>", methods=["PATCH"])
     def update_conversation(conv_id):
         data = request.get_json(silent=True) or {}
-        allowed = {"title", "provider", "agent"}
+        allowed = {"title", "description", "provider", "agent", "tags"}
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:
             return jsonify({"error": "no updatable fields"}), 400
+        if "tags" in fields and isinstance(fields["tags"], str):
+            fields["tags"] = [t.strip() for t in fields["tags"].split(",") if t.strip()]
         updated = chat.update_meta(conv_id, **fields)
         if updated is None:
             return jsonify({"error": "not found"}), 404
@@ -506,6 +511,32 @@ def create_blueprint(config: AssaiConfig | None = None,
                     if os.path.basename(conv_dir) == conv_id:
                         return jsonify({"inflight": True, "task_id": t.id, "status": t.status})
         return jsonify({"inflight": False})
+
+    # ==================================================================
+    # Uber conversation routing
+    # ==================================================================
+
+    @bp.route("/uber/converse", methods=["POST"])
+    def uber_converse():
+        data = request.get_json(silent=True) or {}
+        message = data.get("message", "")
+        current_conversation = data.get("current_conversation", "")
+        provider = data.get("provider", "auto")
+        agent = data.get("agent", "default")
+        if not message:
+            return jsonify({"error": "message is required"}), 400
+
+        result = uber_scheduler.schedule(
+            message=message,
+            current_conv_id=current_conversation,
+            provider=provider,
+            agent=agent,
+        )
+        return jsonify(result), 202
+
+    # ==================================================================
+    # History
+    # ==================================================================
 
     @bp.route("/history", methods=["GET"])
     def agent_history():
@@ -692,8 +723,13 @@ def create_blueprint(config: AssaiConfig | None = None,
                         "content": f"[Error] {error}",
                     })
         else:
-            queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
-            if kind == "llm_complete" and result_text and conversation:
+            current = queue.get(task_id)
+            already_chained = current and current.status == "chained"
+            if already_chained:
+                queue.update(task_id, result_path=result_path)
+            else:
+                queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
+            if kind == "llm_complete" and result_text and conversation and not already_chained:
                 chat.append(conversation, {"role": "assistant", "content": result_text})
             elif kind == "tool_call" and conversation:
                 tool_name = data.get("tool", task.title.replace("tool: ", ""))
@@ -703,15 +739,296 @@ def create_blueprint(config: AssaiConfig | None = None,
                     "content": result_preview,
                     "name": tool_name,
                 })
-                sio = _socketio_ref[0]
-                if sio is not None:
-                    sio.emit("tool_end", {
+                tracker.push(conversation, {
+                    "event_type": "tool_end",
+                    "data": {
                         "conversation": conversation,
                         "tool_name": tool_name,
                         "result_preview": result_preview[:200],
-                    }, to=f"conv:{conversation}" if conversation else None)
+                    },
+                })
 
         return jsonify({"ok": True})
+
+    # ==================================================================
+    # Streaming: push (poller -> orchestrator) and SSE (orchestrator -> UI)
+    # ==================================================================
+
+    _active_streams: dict[str, dict] = {}
+    _active_streams_lock = threading.Lock()
+
+    def _dispatch_tool_call(task_id: str, conv_id: str, call: dict) -> str:
+        """Create a tool_call work item for a completed tool call.
+
+        Returns the new tool task id.
+        """
+        fn = call.get("function", {})
+        tool_name = fn.get("name", "unknown")
+        try:
+            tool_args = json.loads(fn.get("arguments", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            tool_args = {}
+
+        task = queue.get(task_id)
+        task_project = (task.project or "") if task else ""
+        task_root = (task.root_task or task_id) if task else task_id
+        task_priority = task.priority if task else 0
+        task_agent = (task.agent or "") if task else ""
+
+        if chat and conv_id:
+            chat.append(conv_id, {
+                "role": "tool_call",
+                "content": json.dumps({"tool": tool_name, "args": tool_args}, ensure_ascii=False),
+                "name": tool_name,
+            })
+
+        tracker.push(conv_id, {
+            "event_type": "tool_start",
+            "data": {
+                "conversation": conv_id,
+                "tool_name": tool_name,
+                "args": tool_args,
+            },
+        })
+
+        payload = {
+            "tool": tool_name,
+            "args": tool_args,
+            "call_id": call.get("id", ""),
+            "conversation": conv_id,
+            "project": task_project,
+            "agent": task_agent,
+        }
+        payload_path = orc._write_payload(task_id, call.get("id", ""), payload)
+
+        tool_task = queue.push(
+            title=f"tool: {tool_name}",
+            kind="tool_call",
+            gpu=0,
+            priority=task_priority,
+            spec_path=payload_path,
+            depends_on=None,
+            project=task_project,
+            parent_task=task_id,
+            root_task=task_root,
+        )
+        queue.update(tool_task.id, status=TaskStatus.READY)
+        log.info("[%s] dispatched tool_call %s -> %s", task_id, tool_name, tool_task.id)
+        return tool_task.id
+
+    def _flush_tool_call(task_id: str, conv_id: str, stream_state: dict, index: int) -> None:
+        """If a tool call at *index* is accumulated, dispatch it."""
+        tc = stream_state["tool_calls"].pop(index, None)
+        if tc is None:
+            return
+        tid = _dispatch_tool_call(task_id, conv_id, tc)
+        stream_state["tool_task_ids"].append(tid)
+        stream_state["dispatched_calls"].append(tc)
+
+    def _handle_stream_event(task_id: str, conv_id: str,
+                             event_type: str, event_data: dict):
+        """Process a single stream event (token / tool_call_delta / done / error)."""
+        if event_type == "token":
+            with _active_streams_lock:
+                if task_id not in _active_streams:
+                    _active_streams[task_id] = {
+                        "conversation": conv_id,
+                        "tool_calls": {},
+                        "tool_task_ids": [],
+                        "dispatched_calls": [],
+                        "text": "",
+                    }
+                _active_streams[task_id]["text"] += event_data.get("token", "")
+
+            tracker.push(conv_id, {"event_type": "token", "data": event_data})
+
+        elif event_type == "tool_call_delta":
+            with _active_streams_lock:
+                if task_id not in _active_streams:
+                    _active_streams[task_id] = {
+                        "conversation": conv_id,
+                        "tool_calls": {},
+                        "tool_task_ids": [],
+                        "dispatched_calls": [],
+                        "text": "",
+                    }
+                ss = _active_streams[task_id]
+
+            idx = event_data.get("index", 0)
+            tc_id = event_data.get("id")
+            tc_name = event_data.get("name")
+            tc_args = event_data.get("arguments")
+
+            with _active_streams_lock:
+                prev_indices = [i for i in ss["tool_calls"] if i < idx]
+                for pi in prev_indices:
+                    _flush_tool_call(task_id, conv_id, ss, pi)
+
+                if idx not in ss["tool_calls"]:
+                    ss["tool_calls"][idx] = {
+                        "id": tc_id or "",
+                        "type": "function",
+                        "function": {"name": "", "arguments": ""},
+                    }
+                entry = ss["tool_calls"][idx]
+                if tc_id:
+                    entry["id"] = tc_id
+                if tc_name:
+                    entry["function"]["name"] = tc_name
+                if tc_args:
+                    entry["function"]["arguments"] += tc_args
+
+        elif event_type == "done":
+            with _active_streams_lock:
+                ss = _active_streams.pop(task_id, None)
+
+            if ss:
+                for idx in sorted(ss["tool_calls"]):
+                    _flush_tool_call(task_id, conv_id, ss, idx)
+
+                if ss["tool_task_ids"]:
+                    task = queue.get(task_id)
+                    task_project = (task.project or "") if task else ""
+                    task_root = (task.root_task or task_id) if task else task_id
+                    task_priority = task.priority if task else 0
+
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": ss["text"] or None,
+                        "tool_calls": ss["dispatched_calls"],
+                    }
+
+                    try:
+                        spec_path = task.spec_path if task else ""
+                        with open(spec_path) as f:
+                            original_messages = json.load(f)
+                    except (OSError, json.JSONDecodeError, TypeError):
+                        original_messages = []
+
+                    followup_messages = list(original_messages)
+                    followup_messages.append(assistant_msg)
+                    for call, tid in zip(ss["dispatched_calls"], ss["tool_task_ids"]):
+                        followup_messages.append({
+                            "role": "tool",
+                            "tool_call_id": call.get("id", ""),
+                            "content": f"{{{{result:{tid}}}}}",
+                        })
+
+                    followup_path = orc._write_payload(task_id, "followup", followup_messages)
+                    followup = queue.push(
+                        title=f"followup: tool results",
+                        kind="llm_complete",
+                        priority=task_priority,
+                        spec_path=followup_path,
+                        depends_on=ss["tool_task_ids"],
+                        project=task_project,
+                        parent_task=task_id,
+                        root_task=task_root,
+                    )
+                    queue.update(followup.id, status=TaskStatus.READY)
+                    queue.update(task_id, status="chained")
+                    log.info("[%s] created followup %s  depends_on=%s",
+                             task_id, followup.id, ss["tool_task_ids"])
+
+            tracker.push(conv_id, {"event_type": "done", "data": event_data})
+
+        elif event_type == "error":
+            with _active_streams_lock:
+                _active_streams.pop(task_id, None)
+            tracker.push(conv_id, {"event_type": "error", "data": event_data})
+
+        else:
+            tracker.push(conv_id, {"event_type": event_type, "data": event_data})
+
+    @bp.route("/stream/push", methods=["POST"])
+    def stream_push():
+        """Poller relays the worker's SSE stream as a single streaming
+        POST with an NDJSON body (one JSON object per line)."""
+        content_type = request.content_type or ""
+
+        if "ndjson" in content_type or "octet-stream" in content_type:
+            buf = b""
+            for chunk in request.stream:
+                buf += chunk
+                while b"\n" in buf:
+                    raw_line, buf = buf.split(b"\n", 1)
+                    raw_line = raw_line.strip()
+                    if not raw_line:
+                        continue
+                    try:
+                        data = json.loads(raw_line)
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    task_id = data.get("task_id", "")
+                    event_type = data.get("event_type", "")
+                    event_data = data.get("data", {})
+                    conv_id = data.get("conversation", "") or tracker.conv_for(task_id)
+
+                    if task_id and event_type:
+                        _handle_stream_event(task_id, conv_id, event_type, event_data)
+
+            if buf.strip():
+                try:
+                    data = json.loads(buf)
+                    task_id = data.get("task_id", "")
+                    event_type = data.get("event_type", "")
+                    event_data = data.get("data", {})
+                    conv_id = data.get("conversation", "") or tracker.conv_for(task_id)
+                    if task_id and event_type:
+                        _handle_stream_event(task_id, conv_id, event_type, event_data)
+                except (json.JSONDecodeError, ValueError):
+                    pass
+
+            return jsonify({"ok": True})
+
+        # Fallback: single JSON event (backwards compat)
+        data = request.get_json(silent=True) or {}
+        task_id = data.get("task_id", "")
+        event_type = data.get("event_type", "")
+        event_data = data.get("data", {})
+        conv_id = data.get("conversation", "") or tracker.conv_for(task_id)
+
+        if not task_id or not event_type:
+            return jsonify({"error": "task_id and event_type required"}), 400
+
+        _handle_stream_event(task_id, conv_id, event_type, event_data)
+        return jsonify({"ok": True})
+
+    @bp.route("/stream/<conv_id>", methods=["GET"])
+    def stream_sse(conv_id):
+        """SSE endpoint — UI subscribes here to receive live events."""
+        q = tracker.subscribe(conv_id)
+
+        active_task, partial = tracker.get_partial(conv_id)
+        replay = ""
+        if active_task is not None and partial:
+            replay = (
+                f"event: token\n"
+                f"data: {json.dumps({'task_id': active_task, 'token': partial, 'index': -1})}\n\n"
+            )
+
+        def generate():
+            if replay:
+                yield replay
+            try:
+                while True:
+                    try:
+                        event = q.get(timeout=30)
+                    except Exception:
+                        yield ": keepalive\n\n"
+                        continue
+
+                    etype = event.get("event_type", "message")
+                    edata = event.get("data", {})
+                    yield f"event: {etype}\ndata: {json.dumps(edata, ensure_ascii=False)}\n\n"
+
+                    if etype in ("done", "error"):
+                        break
+            finally:
+                tracker.unsubscribe(conv_id, q)
+
+        return Response(generate(), mimetype="text/event-stream")
 
     # ==================================================================
     # Task queue CRUD

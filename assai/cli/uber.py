@@ -2,6 +2,10 @@
 
 Registers both the orchestrator (``/agent``) and worker (``/worker``)
 blueprints into a single Flask app with a shared SocketIO instance.
+
+LLM streaming uses SSE end-to-end: the worker streams to the poller,
+which relays to the orchestrator, which serves an SSE endpoint to the UI.
+SocketIO is kept only for broadcast events (tasks, status, telemetry, etc.).
 """
 
 from __future__ import annotations
@@ -54,9 +58,8 @@ class Uber(Command):
             app, config, prefix=args.prefix,
         )
 
-        tracked_sio = stream_tracker.wrap_socketio(socketio)
         bp, llm_server, registry = create_worker_blueprint(
-            config, socketio=tracked_sio, prefix="/worker",
+            config, prefix="/worker",
             extern_llm=args.extern_llm,
         )
         tool_bp = registry.blueprint(url_prefix="/tools")

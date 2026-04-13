@@ -1,42 +1,87 @@
-"""Stream tracker — buffers in-progress LLM streams on the orchestrator.
+"""Stream tracker — pub-sub hub for in-progress LLM streams.
 
 The orchestrator owns a single ``StreamTracker`` instance.  It records
-which conversation each task belongs to (via ``register``), and exposes
-``get_partial`` so ``GET /history`` can recover accumulated text when a
-client reconnects mid-stream.
+which conversation each task belongs to, buffers partial text for
+reconnection, and fans out events to SSE subscribers.
 
-Accumulation happens transparently: ``wrap_socketio`` returns a thin
-proxy that intercepts ``chunk`` / ``stream_end`` / ``stream_error``
-events emitted by the worker.  The worker never imports or references
-the tracker — it just calls ``socketio.emit`` as usual.
+Producers call ``push(conversation, event)`` to deliver events.
+Consumers call ``subscribe(conversation)`` to get a ``Queue`` that
+receives events, and ``unsubscribe`` to clean up.
 """
 
 from __future__ import annotations
 
 import logging
+import queue
 import threading
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from flask_socketio import SocketIO
 
 log = logging.getLogger(__name__)
 
 
 class StreamTracker:
-    """Thread-safe accumulator for in-flight LLM token streams."""
+    """Thread-safe pub-sub hub for in-flight LLM token streams."""
 
     def __init__(self):
         self._lock = threading.Lock()
         self._buffers: dict[str, str] = {}
         self._task_to_conv: dict[str, str] = {}
+        self._subscribers: dict[str, list[queue.Queue]] = {}
 
-    # -- orchestrator-facing API ----------------------------------------
+    # -- registration ------------------------------------------------------
 
     def register(self, task_id: str, conversation: str) -> None:
-        """Record a task → conversation mapping before streaming starts."""
+        """Record a task -> conversation mapping before streaming starts."""
         with self._lock:
             self._task_to_conv[task_id] = conversation
+
+    def conv_for(self, task_id: str) -> str:
+        """Return the conversation id for *task_id*, or ``""``."""
+        with self._lock:
+            return self._task_to_conv.get(task_id, "")
+
+    # -- pub-sub -----------------------------------------------------------
+
+    def push(self, conversation: str, event: dict) -> None:
+        """Push *event* to all subscribers of *conversation*.
+
+        Also accumulates partial text for ``token`` events so
+        ``get_partial`` can serve reconnecting clients.
+        """
+        with self._lock:
+            if event.get("event_type") == "token":
+                self._buffers.setdefault(conversation, "")
+                self._buffers[conversation] += event.get("data", {}).get("token", "")
+
+            if event.get("event_type") == "done":
+                self._buffers.pop(conversation, None)
+                task_id = event.get("data", {}).get("task_id", "")
+                self._task_to_conv.pop(task_id, None)
+
+            for q in self._subscribers.get(conversation, []):
+                try:
+                    q.put_nowait(event)
+                except queue.Full:
+                    log.warning("subscriber queue full for conv=%s, dropping event", conversation)
+
+    def subscribe(self, conversation: str, maxsize: int = 4096) -> queue.Queue:
+        """Return a queue that receives events for *conversation*."""
+        q: queue.Queue = queue.Queue(maxsize=maxsize)
+        with self._lock:
+            self._subscribers.setdefault(conversation, []).append(q)
+        return q
+
+    def unsubscribe(self, conversation: str, q: queue.Queue) -> None:
+        """Remove a subscriber queue."""
+        with self._lock:
+            subs = self._subscribers.get(conversation, [])
+            try:
+                subs.remove(q)
+            except ValueError:
+                pass
+            if not subs:
+                self._subscribers.pop(conversation, None)
+
+    # -- reconnection support ----------------------------------------------
 
     def get_partial(self, conversation: str) -> tuple[str | None, str]:
         """Return ``(task_id, partial_text)`` for *conversation*.
@@ -45,60 +90,6 @@ class StreamTracker:
         """
         with self._lock:
             for task_id, conv in self._task_to_conv.items():
-                if conv == conversation and task_id in self._buffers:
-                    return task_id, self._buffers[task_id]
+                if conv == conversation and conversation in self._buffers:
+                    return task_id, self._buffers[conversation]
         return None, ""
-
-    def wrap_socketio(self, socketio: SocketIO) -> "_TrackedSocketIO":
-        """Return a SocketIO-like proxy that intercepts streaming events."""
-        return _TrackedSocketIO(socketio, self)
-
-    # -- internal (called by the proxy) ---------------------------------
-
-    def _on_chunk(self, task_id: str, token: str) -> None:
-        with self._lock:
-            if task_id in self._task_to_conv:
-                self._buffers.setdefault(task_id, "")
-                self._buffers[task_id] += token
-
-    def _conv_for(self, task_id: str) -> str:
-        """Return the conversation id for *task_id*, or ``""``."""
-        with self._lock:
-            return self._task_to_conv.get(task_id, "")
-
-    def _on_stream_end(self, task_id: str) -> None:
-        with self._lock:
-            self._buffers.pop(task_id, None)
-            self._task_to_conv.pop(task_id, None)
-
-
-class _TrackedSocketIO:
-    """Transparent proxy around SocketIO that feeds the tracker.
-
-    The worker blueprint receives this instead of the raw SocketIO
-    instance.  All method calls are forwarded; ``emit`` additionally
-    feeds chunk data into the tracker so the orchestrator can serve
-    partial content on reconnect.
-    """
-
-    def __init__(self, socketio: SocketIO, tracker: StreamTracker):
-        self._sio = socketio
-        self._tracker = tracker
-
-    def emit(self, event: str, data=None, **kwargs):
-        if isinstance(data, dict):
-            task_id = data.get("task_id", "")
-            if event == "chunk":
-                self._tracker._on_chunk(task_id, data.get("token", ""))
-            elif event in ("stream_end", "stream_error"):
-                self._tracker._on_stream_end(task_id)
-
-            if event in ("chunk", "stream_end", "stream_error") and "to" not in kwargs:
-                conv = self._tracker._conv_for(task_id)
-                if conv:
-                    kwargs["to"] = f"conv:{conv}"
-
-        self._sio.emit(event, data, **kwargs)
-
-    def __getattr__(self, name):
-        return getattr(self._sio, name)

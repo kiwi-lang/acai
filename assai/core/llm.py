@@ -21,12 +21,38 @@ import signal
 import shlex
 import subprocess
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Generator
 
 import requests
 
 if TYPE_CHECKING:
     from assai.core.config import ProviderConfig
+
+
+# ---------------------------------------------------------------------------
+# Stream event types — yielded by LLM.stream()
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StreamEvent:
+    """Base class for events yielded by ``LLM.stream()``."""
+
+@dataclass
+class ContentToken(StreamEvent):
+    text: str
+
+@dataclass
+class ToolCallDelta(StreamEvent):
+    """A single incremental chunk for one tool call from the LLM."""
+    index: int
+    id: str | None = None
+    name: str | None = None
+    arguments: str | None = None
+
+@dataclass
+class StreamDone(StreamEvent):
+    """Signals the end of the LLM stream."""
 
 log = logging.getLogger(__name__)
 
@@ -357,7 +383,7 @@ class LLM:
         """Return the full assistant message dict (may contain tool_calls)."""
         raise NotImplementedError
 
-    def stream(self, messages: list[dict], **kwargs) -> Generator[str, None, None]:
+    def stream(self, messages: list[dict], **kwargs) -> Generator[StreamEvent, None, None]:
         raise NotImplementedError
 
 
@@ -414,10 +440,11 @@ class OpenAICompatibleLLM(LLM):
         return resp.json()["choices"][0]["message"]
 
     def stream(self, messages, **kwargs):
-        """Stream tokens from the LLM.
+        """Stream structured events from the LLM.
 
-        After the generator is exhausted, ``self.last_tool_calls`` holds
-        any tool-call objects the model returned (or ``None``).
+        Yields :class:`ContentToken` for text deltas,
+        :class:`ToolCallDelta` for each raw tool-call chunk, and
+        :class:`StreamDone` when the stream is complete.
         """
         payload = self._payload(messages, stream=True, **kwargs)
         if kwargs.get("tools"):
@@ -431,9 +458,6 @@ class OpenAICompatibleLLM(LLM):
         )
         resp.raise_for_status()
 
-        tool_calls_acc: dict[int, dict] = {}
-        self.last_tool_calls = None
-
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):
                 continue
@@ -446,32 +470,20 @@ class OpenAICompatibleLLM(LLM):
 
                 content = delta.get("content", "")
                 if content:
-                    yield content
+                    yield ContentToken(text=content)
 
                 for tc in delta.get("tool_calls", []):
-                    idx = tc.get("index", 0)
-                    if idx not in tool_calls_acc:
-                        tool_calls_acc[idx] = {
-                            "id": tc.get("id", ""),
-                            "type": "function",
-                            "function": {"name": "", "arguments": ""},
-                        }
-                    entry = tool_calls_acc[idx]
-                    if tc.get("id"):
-                        entry["id"] = tc["id"]
-                    fn = tc.get("function", {})
-                    if fn.get("name"):
-                        entry["function"]["name"] = fn["name"]
-                    if fn.get("arguments"):
-                        entry["function"]["arguments"] += fn["arguments"]
+                    yield ToolCallDelta(
+                        index=tc.get("index", 0),
+                        id=tc.get("id"),
+                        name=tc.get("function", {}).get("name"),
+                        arguments=tc.get("function", {}).get("arguments"),
+                    )
 
             except (json.JSONDecodeError, IndexError):
                 continue
 
-        if tool_calls_acc:
-            self.last_tool_calls = [
-                tool_calls_acc[i] for i in sorted(tool_calls_acc)
-            ]
+        yield StreamDone()
 
 
 def create_llm(config: ProviderConfig) -> LLM:

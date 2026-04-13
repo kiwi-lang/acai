@@ -2,7 +2,7 @@
 
 The worker exposes:
 
-* ``POST /llm/complete`` — call the LLM (streaming, emits chunks via SocketIO).
+* ``POST /llm/complete`` — call the LLM and stream results as SSE.
 * ``GET /worker/logs`` — read latest vLLM server log.
 * Tool registry blueprint at ``/tools`` (``GET /tools/list``, ``POST /tools/call``).
 * ``GET /worker/status`` — capabilities + LLM server status.
@@ -26,7 +26,10 @@ from flask import Blueprint, Flask, Response, jsonify, request as flask_request
 from flask_socketio import SocketIO, emit
 
 from assai.core.agent_store import compress_messages
-from assai.core.llm import LLMServer, LLMServerError, create_llm
+from assai.core.llm import (
+    ContentToken, LLMServer, LLMServerError, StreamDone, ToolCallDelta,
+    create_llm,
+)
 from assai.core.tools import ToolRegistry, discover_tools
 
 if TYPE_CHECKING:
@@ -41,11 +44,12 @@ log = logging.getLogger(__name__)
 
 def create_worker_blueprint(
     config: AssaiConfig,
-    socketio: SocketIO | None = None,
     prefix: str = "/worker",
     extern_llm: bool = False,
 ) -> tuple[Blueprint, LLMServer, ToolRegistry]:
     """Build the worker Flask blueprint.
+
+    The ``/llm/complete`` endpoint streams results as SSE.
 
     When *extern_llm* is ``True`` the worker will never start/stop the
     LLM server — it assumes an externally managed instance is running
@@ -68,8 +72,11 @@ def create_worker_blueprint(
     )
 
     # ------------------------------------------------------------------
-    # POST /llm/complete
+    # POST /llm/complete  (SSE stream)
     # ------------------------------------------------------------------
+
+    def _sse_event(event: str, data: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
     @bp.route("/llm/complete", methods=["POST"])
     def llm_complete():
@@ -100,53 +107,45 @@ def create_worker_blueprint(
                 llm_server.start()
             except LLMServerError as exc:
                 log.error("[%s] LLM server failed to start: %s", task_id, exc)
-                if socketio is not None:
-                    socketio.emit("stream_error", {"task_id": task_id, "error": str(exc)})
-                    socketio.emit("stream_end", {"task_id": task_id})
-                return jsonify({"error": str(exc)}), 503
+                return Response(
+                    _sse_event("error", {"task_id": task_id, "error": str(exc)}),
+                    status=503,
+                    mimetype="text/event-stream",
+                )
 
         llm = create_llm(llm_cfg)
 
-        try:
-            accumulated = []
+        def generate():
             idx = 0
-            for token in llm.stream(messages, tools=tools):
-                accumulated.append(token)
-                if socketio is not None:
-                    socketio.emit("chunk", {
-                        "task_id": task_id,
-                        "token": token,
-                        "index": idx,
-                    })
-                idx += 1
+            try:
+                for event in llm.stream(messages, tools=tools):
+                    if isinstance(event, ContentToken):
+                        yield _sse_event("token", {
+                            "task_id": task_id,
+                            "token": event.text,
+                            "index": idx,
+                        })
+                        idx += 1
+                    elif isinstance(event, ToolCallDelta):
+                        yield _sse_event("tool_call_delta", {
+                            "task_id": task_id,
+                            "index": event.index,
+                            "id": event.id,
+                            "name": event.name,
+                            "arguments": event.arguments,
+                        })
+                    elif isinstance(event, StreamDone):
+                        yield _sse_event("done", {"task_id": task_id})
+                        log.info("[%s] llm/complete done  tokens=%d", task_id, idx)
 
-            full_text = "".join(accumulated)
-            log.info(
-                "[%s] llm/complete done  tokens=%d  chars=%d",
-                task_id, idx, len(full_text),
-            )
-            if socketio is not None:
-                socketio.emit("stream_end", {"task_id": task_id})
+            except Exception as exc:
+                log.exception("[%s] llm/complete failed", task_id)
+                err_msg = str(exc)
+                if not extern_llm and llm_server.process is not None and llm_server.process.poll() is not None:
+                    err_msg = f"LLM server crashed during inference. {llm_server.read_log(tail=30)}"
+                yield _sse_event("error", {"task_id": task_id, "error": err_msg})
 
-            tool_calls = getattr(llm, "last_tool_calls", None)
-            if tool_calls:
-                log.info("[%s] tool_calls detected: %d", task_id, len(tool_calls))
-                return jsonify({
-                    "result": full_text,
-                    "tool_calls": tool_calls,
-                })
-
-            return jsonify({"result": full_text})
-
-        except Exception as exc:
-            log.exception("[%s] llm/complete failed", task_id)
-            err_msg = str(exc)
-            if not extern_llm and llm_server.process is not None and llm_server.process.poll() is not None:
-                err_msg = f"LLM server crashed during inference. {llm_server.read_log(tail=30)}"
-            if socketio is not None:
-                socketio.emit("stream_error", {"task_id": task_id, "error": err_msg})
-                socketio.emit("stream_end", {"task_id": task_id})
-            return jsonify({"error": err_msg}), 502
+        return Response(generate(), mimetype="text/event-stream")
 
     # ------------------------------------------------------------------
     # POST /worker/switch-model
@@ -365,6 +364,7 @@ class WorkerPoller:
                     )
                     msgs[0]["content"] += addendum
 
+        # FIXME: Not sure if this is where this shoudl be
         compressor = work.get("compressor", "")
         messages = work.get("messages", [])
         if compressor and messages:
@@ -396,6 +396,10 @@ class WorkerPoller:
 
         Returns the worktree path, or ``None`` if unavailable.
         """
+
+        # FIXME: Maybe this need to be somewhere else
+        # the worker should be the one to do it but I think this might be deserving of its own
+        #
         project_path = work.get("project_path", "")
         project_name = work.get("project_name", "")
         task_id = work.get("task_id", "")
@@ -426,7 +430,10 @@ class WorkerPoller:
             return project_path
 
     def _dispatch_llm(self, work: dict) -> tuple[str | dict, str | None]:
+        """Consume the worker's SSE stream and relay to the orchestrator
+        via a single streaming POST (NDJSON body, chunked transfer)."""
         task_id = work.get("task_id", "")
+        conversation = work.get("conversation", "")
         n_msgs = len(work.get("messages", []))
         log.info("[%s] dispatching llm_complete  messages=%d", task_id, n_msgs)
 
@@ -442,34 +449,65 @@ class WorkerPoller:
             resp = http.post(
                 f"{self.worker_url}/llm/complete",
                 json=payload,
+                stream=True,
                 timeout=600,
             )
-            try:
-                body = resp.json()
-            except Exception:
-                log.error(
-                    "[%s] llm_complete returned non-JSON (status=%d): %s",
-                    task_id, resp.status_code, resp.text[:500],
-                )
-                return "", f"LLM returned non-JSON response (HTTP {resp.status_code}): {resp.text[:200]}"
             if resp.status_code >= 400:
-                error = body.get("error", f"HTTP {resp.status_code}")
-                log.error("[%s] llm_complete failed: %s", task_id, error)
-                return "", error
+                text = resp.text[:500] if hasattr(resp, "text") else ""
+                log.error("[%s] llm_complete returned %d: %s", task_id, resp.status_code, text)
+                return "", f"LLM returned HTTP {resp.status_code}: {text[:200]}"
 
-            result_text = body.get("result", "")
-            tool_calls = body.get("tool_calls")
-            log.info("[%s] llm_complete finished  chars=%d  tool_calls=%s",
-                     task_id, len(result_text), len(tool_calls) if tool_calls else 0)
+            accumulated_text = ""
+            error_msg = None
 
-            if tool_calls:
-                return {
-                    "role": "assistant",
-                    "content": result_text or None,
-                    "tool_calls": tool_calls,
-                }, None
+            def _event_generator():
+                """Yield NDJSON lines from the worker's SSE stream."""
+                nonlocal accumulated_text, error_msg
+                event_type = ""
 
-            return result_text, None
+                for line in resp.iter_lines(decode_unicode=True):
+                    if not line:
+                        continue
+                    if line.startswith("event: "):
+                        event_type = line[7:].strip()
+                        continue
+                    if not line.startswith("data: "):
+                        continue
+
+                    try:
+                        event_data = json.loads(line[6:])
+                    except (json.JSONDecodeError, ValueError):
+                        continue
+
+                    if event_type == "token":
+                        accumulated_text += event_data.get("token", "")
+                    elif event_type == "error":
+                        error_msg = event_data.get("error", "unknown error")
+
+                    ndjson_line = json.dumps({
+                        "task_id": task_id,
+                        "conversation": conversation,
+                        "event_type": event_type,
+                        "data": event_data,
+                    }) + "\n"
+                    yield ndjson_line.encode("utf-8")
+
+            relay_resp = http.post(
+                f"{self.orchestrator_url}/stream/push",
+                data=_event_generator(),
+                headers={"Content-Type": "application/x-ndjson"},
+                timeout=600,
+            )
+            if relay_resp.status_code >= 400:
+                log.warning("[%s] orchestrator stream/push returned %d",
+                            task_id, relay_resp.status_code)
+
+            log.info("[%s] llm_complete finished  chars=%d", task_id, len(accumulated_text))
+
+            if error_msg:
+                return "", error_msg
+            return accumulated_text, None
+
         except Exception as exc:
             log.exception("[%s] LLM dispatch failed", task_id)
             return "", f"LLM dispatch error: {exc}"
@@ -600,7 +638,7 @@ def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None,
         socketio.init_app(app)
 
     bp, llm_server, registry = create_worker_blueprint(
-        config, socketio, extern_llm=extern_llm,
+        config, extern_llm=extern_llm,
     )
     tool_bp = registry.blueprint(url_prefix="/tools")
     app.register_blueprint(bp)

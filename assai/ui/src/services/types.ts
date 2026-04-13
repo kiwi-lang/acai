@@ -164,9 +164,11 @@ export interface Conversation {
 export interface ConversationMeta {
     id: string;
     title: string;
+    description: string;
     project: string;
     provider: string;
     agent: string;
+    tags: string[];
     /** Present when `project` is set: copy of that project's `refiner` agent slug. */
     refiner?: string;
     created_at: number;
@@ -180,6 +182,12 @@ export interface SandboxConfig {
     gpu: boolean;
     timeout: number;
     memory_limit: string;
+}
+
+export interface UberRouteResponse {
+    task_id: string;
+    conversation: string;
+    is_new: boolean;
 }
 
 export interface AgentDef {
