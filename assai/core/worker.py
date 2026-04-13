@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 import requests as http
 from flask import Blueprint, Flask, Response, jsonify, request as flask_request
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit
 
 from assai.core.agent_store import compress_messages
 from assai.core.llm import LLMServer, LLMServerError, create_llm
@@ -246,11 +246,6 @@ class WorkerPoller:
         self.registry = registry
         self._stop = threading.Event()
         self._sio = None
-
-        from assai.tools.ui import _configure as configure_ui
-        from assai.tools.tasks import _configure as configure_tasks
-        configure_ui(self.orchestrator_url)
-        configure_tasks(self.orchestrator_url)
 
         if config.worker.sandbox == "container":
             from assai.core.sandbox import SandboxManager
@@ -492,13 +487,19 @@ class WorkerPoller:
 
         from assai.core.sandbox import is_sandboxed
         if self._sandbox is not None and is_sandboxed(tool_name):
-            if not self._sandbox.running:
-                project_path = args.get("cwd") or self.config.workspace
-                self._sandbox.start(project_path, session_id=task_id[:12])
-            tools_url = f"{self._sandbox.endpoint}/tools/call"
-            log.info("[%s] routing %s to sandbox %s", task_id, tool_name, tools_url)
-        else:
-            tools_url = f"{self.base_url}/tools/call"
+            return self._dispatch_tool_sandbox(work, tool_name, args)
+
+        return self._dispatch_tool_local(work, tool_name, args)
+
+    def _dispatch_tool_sandbox(self, work: dict, tool_name: str, args: dict) -> tuple[str, str | None]:
+        task_id = work.get("task_id", "")
+
+        if not self._sandbox.running:
+            project_path = args.get("cwd") or self.config.workspace
+            self._sandbox.start(project_path, session_id=task_id[:12])
+
+        tools_url = f"{self._sandbox.endpoint}/tools/call"
+        log.info("[%s] routing %s to sandbox %s", task_id, tool_name, tools_url)
 
         try:
             resp = http.post(
@@ -525,6 +526,35 @@ class WorkerPoller:
         except Exception as exc:
             log.exception("[%s] tool dispatch failed  tool=%s", task_id, tool_name)
             return json.dumps({"error": str(exc)}), str(exc)
+
+    def _dispatch_tool_local(self, work: dict, tool_name: str, args: dict) -> tuple[str, str | None]:
+        task_id = work.get("task_id", "")
+
+        from assai.core.context import WorkerContext, OrchestratorClient, set_context, reset_context
+
+        client = OrchestratorClient(self.orchestrator_url)
+        ctx = WorkerContext(
+            task_id=task_id,
+            kind=work.get("kind", ""),
+            project=work.get("project", ""),
+            conversation=work.get("conversation", ""),
+            agent=work.get("agent", ""),
+            client=client,
+        )
+        token = set_context(ctx)
+        try:
+            result = self.registry.call(tool_name, args)
+            log.info("[%s] tool_call finished  tool=%s  chars=%d", task_id, tool_name, len(result))
+            return result, None
+        except KeyError:
+            error = f"unknown tool: {tool_name}"
+            log.error("[%s] %s", task_id, error)
+            return json.dumps({"error": error}), error
+        except Exception as exc:
+            log.exception("[%s] tool dispatch failed  tool=%s", task_id, tool_name)
+            return json.dumps({"error": str(exc)}), str(exc)
+        finally:
+            reset_context(token)
 
     def _push_result(self, task_id: str, kind: str, result: str | dict, work: dict,
                      error: str | None = None):
@@ -607,8 +637,8 @@ def _setup_telemetry(socketio: SocketIO):
     def _init_observer():
         nonlocal _observer
         try:
-            from assai.core.system_monitor import system_monitor
-            _observer = system_monitor()
+            from assai.core.system_monitor import throttled_monitor
+            _observer = throttled_monitor()
             log.info("system monitor initialized")
         except Exception:
             log.debug("system_monitor not available", exc_info=True)
@@ -618,11 +648,11 @@ def _setup_telemetry(socketio: SocketIO):
     @socketio.on("request_telemetry")
     def handle_request_telemetry():
         if _observer is None:
-            socketio.emit("telemetry_error", {"error": "not available yet"})
+            emit("telemetry_error", {"error": "not available yet"})
             return
 
         try:
             data = _observer()
-            socketio.emit("telemetry", data)
+            emit("telemetry", data)
         except Exception as exc:
-            socketio.emit("telemetry_error", {"error": str(exc)})
+            emit("telemetry_error", {"error": str(exc)})

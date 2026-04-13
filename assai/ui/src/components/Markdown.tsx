@@ -2,6 +2,9 @@ import { memo } from 'react';
 import { Box } from '@chakra-ui/react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math-extended';
+import rehypeKatex from 'rehype-katex';
+import 'katex/dist/katex.min.css';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
@@ -42,10 +45,17 @@ const Markdown = memo(({ content, fontSize = 'sm' }: MarkdownProps) => (
             '& th': { background: 'var(--border-primary)', fontWeight: 600 },
             '& a': { color: 'var(--text-link)', textDecoration: 'underline' },
             '& img': { maxWidth: '100%', borderRadius: '6px' },
+            '& .katex-display': {
+                overflowX: 'auto',
+                overflowY: 'hidden',
+                padding: '0.5em 0',
+            },
+            '& .katex': { fontSize: '1.1em' },
         }}
     >
         <ReactMarkdown
-            remarkPlugins={[remarkGfm]}
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex]}
             components={{
                 code({ className, children, ...props }) {
                     const match = /language-(\w+)/.exec(className || '');

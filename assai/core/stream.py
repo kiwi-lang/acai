@@ -61,6 +61,11 @@ class StreamTracker:
                 self._buffers.setdefault(task_id, "")
                 self._buffers[task_id] += token
 
+    def _conv_for(self, task_id: str) -> str:
+        """Return the conversation id for *task_id*, or ``""``."""
+        with self._lock:
+            return self._task_to_conv.get(task_id, "")
+
     def _on_stream_end(self, task_id: str) -> None:
         with self._lock:
             self._buffers.pop(task_id, None)
@@ -87,6 +92,11 @@ class _TrackedSocketIO:
                 self._tracker._on_chunk(task_id, data.get("token", ""))
             elif event in ("stream_end", "stream_error"):
                 self._tracker._on_stream_end(task_id)
+
+            if event in ("chunk", "stream_end", "stream_error") and "to" not in kwargs:
+                conv = self._tracker._conv_for(task_id)
+                if conv:
+                    kwargs["to"] = f"conv:{conv}"
 
         self._sio.emit(event, data, **kwargs)
 

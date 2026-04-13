@@ -18,7 +18,7 @@ import threading
 import time
 
 from flask import Blueprint, Flask, jsonify, request
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, join_room, leave_room
 
 from assai.core.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
 from assai.core.stream import StreamTracker
@@ -132,13 +132,15 @@ class Orchestrator:
                     "conversation": conv_id,
                     "tool_name": tool_name,
                     "args": tool_args,
-                })
+                }, to=f"conv:{conv_id}" if conv_id else None)
 
             payload = {
                 "tool": tool_name,
                 "args": tool_args,
                 "call_id": call.get("id", ""),
                 "conversation": conv_id,
+                "project": task_project,
+                "agent": task.agent or "",
             }
             payload_path = self._write_payload(task.id, call.get("id", ""), payload)
 
@@ -707,7 +709,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                         "conversation": conversation,
                         "tool_name": tool_name,
                         "result_preview": result_preview[:200],
-                    })
+                    }, to=f"conv:{conversation}" if conversation else None)
 
         return jsonify({"ok": True})
 
@@ -1159,6 +1161,20 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
     @socketio.on("disconnect")
     def handle_disconnect():
         log.debug("WS client disconnected")
+
+    @socketio.on("join_conversation")
+    def handle_join_conversation(data):
+        conv_id = data.get("conversation", "") if isinstance(data, dict) else ""
+        if conv_id:
+            join_room(f"conv:{conv_id}")
+            log.debug("client joined room conv:%s", conv_id)
+
+    @socketio.on("leave_conversation")
+    def handle_leave_conversation(data):
+        conv_id = data.get("conversation", "") if isinstance(data, dict) else ""
+        if conv_id:
+            leave_room(f"conv:{conv_id}")
+            log.debug("client left room conv:%s", conv_id)
 
     if pop_fn is not None:
         @socketio.on("work_pop")

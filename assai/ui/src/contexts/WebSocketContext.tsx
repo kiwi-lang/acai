@@ -17,6 +17,8 @@ interface AgentSocketContextType {
     capabilities: Capabilities | null;
     telemetry: TelemetryData | null;
     requestTelemetry: () => void;
+    joinConversation: (convId: string) => void;
+    leaveConversation: (convId: string) => void;
     onChunk: (cb: (chunk: StreamChunk) => void) => () => void;
     onStreamEnd: (cb: (data: { task_id: string }) => void) => () => void;
     onStreamError: (cb: (data: StreamError) => void) => () => void;
@@ -48,13 +50,9 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
     const toolEndListeners = useRef<Set<(data: ToolEndEvent) => void>>(new Set());
 
     useEffect(() => {
-        let wsUrl: string | undefined = import.meta.env.VITE_WS_URL;
-        if (!wsUrl) {
-            const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-            wsUrl = `${protocol}//${window.location.hostname}:5050`;
-        }
+        const wsUrl: string | undefined = import.meta.env.VITE_WS_URL;
 
-        const sock = io(wsUrl, {
+        const sock = io(wsUrl || window.location.origin, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,
@@ -112,6 +110,14 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
         socket?.emit('request_telemetry');
     }, [socket]);
 
+    const joinConversation = useCallback((convId: string) => {
+        socket?.emit('join_conversation', { conversation: convId });
+    }, [socket]);
+
+    const leaveConversation = useCallback((convId: string) => {
+        socket?.emit('leave_conversation', { conversation: convId });
+    }, [socket]);
+
     const onChunk = useCallback((cb: (chunk: StreamChunk) => void) => {
         chunkListeners.current.add(cb);
         return () => { chunkListeners.current.delete(cb); };
@@ -141,6 +147,7 @@ export const AgentSocketProvider = ({ children }: { children: ReactNode }) => {
         <AgentSocketContext.Provider value={{
             socket, isConnected, tasks, status, events,
             capabilities, telemetry, requestTelemetry,
+            joinConversation, leaveConversation,
             onChunk, onStreamEnd, onStreamError,
             onToolStart, onToolEnd,
         }}>

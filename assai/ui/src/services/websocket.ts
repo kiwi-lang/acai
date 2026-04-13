@@ -33,20 +33,11 @@ class WebSocketService {
             return;
         }
 
-        // Determine WebSocket URL based on environment
-        // Default to Flask server port 5001, or use environment variable
-        let wsUrl = import.meta.env.VITE_WS_URL;
-        if (!wsUrl) {
-            // In development, connect directly to Flask server on port 5001
-            // Use same hostname and protocol as the current page
-            const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:';
-            const hostname = window.location.hostname;
-            wsUrl = `${protocol}//${hostname}:5001`;
-        }
+        const wsUrl = import.meta.env.VITE_WS_URL;
 
-        console.log('[WebSocket] Connecting to:', wsUrl);
+        console.log('[WebSocket] Connecting to:', wsUrl || window.location.origin);
 
-        this.socket = io(wsUrl, {
+        this.socket = io(wsUrl || window.location.origin, {
             transports: ['websocket', 'polling'],
             reconnection: true,
             reconnectionDelay: 1000,

@@ -1,7 +1,7 @@
 """UI tools — lets the LLM push visual feedback to the user's browser.
 
-The orchestrator URL must be set via :func:`configure` before any tool
-is invoked.  The worker does this during initialisation.
+The orchestrator client is obtained from the worker context
+(see :mod:`assai.core.context`).
 """
 
 from __future__ import annotations
@@ -10,17 +10,9 @@ import json
 import logging
 from typing import Optional
 
-import requests as http
+from assai.core.context import current_client
 
 log = logging.getLogger(__name__)
-
-_orchestrator_url: str = ""
-
-
-def _configure(orchestrator_url: str) -> None:
-    """Set the orchestrator base URL so tools can reach it."""
-    global _orchestrator_url
-    _orchestrator_url = orchestrator_url.rstrip("/")
 
 
 def toast(
@@ -40,26 +32,19 @@ def toast(
     if status not in ("info", "success", "warning", "error"):
         status = "info"
 
-    if not _orchestrator_url:
-        log.warning("ui.toast called but orchestrator URL not configured")
-        return json.dumps({"error": "orchestrator URL not configured"})
-
-    payload = {
-        "message": message,
-        "title": title or "",
-        "status": status,
-        "duration": duration,
-    }
+    client = current_client()
+    if client is None:
+        log.warning("ui.toast called but no orchestrator client in context")
+        return json.dumps({"error": "orchestrator client not available"})
 
     try:
-        resp = http.post(
-            f"{_orchestrator_url}/toast",
-            json=payload,
-            timeout=5,
-        )
-        if resp.status_code == 200:
-            return json.dumps({"ok": True})
-        return json.dumps({"error": f"HTTP {resp.status_code}"})
+        result = client.post("/toast", {
+            "message": message,
+            "title": title or "",
+            "status": status,
+            "duration": duration,
+        }, timeout=5)
+        return json.dumps(result)
     except Exception as exc:
-        log.exception("ui.toast failed to reach orchestrator")
+        log.exception("ui.toast failed")
         return json.dumps({"error": str(exc)})

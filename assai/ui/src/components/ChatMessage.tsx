@@ -2,6 +2,7 @@ import { Box, HStack, VStack, Text, Button, Spinner } from '@chakra-ui/react';
 import { useEffect, useRef } from 'react';
 import { Message } from '../services/types';
 import MeshViewer from './MeshViewer';
+import Markdown from './Markdown';
 
 interface ChatMessageProps {
     message: Message;
@@ -127,16 +128,8 @@ const ChatMessage = ({ message, onRetry }: ChatMessageProps) => {
                         return (
                             <>
                                 {textContent && (
-                                    <Box w="100%">
-                                        <Text
-                                            fontSize="md"
-                                            lineHeight="1.75"
-                                            whiteSpace="pre-wrap"
-                                            wordBreak="break-word"
-                                            color={isError ? 'red.400' : 'gray.200'}
-                                        >
-                                            {textContent}
-                                        </Text>
+                                    <Box w="100%" color={isError ? 'red.400' : 'gray.200'}>
+                                        <Markdown content={textContent} fontSize="md" />
                                         {isError && onRetry && message.retryPrompt && (
                                             <Button
                                                 size="sm"

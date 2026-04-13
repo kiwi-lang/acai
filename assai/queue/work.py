@@ -71,8 +71,8 @@ class Task(Base):
     status      = Column(String, default=TaskStatus.PENDING, index=True)
     priority    = Column(Integer, default=0)
     spec        = Column(Text, default="")
-    spec_path   = Column(String, default="")
-    context_path = Column(String, default="")
+    spec_path   = Column(String, default="")    #
+    context_path = Column(String, default="")   #
     result_path = Column(String, default="")
     worktree    = Column(String, default="")
     retries     = Column(Integer, default=0)

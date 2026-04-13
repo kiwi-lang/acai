@@ -1,41 +1,34 @@
 """Task management tools — lets agents create and manipulate tasks.
 
-The orchestrator URL must be set via :func:`configure` before any tool
-is invoked.  The worker does this during initialisation.
+Job metadata (project, conversation, …) and the orchestrator client
+are available via :func:`assai.core.context.current_context`.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from typing import Optional
-
 import requests as http
+from dataclasses import dataclass
+
+from assai.core.context import current_context, current_client
+
+@dataclass
+class Task:
+    title: str
+    context: str
+    subtasks: list[Task]
+
+
 
 log = logging.getLogger(__name__)
 
-_orchestrator_url: str = ""
 
-
-def _configure(orchestrator_url: str) -> None:
-    """Set the orchestrator base URL so tools can reach it."""
-    global _orchestrator_url
-    _orchestrator_url = orchestrator_url.rstrip("/")
-
-
-def _post(path: str, payload: dict) -> dict:
-    resp = http.post(f"{_orchestrator_url}{path}", json=payload, timeout=15)
-    return resp.json()
-
-
-def _get(path: str, params: dict | None = None) -> dict | list:
-    resp = http.get(f"{_orchestrator_url}{path}", params=params, timeout=15)
-    return resp.json()
-
-
-def _patch(path: str, payload: dict) -> dict:
-    resp = http.patch(f"{_orchestrator_url}{path}", json=payload, timeout=15)
-    return resp.json()
+def _require_client():
+    client = current_client()
+    if client is None:
+        raise RuntimeError("no orchestrator client in worker context")
+    return client
 
 
 def create(
@@ -51,16 +44,17 @@ def create(
     Args:
         title: Short summary of the task.
         description: Detailed description with acceptance criteria, context, etc.
-        project: Project name this task belongs to.
+        project: Project name (defaults to the current job's project).
         priority: Higher values are picked up first.
         agent: Agent to assign (e.g. "coder"). Leave empty for default.
         kind: Task kind — "task" for general, "work" for implementation work.
     """
-    if not _orchestrator_url:
-        return json.dumps({"error": "orchestrator URL not configured"})
-
     try:
-        result = _post("/tasks", {
+        client = _require_client()
+        ctx = current_context()
+        if not project and ctx is not None:
+            project = ctx.project
+        result = client.post("/tasks", {
             "title": title,
             "description": description,
             "project": project,
@@ -92,9 +86,6 @@ def update(
         priority: New priority (-1 to keep current).
         agent: New agent assignment (leave empty to keep current).
     """
-    if not _orchestrator_url:
-        return json.dumps({"error": "orchestrator URL not configured"})
-
     fields: dict = {}
     if title:
         fields["title"] = title
@@ -111,7 +102,8 @@ def update(
         return json.dumps({"error": "no fields to update"})
 
     try:
-        result = _patch(f"/tasks/{task_id}", fields)
+        client = _require_client()
+        result = client.patch(f"/tasks/{task_id}", fields)
         return json.dumps(result)
     except Exception as exc:
         log.exception("tasks.update failed")
@@ -128,16 +120,14 @@ def list_tasks(
         project: Filter by project name (empty for all projects).
         status: Filter by status (empty for all statuses).
     """
-    if not _orchestrator_url:
-        return json.dumps({"error": "orchestrator URL not configured"})
-
     try:
-        params: dict = {}
+        client = _require_client()
+        params: dict[str, str] = {}
         if project:
             params["project"] = project
         if status:
             params["status"] = status
-        result = _get("/tasks", params)
+        result = client.get("/tasks", params)
         return json.dumps(result)
     except Exception as exc:
         log.exception("tasks.list_tasks failed")
@@ -150,11 +140,9 @@ def get(task_id: str) -> str:
     Args:
         task_id: The task ID to retrieve.
     """
-    if not _orchestrator_url:
-        return json.dumps({"error": "orchestrator URL not configured"})
-
     try:
-        result = _get(f"/tasks/{task_id}")
+        client = _require_client()
+        result = client.get(f"/tasks/{task_id}")
         return json.dumps(result)
     except Exception as exc:
         log.exception("tasks.get failed")
@@ -170,11 +158,9 @@ def mark_ready(task_id: str) -> str:
     Args:
         task_id: The task ID to mark as ready.
     """
-    if not _orchestrator_url:
-        return json.dumps({"error": "orchestrator URL not configured"})
-
     try:
-        result = _patch(f"/tasks/{task_id}", {"status": "ready"})
+        client = _require_client()
+        result = client.patch(f"/tasks/{task_id}", {"status": "ready"})
         return json.dumps(result)
     except Exception as exc:
         log.exception("tasks.mark_ready failed")

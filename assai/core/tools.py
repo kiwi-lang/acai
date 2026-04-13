@@ -313,9 +313,12 @@ class ToolRegistry:
 
         @bp.route("/call", methods=["POST"])
         def call_tool():
+            from assai.core.context import WorkerContext, OrchestratorClient, set_context, reset_context
+
             body = flask_request.get_json(silent=True) or {}
             tool_name = body.get("tool", "")
             args = body.get("args", {})
+            ctx_data = body.get("context")
 
             td = registry.get(tool_name)
             if td is None:
@@ -323,11 +326,21 @@ class ToolRegistry:
             if namespaces is not None and td.namespace not in namespaces:
                 return jsonify({"error": f"tool not exposed: {tool_name}"}), 403
 
+            token = None
+            if ctx_data and isinstance(ctx_data, dict):
+                orch_url = ctx_data.pop("orchestrator_url", "")
+                client = OrchestratorClient(orch_url) if orch_url else None
+                ctx = WorkerContext(client=client, **ctx_data)
+                token = set_context(ctx)
+
             try:
                 result = td.fn(**args)
                 return jsonify({"result": result})
             except Exception as exc:
                 return jsonify({"error": str(exc)}), 500
+            finally:
+                if token is not None:
+                    reset_context(token)
 
         return bp
 

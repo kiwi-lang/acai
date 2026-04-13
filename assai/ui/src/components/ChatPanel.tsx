@@ -181,7 +181,7 @@ const ChatPanel = ({
     onProviderChangeRef.current = onProviderChange;
     onAgentChangeRef.current = onAgentChange;
 
-    const { onChunk, onStreamEnd, onStreamError, onToolStart, onToolEnd } = useAgentSocket();
+    const { onChunk, onStreamEnd, onStreamError, onToolStart, onToolEnd, joinConversation, leaveConversation } = useAgentSocket();
 
     useEffect(() => {
         listProviders().then(setProviders).catch(() => {});
@@ -234,6 +234,13 @@ const ChatPanel = ({
             }
         }).catch(() => {});
     }, [conversationId, flushBuffer]);
+
+    useEffect(() => {
+        if (conversationId) joinConversation(conversationId);
+        return () => {
+            if (conversationId) leaveConversation(conversationId);
+        };
+    }, [conversationId, joinConversation, leaveConversation]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
@@ -391,6 +398,8 @@ const ChatPanel = ({
             const resp = await converse(text, convIdRef.current || '', project || '', '', selectedProvider, selectedAgent);
             activeTaskRef.current = resp.task_id;
             convIdRef.current = resp.conversation;
+
+            joinConversation(resp.conversation);
 
             if (!conversationId) {
                 justCreatedRef.current = true;

@@ -23,28 +23,99 @@ const KIND_LABELS: Record<string, { label: string; color: string }> = {
     tool_call: { label: 'Tool', color: 'orange' },
 };
 
-const ChildRow = ({ task, depth = 0 }: { task: Task; depth?: number }) => {
-    const kind = KIND_LABELS[task.kind] || { label: task.kind, color: 'gray' };
+const DetailRow = ({ label, value }: { label: string; value: string | number | null | undefined }) => {
+    const display = value === null || value === undefined || value === '' ? '—' : String(value);
+    const isEmpty = display === '—';
     return (
-        <HStack
-            pl={`${depth * 20 + 8}px`} py={1.5} pr={3}
-            bg="var(--bg-elevated)" borderRadius="md"
-            border="1px solid" borderColor="var(--border-primary)" gap={2}
-        >
-            <Badge colorScheme={STATUS_COLORS[task.status] || 'gray'} fontSize="2xs">{task.status}</Badge>
-            <Badge colorScheme={kind.color} fontSize="2xs" variant="outline">{kind.label}</Badge>
-            <Text fontSize="xs" color="var(--text-secondary)" flex={1} lineClamp={1}>{task.title}</Text>
-            {task.created_at && (
-                <Text fontSize="2xs" color="var(--text-muted)">{new Date(task.created_at).toLocaleString()}</Text>
-            )}
+        <HStack gap={2} py={1} borderBottom="1px solid" borderColor="var(--border-primary)" align="flex-start">
+            <Text fontSize="xs" color="var(--text-muted)" fontWeight="medium" w="120px" flexShrink={0}>
+                {label}
+            </Text>
+            <Text
+                fontSize="xs"
+                color={isEmpty ? 'var(--text-muted)' : 'var(--text-secondary)'}
+                fontFamily="mono"
+                wordBreak="break-all"
+                flex={1}
+                whiteSpace="pre-wrap"
+            >
+                {display}
+            </Text>
         </HStack>
+    );
+};
+
+const TaskDetail = ({ task }: { task: Task }) => (
+    <Box
+        mt={1} p={4} bg="var(--bg-elevated)" borderRadius="md"
+        border="1px solid" borderColor="var(--border-secondary)"
+    >
+        <Text fontSize="sm" fontWeight="semibold" color="var(--text-heading)" mb={3}>
+            DB Record
+        </Text>
+        <VStack align="stretch" gap={0}>
+            <DetailRow label="id" value={task.id} />
+            <DetailRow label="kind" value={task.kind} />
+            <DetailRow label="status" value={task.status} />
+            <DetailRow label="title" value={task.title} />
+            <DetailRow label="description" value={task.description} />
+            <DetailRow label="priority" value={task.priority} />
+            <DetailRow label="gpu" value={task.gpu} />
+            <DetailRow label="agent" value={task.agent} />
+            <DetailRow label="project" value={task.project} />
+            <DetailRow label="spec" value={task.spec} />
+            <DetailRow label="spec_path" value={task.spec_path} />
+            <DetailRow label="context_path" value={task.context_path} />
+            <DetailRow label="result_path" value={task.result_path} />
+            <DetailRow label="worktree" value={task.worktree} />
+            <DetailRow label="assigned_to" value={task.assigned_to} />
+            <DetailRow label="depends_on" value={task.depends_on} />
+            <DetailRow label="parent_task" value={task.parent_task} />
+            <DetailRow label="root_task" value={task.root_task} />
+            <DetailRow label="retries" value={`${task.retries} / ${task.max_retries}`} />
+            <DetailRow label="error_log" value={task.error_log} />
+            <DetailRow label="created_at" value={task.created_at} />
+            <DetailRow label="updated_at" value={task.updated_at} />
+            <DetailRow label="started_at" value={task.started_at} />
+        </VStack>
+    </Box>
+);
+
+const ChildRow = ({ task, depth = 0, onSelect, selectedId }: {
+    task: Task; depth?: number;
+    onSelect?: (task: Task) => void;
+    selectedId?: string | null;
+}) => {
+    const kind = KIND_LABELS[task.kind] || { label: task.kind, color: 'gray' };
+    const isSelected = selectedId === task.id;
+    return (
+        <Box>
+            <HStack
+                pl={`${depth * 20 + 8}px`} py={1.5} pr={3}
+                bg={isSelected ? 'var(--bg-active)' : 'var(--bg-elevated)'} borderRadius="md"
+                border="1px solid" borderColor={isSelected ? 'var(--accent)' : 'var(--border-primary)'} gap={2}
+                cursor="pointer"
+                _hover={{ borderColor: 'var(--border-secondary)' }}
+                onClick={(e) => { e.stopPropagation(); onSelect?.(task); }}
+            >
+                <Badge colorScheme={STATUS_COLORS[task.status] || 'gray'} fontSize="2xs">{task.status}</Badge>
+                <Badge colorScheme={kind.color} fontSize="2xs" variant="outline">{kind.label}</Badge>
+                <Text fontSize="xs" color="var(--text-secondary)" flex={1} lineClamp={1}>{task.title}</Text>
+                {task.created_at && (
+                    <Text fontSize="2xs" color="var(--text-muted)">{new Date(task.created_at).toLocaleString()}</Text>
+                )}
+            </HStack>
+            {isSelected && <TaskDetail task={task} />}
+        </Box>
     );
 };
 
 const TaskCard = ({ task, rootOnly }: { task: Task; rootOnly: boolean }) => {
     const [expanded, setExpanded] = useState(false);
+    const [showDetail, setShowDetail] = useState(false);
     const [children, setChildren] = useState<Task[]>([]);
     const [loadingTree, setLoadingTree] = useState(false);
+    const [selectedChild, setSelectedChild] = useState<string | null>(null);
 
     const handleExpand = async () => {
         if (expanded) { setExpanded(false); return; }
@@ -57,17 +128,21 @@ const TaskCard = ({ task, rootOnly }: { task: Task; rootOnly: boolean }) => {
         setExpanded(true);
     };
 
+    const handleChildSelect = (child: Task) => {
+        setSelectedChild(prev => prev === child.id ? null : child.id);
+    };
+
     const kind = KIND_LABELS[task.kind] || { label: task.kind, color: 'gray' };
 
     return (
         <Box>
             <Box
                 p={4} bg="var(--bg-card)" borderRadius="lg"
-                border="1px solid" borderColor={expanded ? 'var(--accent)' : 'var(--border-primary)'}
+                border="1px solid" borderColor={expanded || showDetail ? 'var(--accent)' : 'var(--border-primary)'}
                 _hover={{ borderColor: 'var(--border-secondary)' }}
                 transition="all 0.2s"
-                cursor={rootOnly ? 'pointer' : 'default'}
-                onClick={rootOnly ? handleExpand : undefined}
+                cursor="pointer"
+                onClick={rootOnly ? handleExpand : () => setShowDetail(v => !v)}
             >
                 <HStack justify="space-between" mb={2}>
                     <HStack gap={2}>
@@ -113,6 +188,15 @@ const TaskCard = ({ task, rootOnly }: { task: Task; rootOnly: boolean }) => {
                     {task.created_at && (
                         <Text fontSize="xs" color="var(--text-muted)">{new Date(task.created_at).toLocaleString()}</Text>
                     )}
+                    {rootOnly && (
+                        <Text
+                            fontSize="xs" color="var(--text-link)"
+                            cursor="pointer" _hover={{ textDecoration: 'underline' }}
+                            onClick={(e) => { e.stopPropagation(); setShowDetail(v => !v); }}
+                        >
+                            {showDetail ? 'Hide details' : 'Details'}
+                        </Text>
+                    )}
                 </HStack>
 
                 {task.error_log && (
@@ -124,6 +208,8 @@ const TaskCard = ({ task, rootOnly }: { task: Task; rootOnly: boolean }) => {
                 )}
             </Box>
 
+            {showDetail && <TaskDetail task={task} />}
+
             {expanded && (
                 <VStack align="stretch" gap={1} ml={4} mt={1} mb={2}>
                     {loadingTree ? (
@@ -131,7 +217,13 @@ const TaskCard = ({ task, rootOnly }: { task: Task; rootOnly: boolean }) => {
                     ) : children.length === 0 ? (
                         <Text fontSize="xs" color="var(--text-muted)" pl={3} py={1}>No subtasks</Text>
                     ) : (
-                        children.map(child => <ChildRow key={child.id} task={child} />)
+                        children.map(child => (
+                            <ChildRow
+                                key={child.id} task={child}
+                                onSelect={handleChildSelect}
+                                selectedId={selectedChild}
+                            />
+                        ))
                     )}
                 </VStack>
             )}

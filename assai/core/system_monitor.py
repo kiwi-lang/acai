@@ -49,3 +49,21 @@ def system_monitor():
 
     _observe_util = observe
     return observe
+
+
+def throttled_monitor(interval=1):
+    mon = system_monitor()
+    obs = mon()
+    last_call = time.time()
+
+    def throttled():
+        nonlocal last_call, obs
+
+        if time.time() - last_call < interval:
+            return obs
+
+        obs = mon()
+        last_call = time.time()
+        return obs
+    
+    return throttled
