@@ -3,6 +3,7 @@
 export interface AgentMessage {
     role: 'user' | 'assistant' | 'tool_call' | 'tool_result';
     content: string;
+    reasoning?: string;
     name?: string;
     isStreaming?: boolean;
     taskId?: string;
@@ -171,6 +172,7 @@ export interface ConversationMeta {
     tags: string[];
     /** Present when `project` is set: copy of that project's `refiner` agent slug. */
     refiner?: string;
+    enable_thinking?: boolean;
     created_at: number;
 }
 
@@ -207,4 +209,5 @@ export interface AgentDef {
     approval_required: boolean;
     created_at: string;
     tags: string[];
+    builtin: boolean;
 }

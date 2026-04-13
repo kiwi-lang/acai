@@ -1,0 +1,9 @@
+{
+  "name": "tdd_coder",
+  "description": "a software engineer that implements features using test-driven development",
+  "role": "worker",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": ["filesystem", "code", "git"],
+  "max_iterations": 40
+}

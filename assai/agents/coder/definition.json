@@ -1,0 +1,12 @@
+{
+  "name": "coder",
+  "description": "a research-driven software engineer that explores broadly before implementing",
+  "role": "worker",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": [
+    "filesystem", "code", "git", "meta", "notebook",
+    "session", "search", "shell", "tasks", "test", "ui", "web"
+  ],
+  "max_iterations": 40
+}

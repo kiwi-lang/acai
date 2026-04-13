@@ -45,10 +45,13 @@ export async function converse(
     parent_task = '',
     provider = '',
     agent = '',
+    enable_thinking?: boolean,
 ): Promise<{ task_id: string; conversation: string }> {
+    const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
+    if (enable_thinking !== undefined) body.enable_thinking = enable_thinking;
     return request<{ task_id: string; conversation: string }>('/converse', {
         method: 'POST',
-        body: JSON.stringify({ message, conversation, project, parent_task, provider, agent }),
+        body: JSON.stringify(body),
     });
 }
 
@@ -227,6 +230,10 @@ export async function updateAgent(name: string, data: Partial<AgentDef>): Promis
 
 export async function deleteAgent(name: string): Promise<void> {
     await request(`/agents/${name}`, { method: 'DELETE' });
+}
+
+export async function resetAgent(name: string): Promise<AgentDef> {
+    return request<AgentDef>(`/agents/${name}/reset`, { method: 'POST' });
 }
 
 export async function getAgentTemplate(name: string): Promise<{ name: string; content: string }> {

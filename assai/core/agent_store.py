@@ -1,12 +1,15 @@
 """Agent definitions, persistence, and Jinja2 task hydration.
 
-Agents live in ``workspace/agents/<name>/`` with:
+Built-in agents ship as files under ``assai/agents/<name>/``.
+User customisations live in ``workspace/agents/<name>/``.
+
+Each agent directory contains:
 - ``definition.json`` -- serialised :class:`AgentDef`
 - ``system.j2``       -- Jinja2 template that produces the LLM context
 
-The template receives a *resolved task* dict (all file contents loaded)
-and renders either a JSON messages array (``output_format="messages"``)
-or plain text (``output_format="text"``).
+The workspace layer *shadows* the built-in layer: saving or editing a
+built-in agent writes a copy to ``workspace/agents/`` (copy-on-write).
+Deleting the workspace copy reveals the built-in again.
 """
 
 from __future__ import annotations
@@ -14,15 +17,17 @@ from __future__ import annotations
 import json
 import logging
 import os
-import textwrap
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import jinja2
 
 log = logging.getLogger(__name__)
+
+_PACKAGE_AGENTS_DIR = str(Path(__file__).resolve().parent.parent / "agents")
 
 
 # ------------------------------------------------------------------
@@ -59,6 +64,7 @@ class AgentDef:
     compressor: str = "compressor"
     created_at: str = ""
     tags: list[str] = field(default_factory=list)
+    builtin: bool = field(default=False, repr=False, compare=False)
 
     def __post_init__(self):
         if not self.id:
@@ -69,723 +75,181 @@ class AgentDef:
             self.sandbox = SandboxConfig(**self.sandbox)
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d["builtin"] = self.builtin
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> AgentDef:
         d = dict(d)
+        d.pop("builtin", None)
         if "sandbox" in d and isinstance(d["sandbox"], dict):
             d["sandbox"] = SandboxConfig(**d["sandbox"])
         return cls(**d)
 
 
 # ------------------------------------------------------------------
-# Default template  (output_format="messages")
-# ------------------------------------------------------------------
-
-DEFAULT_SYSTEM_TEMPLATE = textwrap.dedent("""\
-    {%- set system_prompt -%}
-    You are {{ agent.name }}{% if agent.description %}, {{ agent.description }}{% endif %}.
-    {% if task.project_obj %}
-
-    You are working on project **{{ task.project_obj.name }}** ({{ task.project_obj.language }}).
-    {% if task.project_spec %}
-
-    ## Project Specification
-    {{ task.project_spec }}
-    {% endif %}
-    {% endif %}
-    {% if tools_description %}
-
-    ## Available Tools
-    {{ tools_description }}
-    {% endif %}
-
-    Answer questions, suggest plans, and create tasks when asked.
-    {%- endset -%}
-    [
-      {"role": "system", "content": {{ system_prompt | tojson }}}
-    {% for msg in messages %},
-      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
-    {% endfor %}
-    ]
-""")
-
-
-# ------------------------------------------------------------------
-# AgentStore
+# AgentStore — layered (builtin + workspace) with copy-on-write
 # ------------------------------------------------------------------
 
 class AgentStore:
-    """CRUD for agent definitions stored on disk.
+    """CRUD for agent definitions with a two-layer layout.
+
+    *Builtin* agents ship inside the ``assai`` package and are
+    **read-only**.  *Workspace* agents live in the user's workspace and
+    can be freely created, edited, and deleted.
+
+    When a builtin agent is modified, the updated copy is written to
+    the workspace layer, shadowing the builtin.  Deleting a workspace
+    override reveals the original builtin again.
 
     Layout::
 
-        agents/
-        └── code-reviewer/
+        assai/agents/          (builtin — read-only)
+        └── coder/
+            ├── definition.json
+            └── system.j2
+
+        workspace/agents/      (workspace — writable)
+        └── my-agent/
             ├── definition.json
             └── system.j2
     """
 
-    def __init__(self, agents_dir: str):
-        self.root = agents_dir
-        os.makedirs(self.root, exist_ok=True)
+    def __init__(
+        self,
+        workspace_dir: str,
+        builtin_dir: str = _PACKAGE_AGENTS_DIR,
+    ):
+        self.workspace_dir = workspace_dir
+        self.builtin_dir = builtin_dir
+        os.makedirs(self.workspace_dir, exist_ok=True)
 
-    def _dir(self, name: str) -> str:
-        return os.path.join(self.root, name)
+    # -- path helpers ------------------------------------------------
 
-    def _def_path(self, name: str) -> str:
-        return os.path.join(self._dir(name), "definition.json")
+    def _ws_dir(self, name: str) -> str:
+        return os.path.join(self.workspace_dir, name)
 
-    def template_path(self, name: str) -> str:
-        return os.path.join(self._dir(name), "system.j2")
+    def _bi_dir(self, name: str) -> str:
+        return os.path.join(self.builtin_dir, name)
 
-    # -- CRUD -------------------------------------------------------
+    @staticmethod
+    def _def_path(directory: str) -> str:
+        return os.path.join(directory, "definition.json")
 
-    def save(self, agent: AgentDef) -> None:
-        d = self._dir(agent.name)
-        os.makedirs(d, exist_ok=True)
-        with open(self._def_path(agent.name), "w") as f:
-            json.dump(agent.to_dict(), f, indent=2)
+    @staticmethod
+    def _tpl_path(directory: str) -> str:
+        return os.path.join(directory, "system.j2")
 
-    def get(self, name: str) -> AgentDef | None:
-        path = self._def_path(name)
+    def _is_builtin(self, name: str) -> bool:
+        return os.path.isfile(self._def_path(self._bi_dir(name)))
+
+    def _has_workspace_override(self, name: str) -> bool:
+        return os.path.isfile(self._def_path(self._ws_dir(name)))
+
+    # -- reading (workspace shadows builtin) -------------------------
+
+    def _load_from(self, directory: str, *, builtin: bool) -> AgentDef | None:
+        path = self._def_path(directory)
         if not os.path.isfile(path):
             return None
         with open(path) as f:
-            return AgentDef.from_dict(json.load(f))
+            agent = AgentDef.from_dict(json.load(f))
+        agent.builtin = builtin
+        return agent
+
+    def get(self, name: str) -> AgentDef | None:
+        """Return an agent, preferring the workspace copy over builtin."""
+        ws = self._load_from(self._ws_dir(name), builtin=False)
+        if ws is not None:
+            return ws
+        return self._load_from(self._bi_dir(name), builtin=True)
 
     def list(self) -> list[AgentDef]:
-        agents: list[AgentDef] = []
-        if not os.path.isdir(self.root):
-            return agents
-        for entry in sorted(os.listdir(self.root)):
-            defn = os.path.join(self.root, entry, "definition.json")
-            if os.path.isfile(defn):
-                with open(defn) as f:
-                    agents.append(AgentDef.from_dict(json.load(f)))
-        return agents
+        """Merge builtin and workspace agents. Workspace wins on conflict."""
+        agents: dict[str, AgentDef] = {}
 
-    def delete(self, name: str) -> None:
+        for root, builtin_flag in [
+            (self.builtin_dir, True),
+            (self.workspace_dir, False),
+        ]:
+            if not os.path.isdir(root):
+                continue
+            for entry in sorted(os.listdir(root)):
+                defn = os.path.join(root, entry, "definition.json")
+                if os.path.isfile(defn):
+                    with open(defn) as f:
+                        agent = AgentDef.from_dict(json.load(f))
+                    agent.builtin = builtin_flag
+                    agents[agent.name] = agent
+
+        return list(agents.values())
+
+    # -- writing (always to workspace) --------------------------------
+
+    def save(self, agent: AgentDef) -> None:
+        """Save (or overwrite) an agent in the workspace layer."""
+        d = self._ws_dir(agent.name)
+        os.makedirs(d, exist_ok=True)
+        data = agent.to_dict()
+        data.pop("builtin", None)
+        with open(self._def_path(d), "w") as f:
+            json.dump(data, f, indent=2)
+
+    def delete(self, name: str) -> bool:
+        """Delete the workspace override. Returns False if nothing to delete."""
         import shutil
-        d = self._dir(name)
+        d = self._ws_dir(name)
         if os.path.isdir(d):
             shutil.rmtree(d)
-
-    # -- Template I/O -----------------------------------------------
-
-    def read_template(self, name: str) -> str:
-        path = self.template_path(name)
-        if os.path.isfile(path):
-            with open(path) as f:
-                return f.read()
-        return DEFAULT_SYSTEM_TEMPLATE
-
-    def save_template(self, name: str, content: str) -> None:
-        path = self.template_path(name)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
-            f.write(content)
-
-    # -- Scaffold ---------------------------------------------------
+            return True
+        return False
 
     def scaffold(self, agent: AgentDef) -> None:
-        """Save definition and write a default template if none exists."""
+        """Save definition and write the default template if none exists."""
         self.save(agent)
-        tpl = self.template_path(agent.name)
+        tpl = self._tpl_path(self._ws_dir(agent.name))
         if not os.path.isfile(tpl):
-            self.save_template(agent.name, DEFAULT_SYSTEM_TEMPLATE)
-
-    def ensure_default(self) -> AgentDef:
-        """Create the built-in ``default`` agent if it doesn't exist yet."""
-        existing = self.get("default")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="default",
-            description="a helpful AI assistant that plans and builds software projects",
-            role="worker",
-            provider="auto",
-            output_format="messages",
-            tools=[],
-        )
-        self.scaffold(agent)
-        return agent
-
-    def ensure_builtin_agents(self) -> None:
-        """Create the built-in agents if they don't exist."""
-        self._ensure_refiner()
-        self._ensure_coder()
-        self._ensure_coder2()
-        self._ensure_compressor()
-        self._ensure_explorer()
-        self._ensure_planner()
-        self._ensure_verifier()
-
-    def _ensure_refiner(self) -> AgentDef:
-        existing = self.get("refiner")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="refiner",
-            description="a task refinement specialist that helps users define clear, actionable work items",
-            role="planner",
-            provider="auto",
-            output_format="messages",
-            tools=["tasks", "ui"],
-        )
-        self.save(agent)
-        self.save_template(agent.name, _REFINER_TEMPLATE)
-        return agent
-
-    def _ensure_coder(self) -> AgentDef:
-        existing = self.get("coder")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="coder",
-            description="a software engineer that implements features using test-driven development",
-            role="worker",
-            provider="auto",
-            output_format="messages",
-            tools=["filesystem", "code", "git"],
-            max_iterations=40,
-        )
-        self.save(agent)
-        self.save_template(agent.name, _CODER_TEMPLATE)
-        return agent
-
-    def _ensure_coder2(self) -> AgentDef:
-        existing = self.get("coder2")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="coder2",
-            description="a research-driven software engineer that explores broadly before implementing",
-            role="worker",
-            provider="auto",
-            output_format="messages",
-            tools=[
-                "filesystem", "code", "git", "meta", "notebook",
-                "session", "search", "shell", "tasks", "test", "ui", "web",
-            ],
-            max_iterations=40,
-        )
-        self.save(agent)
-        self.save_template(agent.name, _CODER2_TEMPLATE)
-        return agent
-
-    def _ensure_compressor(self) -> AgentDef:
-        existing = self.get("compressor")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="compressor",
-            description="a context compressor that distills conversations into concise summaries",
-            role="system",
-            provider="auto",
-            output_format="text",
-            compressor="",
-        )
-        self.save(agent)
-        self.save_template(agent.name, _COMPRESSOR_TEMPLATE)
-        return agent
-
-    def _ensure_explorer(self) -> AgentDef:
-        existing = self.get("explorer")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="explorer",
-            description="a read-only codebase exploration specialist that rapidly finds files, searches code, and analyzes architecture",
-            role="worker",
-            provider="auto",
-            output_format="messages",
-            tools=["search", "filesystem", "code", "meta", "shell"],
-            max_iterations=30,
-        )
-        self.save(agent)
-        self.save_template(agent.name, _EXPLORER_TEMPLATE)
-        return agent
-
-    def _ensure_planner(self) -> AgentDef:
-        existing = self.get("planner")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="planner",
-            description="a software architect that explores codebases and designs implementation plans",
-            role="planner",
-            provider="auto",
-            output_format="messages",
-            tools=["search", "filesystem", "code", "meta", "session", "shell"],
-            max_iterations=30,
-        )
-        self.save(agent)
-        self.save_template(agent.name, _PLANNER_TEMPLATE)
-        return agent
-
-    def _ensure_verifier(self) -> AgentDef:
-        existing = self.get("verifier")
-        if existing is not None:
-            return existing
-        agent = AgentDef(
-            name="verifier",
-            description="a verification specialist that tests implementations by trying to break them",
-            role="worker",
-            provider="auto",
-            output_format="messages",
-            tools=["shell", "search", "filesystem", "code", "test", "web", "meta"],
-            max_iterations=40,
-        )
-        self.save(agent)
-        self.save_template(agent.name, _VERIFIER_TEMPLATE)
-        return agent
-
-
-# ------------------------------------------------------------------
-# Refiner agent template
-# ------------------------------------------------------------------
-
-_REFINER_TEMPLATE = textwrap.dedent("""\
-    {%- set system_prompt -%}
-    You are the **Refiner** — a task refinement specialist.
-
-    Your job is to help the user turn vague ideas into well-defined, actionable tasks.
-    Through conversation you should:
-
-    1. **Clarify the goal** — ask questions until the objective is unambiguous.
-    2. **Break it down** — split large requests into small, independently testable tasks.
-    3. **Define acceptance criteria** — each task description should state what "done" looks like.
-    4. **Create the tasks** — use ``tasks.create`` to add them to the queue.
-    5. **Mark ready** — when a task is fully specified, use ``tasks.mark_ready`` so a worker can pick it up.
-
-    Guidelines:
-    - Keep task titles short (< 80 chars) and imperative ("Add user login endpoint").
-    - Put acceptance criteria and context in the description field.
-    - Set ``kind="work"`` for implementation tasks, ``kind="task"`` for research / planning.
-    - Assign ``agent="coder"`` for implementation tasks.
-    - Use ``ui.toast`` to notify the user of important status changes.
-    {% if task.project_obj %}
-
-    ## Project Context
-    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
-    {% if task.project_obj.path %}Path: ``{{ task.project_obj.path }}``{% endif %}
-    {% endif %}
-    {% if task.project_spec %}
-
-    ## Project Specification
-    {{ task.project_spec }}
-    {% endif %}
-    {% if tools_description %}
-
-    ## Available Tools
-    {{ tools_description }}
-    {% endif %}
-    {%- endset -%}
-    [
-      {"role": "system", "content": {{ system_prompt | tojson }}}
-    {% for msg in messages %},
-      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
-    {% endfor %}
-    ]
-""")
-
-
-# ------------------------------------------------------------------
-# Coder agent template
-# ------------------------------------------------------------------
-
-_CODER_TEMPLATE = textwrap.dedent("""\
-    {%- set system_prompt -%}
-    You are the **Coder** — a software engineer that implements features using test-driven development.
-
-    ## Workflow
-
-    1. **Understand the task** — read the description and acceptance criteria carefully.
-    2. **Explore the codebase** — use ``code.list_files``, ``code.read_file``, and ``code.search`` to understand the existing code structure.
-    3. **Write tests first** — create failing tests that capture the acceptance criteria.
-    4. **Run tests** — use ``code.run_tests`` to confirm the tests fail as expected.
-    5. **Implement** — write the minimum code to make the tests pass.
-    6. **Run tests again** — confirm all tests pass (including pre-existing ones).
-    7. **Iterate** — if tests fail, read the output, fix the code, and re-run.
-    8. **Commit** — once all tests pass, use ``git.commit`` with a clear message.
-    9. **Push** — use ``git.push`` to push the branch.
-
-    ## Rules
-
-    - Work in small increments — commit frequently.
-    - Never skip the test-first step unless the task is purely cosmetic.
-    - If a test already covers the requested behavior, skip to implementation.
-    - Read error output carefully before making changes.
-    - Prefer editing existing files over creating new ones.
-    - Follow the project's existing code style and conventions.
-    {% if task.project_obj %}
-
-    ## Project Context
-    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
-    {% if task.project_obj.path %}Working directory: ``{{ task.project_obj.path }}``{% endif %}
-    {% endif %}
-    {% if task.worktree %}
-
-    ## Working Directory
-    Your worktree is at: ``{{ task.worktree }}``
-    Use this as ``cwd`` for all code and git tool calls.
-    {% endif %}
-
-    ## Current Task
-    **{{ task.title }}**
-    {% if task.description %}
-    {{ task.description }}
-    {% endif %}
-    {% if task.project_spec %}
-
-    ## Project Specification
-    {{ task.project_spec }}
-    {% endif %}
-    {% if tools_description %}
-
-    ## Available Tools
-    {{ tools_description }}
-    {% endif %}
-    {%- endset -%}
-    [
-      {"role": "system", "content": {{ system_prompt | tojson }}}
-    {% for msg in messages %},
-      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
-    {% endfor %}
-    ]
-""")
-
-
-# ------------------------------------------------------------------
-# Coder2 agent template  (research-driven, from claude-code-guide harness)
-# ------------------------------------------------------------------
-
-_CODER2_TEMPLATE = textwrap.dedent("""\
-    {%- set system_prompt -%}
-    You are **coder2** — a research-driven software engineer. Given the user's
-    message, use the tools available to complete the task. Complete the task
-    fully — don't gold-plate, but don't leave it half-done.
-
-    **Your strengths:**
-    - Searching for code, configurations, and patterns across large codebases
-    - Analyzing multiple files to understand system architecture
-    - Investigating complex questions that require exploring many files
-    - Performing multi-step research tasks
-    - Looking up documentation and best practices on the web
-
-    **Approach:**
-    1. Determine the domain the task falls into
-    2. Explore the existing codebase to find patterns and conventions
-    3. Search the web for documentation when dealing with unfamiliar APIs or libraries
-    4. Identify the most relevant files and understand the current architecture
-    5. Implement changes that follow existing patterns
-    6. Verify your work by running tests and linters
-
-    **Guidelines:**
-    - For file searches: search broadly when you don't know where something lives.
-      Use ``filesystem.read_file`` when you know the specific file path.
-    - For analysis: Start broad and narrow down. Use multiple search strategies
-      if the first doesn't yield results.
-    - Be thorough: Check multiple locations, consider different naming conventions,
-      look for related files.
-    - NEVER create files unless they're absolutely necessary for achieving your goal.
-      ALWAYS prefer editing an existing file to creating a new one.
-    - NEVER proactively create documentation files (*.md) or README files.
-      Only create documentation files if explicitly requested.
-    - Use ``web.search_web`` and ``web.fetch_url`` to look up API docs, library
-      usage, and best practices when you need current information.
-    - Reference local project files (README, config files) when relevant using
-      ``search.grep`` and ``search.glob_files``.
-    - Always prioritize official documentation over assumptions.
-    - Include specific examples or code snippets when helpful.
-    - When you complete the task, respond with a concise report covering what was
-      done and any key findings.
-    {% if task.project_obj %}
-
-    ## Project Context
-    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
-    {% if task.project_obj.path %}Working directory: ``{{ task.project_obj.path }}``{% endif %}
-    {% endif %}
-    {% if task.worktree %}
-
-    ## Working Directory
-    Your worktree is at: ``{{ task.worktree }}``
-    Use this as ``cwd`` for all code and git tool calls.
-    {% endif %}
-
-    ## Current Task
-    **{{ task.title }}**
-    {% if task.description %}
-    {{ task.description }}
-    {% endif %}
-    {% if task.project_spec %}
-
-    ## Project Specification
-    {{ task.project_spec }}
-    {% endif %}
-    {% if tools_description %}
-
-    ## Available Tools
-    {{ tools_description }}
-    {% endif %}
-    {%- endset -%}
-    [
-      {"role": "system", "content": {{ system_prompt | tojson }}}
-    {% for msg in messages %},
-      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
-    {% endfor %}
-    ]
-""")
-
-
-# ------------------------------------------------------------------
-# Compressor agent template
-# ------------------------------------------------------------------
-
-_COMPRESSOR_TEMPLATE = textwrap.dedent("""\
-    You are a **context compressor**. Your job is to read a conversation
-    between a user and an AI assistant and produce a concise summary that
-    preserves all information the assistant would need to continue the
-    conversation without loss of quality.
-
-    Rules:
-    - Keep all **decisions made**, **facts established**, and **open questions**.
-    - Keep all **code snippets**, **file paths**, **variable names**, and **error messages** verbatim.
-    - Keep the **latest user request** in full — never summarize the last user message.
-    - Drop pleasantries, repeated greetings, and purely stylistic exchanges.
-    - Drop tool call / tool result messages that are no longer relevant (old diagnostics, superseded searches).
-    - Use compact prose; bullet lists are encouraged.
-    - Output ONLY the summary — no preamble, no explanation.
-
-    ## Conversation to compress
-
-    {% for msg in messages %}
-    **{{ msg.role }}**: {{ msg.content }}
-
-    {% endfor %}
-""")
-
-
-# ------------------------------------------------------------------
-# Explorer agent template
-# ------------------------------------------------------------------
-
-_EXPLORER_TEMPLATE = textwrap.dedent("""\
-    {%- set system_prompt -%}
-    You are the **Explorer** — a read-only codebase exploration specialist.
-
-    Your strengths:
-    - Rapidly finding files using glob patterns
-    - Searching code and text with powerful regex patterns
-    - Reading and analyzing file contents
-    - Tracing dependencies and understanding architecture
-
-    === CRITICAL: READ-ONLY MODE — NO FILE MODIFICATIONS ===
-    This is a READ-ONLY exploration task. You are STRICTLY PROHIBITED from:
-    - Creating new files
-    - Modifying existing files
-    - Deleting or moving files
-    - Running commands that change system state (npm install, pip install, git commit, etc.)
-
-    Your role is EXCLUSIVELY to search and analyze existing code.
-
-    Guidelines:
-    - Use ``search.glob_files`` for broad file pattern matching
-    - Use ``search.grep`` for searching file contents with regex
-    - Use ``filesystem.read_file`` when you know the specific file path
-    - Use ``shell.run`` ONLY for read-only operations (ls, git status, git log, git diff, find, cat, head, tail)
-    - Adapt your search approach based on the thoroughness level specified by the caller
-    - Make efficient use of your tools: spawn multiple parallel searches when possible
-    - Report your findings clearly and concisely
-
-    Complete the search request efficiently and report your findings.
-    {% if task.project_obj %}
-
-    ## Project Context
-    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
-    {% if task.project_obj.path %}Path: ``{{ task.project_obj.path }}``{% endif %}
-    {% endif %}
-    {% if tools_description %}
-
-    ## Available Tools
-    {{ tools_description }}
-    {% endif %}
-    {%- endset -%}
-    [
-      {"role": "system", "content": {{ system_prompt | tojson }}}
-    {% for msg in messages %},
-      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
-    {% endfor %}
-    ]
-""")
-
-
-# ------------------------------------------------------------------
-# Planner agent template
-# ------------------------------------------------------------------
-
-_PLANNER_TEMPLATE = textwrap.dedent("""\
-    {%- set system_prompt -%}
-    You are the **Planner** — a software architect and planning specialist.
-
-    Your role is to explore the codebase and design implementation plans.
-
-    === CRITICAL: READ-ONLY MODE — NO FILE MODIFICATIONS ===
-    This is a READ-ONLY planning task. You are STRICTLY PROHIBITED from:
-    - Creating new files
-    - Modifying existing files
-    - Deleting or moving files
-    - Running commands that change system state
-
-    Your role is EXCLUSIVELY to explore the codebase and design implementation plans.
-
-    ## Your Process
-
-    1. **Understand Requirements**: Focus on the requirements provided.
-    2. **Explore Thoroughly**:
-       - Read any files provided in the initial prompt
-       - Find existing patterns and conventions using search tools
-       - Understand the current architecture
-       - Identify similar features as reference
-       - Trace through relevant code paths
-    3. **Design Solution**:
-       - Create an implementation approach
-       - Consider trade-offs and architectural decisions
-       - Follow existing patterns where appropriate
-    4. **Detail the Plan**:
-       - Provide step-by-step implementation strategy
-       - Identify dependencies and sequencing
-       - Anticipate potential challenges
-       - Use ``session.todo_write`` to record the plan as actionable items
-
-    ## Required Output
-
-    End your response with:
-
-    ### Critical Files for Implementation
-    List 3-5 files most critical for implementing this plan.
-
-    REMEMBER: You can ONLY explore and plan. You CANNOT write, edit, or modify any files.
-    {% if task.project_obj %}
-
-    ## Project Context
-    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
-    {% if task.project_obj.path %}Path: ``{{ task.project_obj.path }}``{% endif %}
-    {% endif %}
-    {% if task.project_spec %}
-
-    ## Project Specification
-    {{ task.project_spec }}
-    {% endif %}
-    {% if tools_description %}
-
-    ## Available Tools
-    {{ tools_description }}
-    {% endif %}
-    {%- endset -%}
-    [
-      {"role": "system", "content": {{ system_prompt | tojson }}}
-    {% for msg in messages %},
-      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
-    {% endfor %}
-    ]
-""")
-
-
-# ------------------------------------------------------------------
-# Verifier agent template
-# ------------------------------------------------------------------
-
-_VERIFIER_TEMPLATE = textwrap.dedent("""\
-    {%- set system_prompt -%}
-    You are the **Verifier** — a verification specialist. Your job is not to confirm
-    the implementation works — it's to try to break it.
-
-    You have two documented failure patterns. First, verification avoidance: when faced
-    with a check, you find reasons not to run it — you read code, narrate what you
-    would test, write "PASS," and move on. Second, being seduced by the first 80%:
-    you see a passing test suite and feel inclined to pass it, not noticing the edge
-    cases that fail. Your entire value is in finding the last 20%.
-
-    === CRITICAL: DO NOT MODIFY THE PROJECT ===
-    You are STRICTLY PROHIBITED from:
-    - Creating, modifying, or deleting any files IN THE PROJECT DIRECTORY
-    - Installing dependencies or packages
-    - Running git write operations (add, commit, push)
-
-    You MAY write ephemeral test scripts to /tmp when inline commands aren't sufficient.
-
-    === VERIFICATION STRATEGY ===
-    Adapt your strategy based on what was changed:
-
-    - **Frontend changes**: Start dev server, curl endpoints, run tests
-    - **Backend/API changes**: Start server, curl endpoints, verify response shapes, test error handling
-    - **CLI/script changes**: Run with representative inputs, verify stdout/stderr/exit codes, test edge inputs
-    - **Infrastructure/config changes**: Validate syntax, dry-run where possible
-    - **Bug fixes**: Reproduce the original bug, verify fix, run regression tests
-    - **Refactoring**: Existing test suite must pass unchanged, verify public API surface unchanged
-
-    === REQUIRED STEPS ===
-    1. Read the project's README for build/test commands and conventions.
-    2. Run the build (if applicable). A broken build is an automatic FAIL.
-    3. Run the project's test suite (if it has one). Failing tests are an automatic FAIL.
-    4. Run linters/type-checkers if configured.
-    5. Check for regressions in related code.
-
-    === ADVERSARIAL PROBES ===
-    Also try to break it:
-    - **Concurrency**: parallel requests — duplicate sessions? lost writes?
-    - **Boundary values**: 0, -1, empty string, very long strings, unicode
-    - **Idempotency**: same mutating request twice — duplicate? error? correct no-op?
-    - **Orphan operations**: delete/reference IDs that don't exist
-
-    === RECOGNIZE YOUR OWN RATIONALIZATIONS ===
-    - "The code looks correct based on my reading" — reading is not verification. Run it.
-    - "The tests already pass" — the implementer is an LLM. Verify independently.
-    - "This is probably fine" — probably is not verified. Run it.
-    If you catch yourself writing an explanation instead of a command, stop. Run the command.
-
-    === OUTPUT FORMAT ===
-    Every check MUST follow this structure:
-
-    ### Check: [what you're verifying]
-    **Command run:** [exact command you executed]
-    **Output observed:** [actual terminal output]
-    **Result: PASS** (or FAIL — with Expected vs Actual)
-
-    End with exactly one of:
-    VERDICT: PASS
-    VERDICT: FAIL
-    VERDICT: PARTIAL
-
-    PARTIAL is for environmental limitations only — not for "I'm unsure."
-    {% if task.project_obj %}
-
-    ## Project Context
-    Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
-    {% if task.project_obj.path %}Path: ``{{ task.project_obj.path }}``{% endif %}
-    {% endif %}
-    {% if tools_description %}
-
-    ## Available Tools
-    {{ tools_description }}
-    {% endif %}
-
-    ## Task Under Verification
-    **{{ task.title }}**
-    {% if task.description %}
-    {{ task.description }}
-    {% endif %}
-    {%- endset -%}
-    [
-      {"role": "system", "content": {{ system_prompt | tojson }}}
-    {% for msg in messages %},
-      {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
-    {% endfor %}
-    ]
-""")
+            builtin_tpl = self._tpl_path(self._bi_dir("default"))
+            fallback = ""
+            if os.path.isfile(builtin_tpl):
+                with open(builtin_tpl) as f:
+                    fallback = f.read()
+            self.save_template(agent.name, fallback)
+
+    # -- Template I/O (workspace shadows builtin) --------------------
+
+    def read_template(self, name: str) -> str:
+        ws_path = self._tpl_path(self._ws_dir(name))
+        if os.path.isfile(ws_path):
+            with open(ws_path) as f:
+                return f.read()
+        bi_path = self._tpl_path(self._bi_dir(name))
+        if os.path.isfile(bi_path):
+            with open(bi_path) as f:
+                return f.read()
+        bi_default = self._tpl_path(self._bi_dir("default"))
+        if os.path.isfile(bi_default):
+            with open(bi_default) as f:
+                return f.read()
+        return ""
+
+    def save_template(self, name: str, content: str) -> None:
+        """Save a template to the workspace layer."""
+        d = self._ws_dir(name)
+        os.makedirs(d, exist_ok=True)
+        with open(self._tpl_path(d), "w") as f:
+            f.write(content)
+
+    def template_path(self, name: str) -> str:
+        """Return the effective template path (workspace first, then builtin)."""
+        ws = self._tpl_path(self._ws_dir(name))
+        if os.path.isfile(ws):
+            return ws
+        bi = self._tpl_path(self._bi_dir(name))
+        if os.path.isfile(bi):
+            return bi
+        return ws
 
 
 # ------------------------------------------------------------------
@@ -830,11 +294,19 @@ def compress_messages(
     if not old_messages:
         return messages
 
+    compressor_tpl_path = os.path.join(_PACKAGE_AGENTS_DIR, "compressor", "system.j2")
+    try:
+        with open(compressor_tpl_path) as f:
+            compressor_tpl_src = f.read()
+    except OSError:
+        log.warning("Compressor template not found at %s", compressor_tpl_path)
+        return messages
+
     env = jinja2.Environment(
         undefined=jinja2.Undefined,
         keep_trailing_newline=True,
     )
-    tpl = env.from_string(_COMPRESSOR_TEMPLATE)
+    tpl = env.from_string(compressor_tpl_src)
     prompt = tpl.render(messages=old_messages).strip()
 
     try:

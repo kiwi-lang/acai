@@ -1,0 +1,9 @@
+{
+  "name": "explorer",
+  "description": "a read-only codebase exploration specialist that rapidly finds files, searches code, and analyzes architecture",
+  "role": "worker",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": ["search", "filesystem", "code", "meta", "shell"],
+  "max_iterations": 30
+}

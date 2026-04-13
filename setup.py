@@ -27,6 +27,8 @@ if __name__ == "__main__":
             "assai": [
                 "prompts/*.md",
                 "data/*.json",
+                "agents/*/definition.json",
+                "agents/*/system.j2",
             ],
         },
         install_requires=[

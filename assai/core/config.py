@@ -207,6 +207,16 @@ _MODEL_PARSER_MAP: list[tuple[str, str]] = [
     ("hermes", "hermes"),
 ]
 
+_MODEL_REASONING_PARSER_MAP: list[tuple[str, str]] = [
+    ("qwen3", "qwen3"),
+    ("qwq", "deepseek_r1"),
+    ("deepseek-r1", "deepseek_r1"),
+    ("deepseek-v3", "deepseek_v3"),
+    ("granite-3.2", "granite"),
+    ("granite-4", "granite"),
+    ("glm-4", "glm45"),
+]
+
 
 def _guess_tool_parser(model: str) -> str:
     lower = model.lower().replace("/", "-").replace("_", "-")
@@ -214,6 +224,15 @@ def _guess_tool_parser(model: str) -> str:
         if pattern in lower:
             return parser
     return "hermes"
+
+
+def _guess_reasoning_parser(model: str) -> str | None:
+    """Return the reasoning parser name for *model*, or ``None`` if not a reasoning model."""
+    lower = model.lower().replace("/", "-").replace("_", "-")
+    for pattern, parser in _MODEL_REASONING_PARSER_MAP:
+        if pattern in lower:
+            return parser
+    return None
 
 
 def _default_vllm_template(model: str) -> str:
@@ -229,6 +248,9 @@ def _default_vllm_template(model: str) -> str:
         "--kv-cache-dtype fp8",
         "--max-num-seqs 1",
     ]
+    reasoning_parser = _guess_reasoning_parser(model)
+    if reasoning_parser:
+        parts.append(f"--reasoning-parser {reasoning_parser}")
     if "qwen3-coder" in model.lower().replace("/", "-"):
         parts += [
             "--max-model-len 170000",

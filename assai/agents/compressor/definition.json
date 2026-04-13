@@ -1,0 +1,8 @@
+{
+  "name": "compressor",
+  "description": "a context compressor that distills conversations into concise summaries",
+  "role": "system",
+  "provider": "auto",
+  "output_format": "text",
+  "compressor": ""
+}

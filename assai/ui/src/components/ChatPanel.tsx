@@ -5,6 +5,44 @@ import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentDef, AgentMessage, Provider } from '../services/types';
 import Markdown from './Markdown';
 
+/* ─── Reasoning display ──────────────────────────────────────────── */
+
+const ReasoningBlock = ({ content }: { content: string }) => {
+    const [expanded, setExpanded] = useState(false);
+    if (!content) return null;
+    return (
+        <Box
+            borderRadius="md"
+            border="1px solid" borderColor="var(--border-secondary)"
+            overflow="hidden" fontSize="xs" w="100%" mb={2}
+        >
+            <HStack px={3} py={1.5} gap={2} cursor="pointer"
+                onClick={() => setExpanded(!expanded)}
+                _hover={{ bg: 'var(--bg-hover)' }}>
+                <Text fontSize="xs" color="var(--text-muted)">
+                    {expanded ? '▼' : '▶'}
+                </Text>
+                <Text color="var(--text-secondary)" fontSize="xs" fontStyle="italic">
+                    Reasoning
+                </Text>
+                <Text color="var(--text-muted)" fontSize="2xs" ml="auto">
+                    {content.length > 1000
+                        ? `${(content.length / 1000).toFixed(1)}k chars`
+                        : `${content.length} chars`}
+                </Text>
+            </HStack>
+            {expanded && (
+                <Box px={3} py={2} borderTop="1px solid" borderColor="var(--border-primary)"
+                    fontSize="xs" color="var(--text-tertiary)"
+                    maxH="300px" overflowY="auto"
+                    bg="var(--bg-page)" opacity={0.85}>
+                    <Markdown content={content} fontSize="xs" />
+                </Box>
+            )}
+        </Box>
+    );
+};
+
 /* ─── Icons ──────────────────────────────────────────────────────── */
 
 const SendIcon = ({ size = 20 }: { size?: number }) => (
@@ -23,6 +61,15 @@ const ResendIcon = () => (
 const ToolIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3.77-3.77a6 6 0 01-7.94 7.94l-6.91 6.91a2.12 2.12 0 01-3-3l6.91-6.91a6 6 0 017.94-7.94l-3.76 3.76z" />
+    </svg>
+);
+
+const ThinkingIcon = ({ active }: { active: boolean }) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+        stroke={active ? 'var(--accent)' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z" />
+        <line x1="9" y1="21" x2="15" y2="21" />
+        <line x1="10" y1="24" x2="14" y2="24" />
     </svg>
 );
 
@@ -140,6 +187,8 @@ export interface ChatPanelProps {
     onResponseComplete?: () => void;
     /** Custom placeholder for the text input. */
     placeholder?: string;
+    /** Initial state for the thinking toggle (from conversation metadata). */
+    initialThinking?: boolean;
 }
 
 const ChatPanel = ({
@@ -157,6 +206,7 @@ const ChatPanel = ({
     disabled: externalDisabled,
     onResponseComplete,
     placeholder: customPlaceholder,
+    initialThinking,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -169,6 +219,7 @@ const ChatPanel = ({
     const [agents, setAgents] = useState<AgentDef[]>([]);
     const [selectedAgent, setSelectedAgent] = useState(resolvedInitialAgent);
     const [contextStats, setContextStats] = useState<{ estimated_tokens: number; max_context: number } | null>(null);
+    const [enableThinking, setEnableThinking] = useState(initialThinking ?? true);
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -216,6 +267,21 @@ const ChatPanel = ({
         closeEventSource();
         const es = new EventSource(`/api/agent/stream/${convId}`);
         eventSourceRef.current = es;
+
+        es.addEventListener('reasoning', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.isStreaming) {
+                    copy[copy.length - 1] = {
+                        ...last,
+                        reasoning: (last.reasoning || '') + (data.token || ''),
+                    };
+                }
+                return copy;
+            });
+        });
 
         es.addEventListener('token', (e: MessageEvent) => {
             const data = JSON.parse(e.data);
@@ -302,6 +368,7 @@ const ChatPanel = ({
 
         setSelectedProvider(initialProviderRef.current);
         setSelectedAgent(initialAgentRef.current);
+        setEnableThinking(initialThinking ?? true);
         setMessages([]);
         setIsLoading(false);
         activeTaskRef.current = null;
@@ -382,7 +449,7 @@ const ChatPanel = ({
 
         setIsLoading(true);
         try {
-            const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent);
+            const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent, enableThinking);
             activeTaskRef.current = resp.task_id;
             setMessages(prev => [
                 ...prev,
@@ -394,7 +461,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
             setIsLoading(false);
         }
-    }, [isLoading, messages, project, selectedProvider, selectedAgent, openEventSource]);
+    }, [isLoading, messages, project, selectedProvider, selectedAgent, enableThinking, openEventSource]);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -417,7 +484,7 @@ const ChatPanel = ({
         try {
             const resp = customSend
                 ? await customSend(text, prevConvId || '', selectedProvider, selectedAgent)
-                : await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
+                : await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent, enableThinking);
 
             activeTaskRef.current = resp.task_id;
             convIdRef.current = resp.conversation;
@@ -540,7 +607,15 @@ const ChatPanel = ({
                                                 color={msg.role === 'user' ? 'var(--text-user-label)' : 'var(--text-assistant-label)'}>
                                                 {msg.role === 'user' ? 'You' : 'Agent'}
                                             </Text>
+                                            {msg.role === 'assistant' && msg.reasoning && (
+                                                <ReasoningBlock content={msg.reasoning} />
+                                            )}
                                             <Markdown content={msg.content} fontSize={compact ? 'sm' : 'md'} />
+                                            {msg.isStreaming && !msg.content && msg.reasoning && (
+                                                <Text fontSize="xs" color="var(--text-muted)" fontStyle="italic">
+                                                    Thinking...
+                                                </Text>
+                                            )}
                                             {msg.isStreaming && (
                                                 <Box as="span" display="inline-block" w="2px" h="1em"
                                                     bg="var(--cursor-blink)" ml={0.5}
@@ -613,6 +688,17 @@ const ChatPanel = ({
                             ))}
                         </NativeSelect.Field>
                     </NativeSelect.Root>
+                    <IconButton
+                        aria-label={enableThinking ? 'Disable reasoning' : 'Enable reasoning'}
+                        onClick={() => setEnableThinking(v => !v)}
+                        variant="ghost" size="xs"
+                        color={enableThinking ? 'var(--accent)' : 'var(--text-muted)'}
+                        _hover={{ bg: 'var(--bg-hover)' }}
+                        title={enableThinking ? 'Thinking: ON' : 'Thinking: OFF'}
+                        borderRadius="md"
+                        h={compact ? '24px' : '26px'} w={compact ? '24px' : '26px'}>
+                        <ThinkingIcon active={enableThinking} />
+                    </IconButton>
                     {contextStats && convIdRef.current && (
                         <ContextRing tokens={contextStats.estimated_tokens} maxTokens={contextStats.max_context} />
                     )}

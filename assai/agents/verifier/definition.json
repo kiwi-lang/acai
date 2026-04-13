@@ -1,0 +1,9 @@
+{
+  "name": "verifier",
+  "description": "a verification specialist that tests implementations by trying to break them",
+  "role": "worker",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": ["shell", "search", "filesystem", "code", "test", "web", "meta"],
+  "max_iterations": 40
+}

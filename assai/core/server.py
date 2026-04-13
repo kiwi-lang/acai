@@ -185,6 +185,8 @@ class Orchestrator:
                 project=task_project,
                 parent_task=task.id,
                 root_task=task_root,
+                enable_thinking=task.enable_thinking,
+                conversation=task.conversation or conv_id,
             )
             self.queue.update(followup.id, status=TaskStatus.READY)
             self.queue.update(task.id, status="chained")
@@ -290,6 +292,8 @@ def _task_json(task):
         "agent":        task.agent or "",
         "parent_task":  task.parent_task or "",
         "root_task":    task.root_task or "",
+        "enable_thinking": task.enable_thinking,
+        "conversation": task.conversation or "",
     }
 
 
@@ -350,8 +354,6 @@ def create_blueprint(config: AssaiConfig | None = None,
 
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
-    agent_store.ensure_default()
-    agent_store.ensure_builtin_agents()
 
     from assai.core.tools import discover_tools
     tool_registry = discover_tools()
@@ -443,6 +445,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         parent_task = data.get("parent_task", "")
         provider_name = data.get("provider", "")
         agent_name = data.get("agent", "")
+        enable_thinking = data.get("enable_thinking")
         if not message:
             return jsonify({"error": "message is required"}), 400
 
@@ -460,6 +463,9 @@ def create_blueprint(config: AssaiConfig | None = None,
                 updates["agent"] = agent_name
             if updates:
                 chat.update_meta(conversation, **updates)
+
+        if enable_thinking is not None:
+            chat.update_meta(conversation, enable_thinking=enable_thinking)
 
         chat.append(conversation, {"role": "user", "content": message})
 
@@ -479,6 +485,8 @@ def create_blueprint(config: AssaiConfig | None = None,
             agent=effective_agent,
             parent_task=parent_task,
             root_task=root,
+            enable_thinking=enable_thinking,
+            conversation=conversation,
         )
         queue.update(task.id, status=TaskStatus.READY)
         tracker.register(task.id, conversation)
@@ -622,7 +630,7 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         resolved = resolve_task(task, config, chat, projects)
         agent_name = resolved["agent"] or "default"
-        agent_def = agent_store.get(agent_name) or agent_store.ensure_default()
+        agent_def = agent_store.get(agent_name) or agent_store.get("default")
 
         tool_defs = None
         tools_desc = ""
@@ -671,6 +679,9 @@ def create_blueprint(config: AssaiConfig | None = None,
             prov_info = _resolve_provider_for_task(task, conv_id)
             if prov_info:
                 result["provider"] = prov_info
+
+        if task.enable_thinking is not None:
+            result["enable_thinking"] = task.enable_thinking
         return result
 
     @bp.route("/work/pop", methods=["GET"])
@@ -687,12 +698,12 @@ def create_blueprint(config: AssaiConfig | None = None,
         data = request.get_json(silent=True) or {}
         result_text = data.get("result", "")
         error = data.get("error")
-        conversation = data.get("conversation", "")
         kind = data.get("kind", "")
 
         task = queue.get(task_id)
         if task is None:
             return jsonify({"error": "task not found"}), 404
+        conversation = task.conversation or ""
 
         result_dir = os.path.join(config.worker.tasks_dir, task_id)
         os.makedirs(result_dir, exist_ok=True)
@@ -731,8 +742,12 @@ def create_blueprint(config: AssaiConfig | None = None,
                 queue.update(task_id, result_path=result_path)
             else:
                 queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
-            if kind == "llm_complete" and result_text and conversation and not already_chained:
-                chat.append(conversation, {"role": "assistant", "content": result_text})
+            reasoning_text = data.get("reasoning", "")
+            if kind == "llm_complete" and (result_text or reasoning_text) and conversation and not already_chained:
+                msg: dict = {"role": "assistant", "content": result_text}
+                if reasoning_text:
+                    msg["reasoning"] = reasoning_text
+                chat.append(conversation, msg)
             elif kind == "tool_call" and conversation:
                 tool_name = data.get("tool", task.title.replace("tool: ", ""))
                 result_preview = result_text[:500] if result_text else ""
@@ -829,8 +844,8 @@ def create_blueprint(config: AssaiConfig | None = None,
 
     def _handle_stream_event(task_id: str, conv_id: str,
                              event_type: str, event_data: dict):
-        """Process a single stream event (token / tool_call_delta / done / error)."""
-        if event_type == "token":
+        """Process a single stream event (token / reasoning / tool_call_delta / done / error)."""
+        if event_type == "reasoning":
             with _active_streams_lock:
                 if task_id not in _active_streams:
                     _active_streams[task_id] = {
@@ -839,6 +854,23 @@ def create_blueprint(config: AssaiConfig | None = None,
                         "tool_task_ids": [],
                         "dispatched_calls": [],
                         "text": "",
+                        "reasoning": "",
+                    }
+                _active_streams[task_id].setdefault("reasoning", "")
+                _active_streams[task_id]["reasoning"] += event_data.get("token", "")
+
+            tracker.push(conv_id, {"event_type": "reasoning", "data": event_data})
+
+        elif event_type == "token":
+            with _active_streams_lock:
+                if task_id not in _active_streams:
+                    _active_streams[task_id] = {
+                        "conversation": conv_id,
+                        "tool_calls": {},
+                        "tool_task_ids": [],
+                        "dispatched_calls": [],
+                        "text": "",
+                        "reasoning": "",
                     }
                 _active_streams[task_id]["text"] += event_data.get("token", "")
 
@@ -899,6 +931,8 @@ def create_blueprint(config: AssaiConfig | None = None,
                         "content": ss["text"] or None,
                         "tool_calls": ss["dispatched_calls"],
                     }
+                    if ss.get("reasoning"):
+                        assistant_msg["reasoning"] = ss["reasoning"]
 
                     try:
                         spec_path = task.spec_path if task else ""
@@ -917,6 +951,8 @@ def create_blueprint(config: AssaiConfig | None = None,
                         })
 
                     followup_path = orc._write_payload(task_id, "followup", followup_messages)
+                    task_thinking = task.enable_thinking if task else None
+                    task_conv = (task.conversation or "") if task else conv_id
                     followup = queue.push(
                         title=f"followup: tool results",
                         kind="llm_complete",
@@ -926,8 +962,11 @@ def create_blueprint(config: AssaiConfig | None = None,
                         project=task_project,
                         parent_task=task_id,
                         root_task=task_root,
+                        enable_thinking=task_thinking,
+                        conversation=task_conv or conv_id,
                     )
                     queue.update(followup.id, status=TaskStatus.READY)
+                    tracker.register(followup.id, task_conv or conv_id)
                     queue.update(task_id, status="chained")
                     log.info("[%s] created followup %s  depends_on=%s",
                              task_id, followup.id, ss["tool_task_ids"])
@@ -1390,6 +1429,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                 setattr(agent, key, val)
 
         agent_store.save(agent)
+        agent.builtin = False
         return jsonify(_agent_json(agent))
 
     @bp.route("/agents/<name>", methods=["DELETE"])
@@ -1397,8 +1437,11 @@ def create_blueprint(config: AssaiConfig | None = None,
         agent = agent_store.get(name)
         if agent is None:
             return jsonify({"error": "not found"}), 404
+        if agent.builtin:
+            return jsonify({"error": "cannot delete a built-in agent"}), 403
         agent_store.delete(name)
-        return jsonify({"deleted": True})
+        remaining = agent_store.get(name)
+        return jsonify({"deleted": True, "builtin_revealed": remaining is not None})
 
     @bp.route("/agents/<name>/template", methods=["GET"])
     def get_agent_template(name):
@@ -1417,6 +1460,17 @@ def create_blueprint(config: AssaiConfig | None = None,
         content = data.get("content", "")
         agent_store.save_template(name, content)
         return jsonify({"name": name, "content": content})
+
+    @bp.route("/agents/<name>/reset", methods=["POST"])
+    def reset_agent(name):
+        """Delete workspace override, restoring the built-in version."""
+        if not agent_store._is_builtin(name):
+            return jsonify({"error": "not a built-in agent"}), 400
+        agent_store.delete(name)
+        agent = agent_store.get(name)
+        if agent is None:
+            return jsonify({"error": "built-in not found after reset"}), 500
+        return jsonify(_agent_json(agent))
 
     # ==================================================================
     # Tool namespaces (from the builtin registry)

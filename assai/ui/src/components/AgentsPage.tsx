@@ -4,7 +4,7 @@ import {
     NativeSelect, Spinner, Textarea,
 } from '@chakra-ui/react';
 import {
-    listAgents, createAgent, updateAgent, deleteAgent,
+    listAgents, createAgent, updateAgent, deleteAgent, resetAgent,
     getAgentTemplate, updateAgentTemplate, listProviders,
     listToolNamespaces,
 } from '../services/api';
@@ -70,6 +70,13 @@ const ChevronDown = () => (
 const ChevronUp = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polyline points="18 15 12 9 6 15" />
+    </svg>
+);
+
+const ResetIcon = () => (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polyline points="1 4 1 10 7 10" />
+        <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
     </svg>
 );
 
@@ -255,6 +262,15 @@ const AgentsPage = () => {
         } catch { /* ignore */ } finally { setBusy(false); }
     };
 
+    const handleReset = async (name: string) => {
+        setBusy(true);
+        try {
+            await resetAgent(name);
+            refresh();
+            if (editingName === name) setShowForm(false);
+        } catch { /* ignore */ } finally { setBusy(false); }
+    };
+
     const handleSaveTemplate = async () => {
         if (!editingName) return;
         setSavingTemplate(true);
@@ -319,6 +335,11 @@ const AgentsPage = () => {
                                     <Badge variant="outline" fontSize="2xs">
                                         {a.provider === 'auto' ? 'auto' : a.provider}
                                     </Badge>
+                                    {a.builtin && (
+                                        <Badge colorScheme="green" fontSize="2xs" variant="subtle">
+                                            built-in
+                                        </Badge>
+                                    )}
                                 </HStack>
                                 <HStack gap={1}>
                                     <IconButton
@@ -328,13 +349,15 @@ const AgentsPage = () => {
                                     >
                                         <EditIcon />
                                     </IconButton>
-                                    <IconButton
-                                        aria-label="Delete" size="xs" variant="ghost"
-                                        onClick={() => handleDelete(a.name)}
-                                        color="var(--text-error)" disabled={busy}
-                                    >
-                                        <TrashIcon />
-                                    </IconButton>
+                                    {!a.builtin && (
+                                        <IconButton
+                                            aria-label="Delete" size="xs" variant="ghost"
+                                            onClick={() => handleDelete(a.name)}
+                                            color="var(--text-error)" disabled={busy}
+                                        >
+                                            <TrashIcon />
+                                        </IconButton>
+                                    )}
                                 </HStack>
                             </HStack>
 

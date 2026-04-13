@@ -10,6 +10,15 @@ const SendIcon = ({ size = 20 }: { size?: number }) => (
     </svg>
 );
 
+const ThinkingIcon = ({ active }: { active: boolean }) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none"
+        stroke={active ? 'var(--accent)' : 'currentColor'} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2a7 7 0 0 0-4 12.7V17a1 1 0 0 0 1 1h6a1 1 0 0 0 1-1v-2.3A7 7 0 0 0 12 2z" />
+        <line x1="9" y1="21" x2="15" y2="21" />
+        <line x1="10" y1="24" x2="14" y2="24" />
+    </svg>
+);
+
 const Home = () => {
     const navigate = useNavigate();
     const [input, setInput] = useState('');
@@ -18,6 +27,7 @@ const Home = () => {
     const [agents, setAgents] = useState<AgentDef[]>([]);
     const [selectedProvider, setSelectedProvider] = useState('auto');
     const [selectedAgent, setSelectedAgent] = useState('default');
+    const [enableThinking, setEnableThinking] = useState(true);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
 
     useEffect(() => {
@@ -34,7 +44,7 @@ const Home = () => {
         try {
             const resp = await uberConverse(text, '', selectedProvider, selectedAgent, true);
             navigate(`/conversations/${resp.conversation}`, {
-                state: { pendingMessage: text, provider: selectedProvider, agent: selectedAgent },
+                state: { pendingMessage: text, provider: selectedProvider, agent: selectedAgent, enableThinking },
             });
         } catch {
             setIsRouting(false);
@@ -107,6 +117,17 @@ const Home = () => {
                                 ))}
                             </NativeSelect.Field>
                         </NativeSelect.Root>
+                        <IconButton
+                            aria-label={enableThinking ? 'Disable reasoning' : 'Enable reasoning'}
+                            onClick={() => setEnableThinking(v => !v)}
+                            variant="ghost" size="xs"
+                            color={enableThinking ? 'var(--accent)' : 'var(--text-muted)'}
+                            _hover={{ bg: 'var(--bg-hover)' }}
+                            title={enableThinking ? 'Thinking: ON' : 'Thinking: OFF'}
+                            borderRadius="md"
+                            h="26px" w="26px">
+                            <ThinkingIcon active={enableThinking} />
+                        </IconButton>
                     </HStack>
                     <HStack gap={2} align="flex-end">
                         <HStack

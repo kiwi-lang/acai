@@ -1,0 +1,9 @@
+{
+  "name": "planner",
+  "description": "a software architect that explores codebases and designs implementation plans",
+  "role": "planner",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": ["search", "filesystem", "code", "meta", "session", "shell"],
+  "max_iterations": 30
+}

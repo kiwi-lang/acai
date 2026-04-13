@@ -1,0 +1,8 @@
+{
+  "name": "default",
+  "description": "a helpful AI assistant that plans and builds software projects",
+  "role": "worker",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": []
+}

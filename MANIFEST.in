@@ -3,6 +3,7 @@ global-exclude __pycache__
 
 recursive-include assai *.json
 recursive-include assai *.py
+recursive-include assai *.j2
 
 include LICENSE
 include requirements.txt

@@ -43,6 +43,11 @@ class ContentToken(StreamEvent):
     text: str
 
 @dataclass
+class ReasoningToken(StreamEvent):
+    """A token from the model's reasoning/thinking chain."""
+    text: str
+
+@dataclass
 class ToolCallDelta(StreamEvent):
     """A single incremental chunk for one tool call from the LLM."""
     index: int
@@ -407,13 +412,17 @@ class OpenAICompatibleLLM(LLM):
         return h
 
     def _payload(self, messages, stream=False, **kwargs):
-        return {
+        payload = {
             "model": kwargs.get("model", self.model),
             "messages": messages,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "stream": stream,
         }
+        chat_template_kwargs = kwargs.get("chat_template_kwargs")
+        if chat_template_kwargs:
+            payload["chat_template_kwargs"] = chat_template_kwargs
+        return payload
 
     def complete(self, messages, **kwargs):
         payload = self._payload(messages, stream=False, **kwargs)
@@ -442,7 +451,8 @@ class OpenAICompatibleLLM(LLM):
     def stream(self, messages, **kwargs):
         """Stream structured events from the LLM.
 
-        Yields :class:`ContentToken` for text deltas,
+        Yields :class:`ReasoningToken` for thinking/reasoning deltas,
+        :class:`ContentToken` for text deltas,
         :class:`ToolCallDelta` for each raw tool-call chunk, and
         :class:`StreamDone` when the stream is complete.
         """
@@ -467,6 +477,10 @@ class OpenAICompatibleLLM(LLM):
             try:
                 data = json.loads(data_str)
                 delta = data.get("choices", [{}])[0].get("delta", {})
+
+                reasoning = delta.get("reasoning") or delta.get("reasoning_content") or ""
+                if reasoning:
+                    yield ReasoningToken(text=reasoning)
 
                 content = delta.get("content", "")
                 if content:

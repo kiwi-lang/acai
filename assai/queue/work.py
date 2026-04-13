@@ -17,6 +17,7 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
+    Boolean,
     Column,
     DateTime,
     ForeignKey,
@@ -25,6 +26,7 @@ from sqlalchemy import (
     Text,
     create_engine,
     desc,
+    JSON,
     or_,
 )
 from sqlalchemy.orm import (
@@ -87,8 +89,9 @@ class Task(Base):
     agent       = Column(String, default="")
     parent_task = Column(String, ForeignKey("tasks.id"), nullable=True, default=None)
     root_task   = Column(String, ForeignKey("tasks.id"), nullable=True, default=None, index=True)
-
-
+    enable_thinking = Column(Boolean, nullable=True, default=None)
+    conversation = Column(String, default="", index=True)
+    ext = Column(JSON)
 # ---------------------------------------------------------------------------
 # Queue
 # ---------------------------------------------------------------------------
@@ -123,6 +126,14 @@ class WorkQueue:
                 conn.execute(text(
                     "ALTER TABLE tasks ADD COLUMN started_at DATETIME DEFAULT NULL"
                 ))
+            if "enable_thinking" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE tasks ADD COLUMN enable_thinking BOOLEAN DEFAULT NULL"
+                ))
+            if "conversation" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE tasks ADD COLUMN conversation VARCHAR DEFAULT ''"
+                ))
 
     def session(self) -> Session:
         return self._Session()
@@ -137,7 +148,9 @@ class WorkQueue:
              kind: str = "llm_complete", gpu: int = 0,
              project: str = "", agent: str = "",
              parent_task: str = "",
-             root_task: str = "") -> Task:
+             root_task: str = "",
+             enable_thinking: bool | None = None,
+             conversation: str = "") -> Task:
         """Insert a new task and return it."""
         deps = ",".join(depends_on) if depends_on else ""
         task = Task(
@@ -154,6 +167,8 @@ class WorkQueue:
             agent=agent,
             parent_task=parent_task or None,
             root_task=root_task or None,
+            enable_thinking=enable_thinking,
+            conversation=conversation,
         )
         with self.session() as s:
             s.add(task)

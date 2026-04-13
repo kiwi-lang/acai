@@ -27,8 +27,8 @@ from flask_socketio import SocketIO, emit
 
 from assai.core.agent_store import compress_messages
 from assai.core.llm import (
-    ContentToken, LLMServer, LLMServerError, StreamDone, ToolCallDelta,
-    create_llm,
+    ContentToken, LLMServer, LLMServerError, ReasoningToken, StreamDone,
+    ToolCallDelta, create_llm,
 )
 from assai.core.tools import ToolRegistry, discover_tools
 
@@ -85,6 +85,7 @@ def create_worker_blueprint(
         tools = body.get("tools")
         task_id = body.get("task_id", "")
         provider_override = body.get("provider")
+        enable_thinking = body.get("enable_thinking")
 
         log.info(
             "[%s] llm/complete  messages=%d  tools=%s  provider=%s",
@@ -115,11 +116,25 @@ def create_worker_blueprint(
 
         llm = create_llm(llm_cfg)
 
+        stream_kwargs: dict = {}
+        if tools:
+            stream_kwargs["tools"] = tools
+        if enable_thinking is not None:
+            stream_kwargs["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+
         def generate():
             idx = 0
             try:
-                for event in llm.stream(messages, tools=tools):
-                    if isinstance(event, ContentToken):
+                print(stream_kwargs)
+                for event in llm.stream(messages, **stream_kwargs):
+                    if isinstance(event, ReasoningToken):
+                        yield _sse_event("reasoning", {
+                            "task_id": task_id,
+                            "token": event.text,
+                            "index": idx,
+                        })
+                        idx += 1
+                    elif isinstance(event, ContentToken):
                         yield _sse_event("token", {
                             "task_id": task_id,
                             "token": event.text,
@@ -445,6 +460,8 @@ class WorkerPoller:
             }
             if work.get("provider"):
                 payload["provider"] = work["provider"]
+            if work.get("enable_thinking") is not None:
+                payload["enable_thinking"] = work["enable_thinking"]
 
             resp = http.post(
                 f"{self.worker_url}/llm/complete",
@@ -458,11 +475,12 @@ class WorkerPoller:
                 return "", f"LLM returned HTTP {resp.status_code}: {text[:200]}"
 
             accumulated_text = ""
+            accumulated_reasoning = ""
             error_msg = None
 
             def _event_generator():
                 """Yield NDJSON lines from the worker's SSE stream."""
-                nonlocal accumulated_text, error_msg
+                nonlocal accumulated_text, accumulated_reasoning, error_msg
                 event_type = ""
 
                 for line in resp.iter_lines(decode_unicode=True):
@@ -481,6 +499,8 @@ class WorkerPoller:
 
                     if event_type == "token":
                         accumulated_text += event_data.get("token", "")
+                    elif event_type == "reasoning":
+                        accumulated_reasoning += event_data.get("token", "")
                     elif event_type == "error":
                         error_msg = event_data.get("error", "unknown error")
 
@@ -506,7 +526,10 @@ class WorkerPoller:
 
             if error_msg:
                 return "", error_msg
-            return accumulated_text, None
+            result_val = accumulated_text
+            if accumulated_reasoning:
+                result_val = {"text": accumulated_text, "reasoning": accumulated_reasoning}
+            return result_val, None
 
         except Exception as exc:
             log.exception("[%s] LLM dispatch failed", task_id)
@@ -596,7 +619,12 @@ class WorkerPoller:
 
     def _push_result(self, task_id: str, kind: str, result: str | dict, work: dict,
                      error: str | None = None):
-        result_text = result if isinstance(result, str) else ""
+        if isinstance(result, dict) and "text" in result and "reasoning" in result:
+            result_text = result["text"]
+            reasoning_text = result["reasoning"]
+        else:
+            result_text = result if isinstance(result, str) else ""
+            reasoning_text = ""
         log.info("[%s] pushing result  kind=%s  chars=%d  has_tool_calls=%s  error=%s",
                  task_id, kind, len(result_text), isinstance(result, dict), bool(error))
         try:
@@ -607,6 +635,8 @@ class WorkerPoller:
                 "tool": work.get("tool", ""),
                 "raw": result,
             }
+            if reasoning_text:
+                payload["reasoning"] = reasoning_text
             if error:
                 payload["error"] = error
 

@@ -37,8 +37,11 @@ const ConversationsPage = () => {
             sendingRef.current = true;
             navigate(location.pathname, { replace: true, state: {} });
 
+            const thinking = state.enableThinking !== undefined
+                ? state.enableThinking === true || state.enableThinking === 'true'
+                : undefined;
             converse(state.pendingMessage, convId, '', '',
-                     state.provider || 'auto', state.agent || 'default')
+                     state.provider || 'auto', state.agent || 'default', thinking)
                 .then(() => {
                     sendingRef.current = false;
                     setReadyConvId(convId);
@@ -123,6 +126,7 @@ const ConversationsPage = () => {
                 onResponseComplete={refreshList}
                 initialProvider={conv?.provider || 'auto'}
                 initialAgent={conv?.agent || (conv?.project ? (conv?.refiner || 'refiner') : 'default')}
+                initialThinking={conv?.enable_thinking}
                 onProviderChange={(v) => {
                     if (convId) updateConversation(convId, { provider: v }).catch(() => {});
                 }}

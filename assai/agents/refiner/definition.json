@@ -1,0 +1,8 @@
+{
+  "name": "refiner",
+  "description": "a task refinement specialist that helps users define clear, actionable work items",
+  "role": "planner",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": ["tasks", "ui"]
+}
