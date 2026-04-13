@@ -517,7 +517,7 @@ def create_blueprint(config: AssaiConfig | None = None,
     # ==================================================================
 
     @bp.route("/uber/converse", methods=["POST"])
-    def uber_converse():
+    async def uber_converse():
         data = request.get_json(silent=True) or {}
         message = data.get("message", "")
         current_conversation = data.get("current_conversation", "")
@@ -527,7 +527,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         if not message:
             return jsonify({"error": "message is required"}), 400
 
-        result = uber_scheduler.schedule(
+        result = await uber_scheduler.schedule(
             message=message,
             current_conv_id=current_conversation,
             provider=provider,

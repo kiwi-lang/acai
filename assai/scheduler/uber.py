@@ -17,19 +17,19 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
-import threading
-import time
 
-from assai.core.chat import ChatStore
-from assai.core.stream import StreamTracker
-from assai.queue.work import TaskStatus, WorkQueue
+from assai.queue.work import TaskStatus
+from assai.scheduler.base import BaseScheduler
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from assai.core.chat import ChatStore
     from assai.core.config import AssaiConfig
+    from assai.core.projects import Project
+    from assai.core.stream import StreamTracker
+    from assai.queue.work import WorkQueue
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ Rules:
 - For new conversations, provide a concise title and 2-5 topic tags."""
 
 
-class UberScheduler:
+class UberScheduler(BaseScheduler):
     """Routes user messages to the right conversation via the work queue.
 
     All LLM work is dispatched through the shared :class:`WorkQueue` —
@@ -64,74 +64,10 @@ class UberScheduler:
         chat: ChatStore,
         queue: WorkQueue,
         stream_tracker: StreamTracker,
+        project: Project | None = None,
     ):
-        self.config = config
-        self.chat = chat
-        self.queue = queue
-        self.tracker = stream_tracker
-        self.tasks_dir = config.worker.tasks_dir
-        self._lock = threading.Lock()
-
+        super().__init__(config, chat, queue, stream_tracker, project=project)
         log.info("UberScheduler initialised  tasks_dir=%s", self.tasks_dir)
-
-    # ------------------------------------------------------------------
-    # Task polling
-    # ------------------------------------------------------------------
-
-    def _wait_for_task(
-        self, task_id: str, timeout: float = 60.0, interval: float = 0.3,
-    ) -> str | None:
-        """Block until *task_id* completes and return the result text."""
-        deadline = time.monotonic() + timeout
-        tasks_dir = self.config.worker.tasks_dir
-        t0 = time.monotonic()
-        polls = 0
-
-        log.info("waiting for task %s (timeout=%.0fs)", task_id, timeout)
-
-        while time.monotonic() < deadline:
-            task = self.queue.get(task_id)
-            polls += 1
-            if task is None:
-                log.warning("task %s vanished from queue after %d polls", task_id, polls)
-                return None
-
-            if task.status in (TaskStatus.COMPLETED, "chained"):
-                elapsed = time.monotonic() - t0
-                result_path = task.result_path or os.path.join(
-                    tasks_dir, task_id, "result.json",
-                )
-                if os.path.isfile(result_path):
-                    try:
-                        with open(result_path, encoding="utf-8") as f:
-                            raw = json.load(f)
-                    except (json.JSONDecodeError, OSError):
-                        log.error("task %s completed but result unreadable at %s", task_id, result_path)
-                        return None
-                    text = raw if isinstance(raw, str) else (
-                        raw.get("content", str(raw)) if isinstance(raw, dict) else str(raw)
-                    )
-                    log.info(
-                        "task %s completed in %.1fs (%d polls)  result=%r",
-                        task_id, elapsed, polls, text[:200],
-                    )
-                    return text
-                log.warning("task %s completed but no result file at %s", task_id, result_path)
-                return None
-
-            if task.status == TaskStatus.FAILED:
-                elapsed = time.monotonic() - t0
-                log.warning("task %s FAILED after %.1fs: %s", task_id, elapsed, task.error_log)
-                return None
-
-            time.sleep(interval)
-
-        elapsed = time.monotonic() - t0
-        log.warning(
-            "task %s timed out after %.0fs (%d polls, last status=%s)",
-            task_id, elapsed, polls, task.status if task else "?",
-        )
-        return None
 
     # ------------------------------------------------------------------
     # Conversation catalogue
@@ -153,7 +89,7 @@ class UberScheduler:
     # Routing via the queue
     # ------------------------------------------------------------------
 
-    def _route_message(self, message: str, current_conv_id: str = "") -> dict:
+    async def _route_message(self, message: str, current_conv_id: str = "") -> dict:
         """Queue a routing task and return the parsed decision.
 
         Returns ``{"id": "<conv_id>"}`` or
@@ -195,29 +131,14 @@ class UberScheduler:
             f"User message:\n{message}"
         )
 
-        routing_messages = [
-            {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
+        ctx = self.create_agent_context(agent="default")
+        ctx.add_context(_ROUTER_SYSTEM_PROMPT, role="system")
+        ctx.add_context(user_prompt, role="user")
 
-        task = self.queue.push(
-            title="uber: route message",
-            kind="llm_complete",
-            spec_path="",
-            agent="default",
-        )
+        self.notify("Routing message to conversation...")
+        task = await ctx.submit(title="uber: route message")
+        result = await task.result(timeout=60.0)
 
-        task_dir = os.path.join(self.tasks_dir, task.id)
-        os.makedirs(task_dir, exist_ok=True)
-        spec_path = os.path.join(task_dir, "conversation.json")
-        with open(spec_path, "w", encoding="utf-8") as f:
-            json.dump(routing_messages, f, ensure_ascii=False)
-        self.queue.update(task.id, spec_path=spec_path)
-        log.debug("wrote routing spec to %s", spec_path)
-        self.queue.update(task.id, status=TaskStatus.READY)
-        log.info("routing task queued  task_id=%s", task.id)
-
-        result = self._wait_for_task(task.id)
         if not result:
             log.warning("routing returned empty — falling back to new conversation")
             return {"id": "new", "title": message.strip().split("\n")[0][:60], "tags": []}
@@ -228,7 +149,6 @@ class UberScheduler:
         """Extract the JSON decision from the LLM output."""
         text = raw.strip()
 
-        # Strip markdown fences
         text = re.sub(r"^```(?:json)?\s*", "", text)
         text = re.sub(r"\s*```$", "", text)
         text = text.strip()
@@ -256,7 +176,6 @@ class UberScheduler:
         except (json.JSONDecodeError, TypeError, KeyError):
             pass
 
-        # Fallback: check if the raw text contains a known ID
         for c in catalogue:
             if c["id"] in text:
                 log.info("routing decision (fallback parse): existing conv %s", c["id"])
@@ -269,7 +188,7 @@ class UberScheduler:
     # Schedule — main entry point
     # ------------------------------------------------------------------
 
-    def schedule(
+    async def schedule(
         self,
         message: str,
         current_conv_id: str = "",
@@ -287,12 +206,14 @@ class UberScheduler:
         Returns ``conversation``, ``is_new``, and (unless *route_only*)
         ``task_id``.
         """
+        self._active_conversation = current_conv_id
+
         log.info(
             "schedule() called  message=%r  current_conv=%s  agent=%s  route_only=%s",
             message[:80], current_conv_id or "(none)", agent, route_only,
         )
 
-        decision = self._route_message(message, current_conv_id)
+        decision = await self._route_message(message, current_conv_id)
 
         if decision["id"] == "new":
             meta = self.chat.create(
@@ -304,10 +225,12 @@ class UberScheduler:
             if tags:
                 self.chat.update_meta(conv_id, tags=tags)
             is_new = True
+            self.notify(f"Created new conversation: {meta.title}")
             log.info("created new conversation %s  title=%r  tags=%s", conv_id, meta.title, tags)
         else:
             conv_id = decision["id"]
             is_new = False
+            self.notify(f"Routed to existing conversation")
             log.info("routing to existing conversation %s", conv_id)
 
         if route_only:

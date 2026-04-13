@@ -1,8 +1,9 @@
-"""Provider scheduler — picks the best LLM provider for a given role.
+"""Scheduler package — provider selection and async multi-agent building blocks.
 
 Usage::
 
     from assai.scheduler import ProviderScheduler
+    from assai.scheduler import BaseScheduler, AsyncTask, AgentContext
 
     sched = ProviderScheduler(config.providers)
     prov = sched.select("worker")     # best provider for the worker role
@@ -13,8 +14,17 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from assai.scheduler.base import AgentContext, AsyncTask, BaseScheduler
+
 if TYPE_CHECKING:
     from assai.core.config import ProviderConfig
+
+__all__ = [
+    "AgentContext",
+    "AsyncTask",
+    "BaseScheduler",
+    "ProviderScheduler",
+]
 
 
 class ProviderScheduler:
