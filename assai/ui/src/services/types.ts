@@ -185,7 +185,7 @@ export interface SandboxConfig {
 }
 
 export interface UberRouteResponse {
-    task_id: string;
+    task_id?: string;
     conversation: string;
     is_new: boolean;
 }

@@ -6,6 +6,7 @@ import {
 } from '@chakra-ui/react';
 import Layout from './layout/Layout';
 import Home from './components/Home';
+import ConversationsPage from './components/ConversationsPage';
 import ProjectsPage from './components/ProjectsPage';
 import ProjectView from './components/ProjectView';
 import AgentsPage from './components/AgentsPage';
@@ -28,7 +29,8 @@ function App() {
             <Layout>
               <Routes>
               <Route path="/" element={<Home />} />
-              <Route path="/conversations/:convId" element={<Home />} />
+              <Route path="/conversations" element={<ConversationsPage />} />
+              <Route path="/conversations/:convId" element={<ConversationsPage />} />
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:name" element={<ProjectView />} />
               <Route path="/agents" element={<AgentsPage />} />

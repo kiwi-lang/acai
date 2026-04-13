@@ -256,10 +256,16 @@ export async function uberConverse(
     currentConversation = '',
     provider = '',
     agent = '',
+    routeOnly = false,
 ): Promise<UberRouteResponse> {
     return request<UberRouteResponse>('/uber/converse', {
         method: 'POST',
-        body: JSON.stringify({ message, current_conversation: currentConversation, provider, agent }),
+        body: JSON.stringify({
+            message,
+            current_conversation: currentConversation,
+            provider, agent,
+            route_only: routeOnly,
+        }),
     });
 }
 

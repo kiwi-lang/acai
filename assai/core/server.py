@@ -523,6 +523,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         current_conversation = data.get("current_conversation", "")
         provider = data.get("provider", "auto")
         agent = data.get("agent", "default")
+        route_only = data.get("route_only", False)
         if not message:
             return jsonify({"error": "message is required"}), 400
 
@@ -531,6 +532,7 @@ def create_blueprint(config: AssaiConfig | None = None,
             current_conv_id=current_conversation,
             provider=provider,
             agent=agent,
+            route_only=bool(route_only),
         )
         return jsonify(result), 202
 

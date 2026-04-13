@@ -86,10 +86,11 @@ class StreamTracker:
     def get_partial(self, conversation: str) -> tuple[str | None, str]:
         """Return ``(task_id, partial_text)`` for *conversation*.
 
-        Returns ``(None, "")`` if no stream is active.
+        Returns ``(None, "")`` if no stream is active.  A registered task
+        is considered active even before the first token arrives.
         """
         with self._lock:
             for task_id, conv in self._task_to_conv.items():
-                if conv == conversation and conversation in self._buffers:
-                    return task_id, self._buffers[conversation]
+                if conv == conversation:
+                    return task_id, self._buffers.get(conversation, "")
         return None, ""

@@ -67,13 +67,24 @@ const UberIcon = () => (
   </svg>
 );
 
+const HomeIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+    <polyline points="9 22 9 12 15 12 15 22" />
+  </svg>
+);
+
 const navItems = [
-  { id: 'chat', name: 'Conversation', path: '/', icon: ChatIcon, color: 'green' },
-  { id: 'uber', name: 'Uber Chat', path: '/uber', icon: UberIcon, color: 'purple' },
+  { id: 'home', name: 'Home', path: '/', icon: HomeIcon, color: 'green' },
+  { id: 'conversations', name: 'Conversations', path: '/conversations', icon: ChatIcon, color: 'blue' },
   { id: 'projects', name: 'Projects', path: '/projects', icon: ProjectsIcon, color: 'orange' },
   { id: 'agents', name: 'Agents', path: '/agents', icon: AgentsIcon, color: 'teal' },
   { id: 'tasks', name: 'Work Queue', path: '/tasks', icon: TasksIcon, color: 'blue' },
   { id: 'status', name: 'Status', path: '/status', icon: StatusIcon, color: 'purple' },
+];
+
+const devItems = [
+  { id: 'uber', name: 'Uber Chat', path: '/uber', icon: UberIcon, color: 'purple' },
 ];
 
 interface LayoutProps {
@@ -180,7 +191,7 @@ const Layout: FC<LayoutProps> = ({ children }) => {
         </Box>
 
         {/* Navigation */}
-        <Box px={3} pb={3} flex={1}>
+        <Box px={3} pb={3} flex={1} overflowY="auto">
           <Text fontSize="xs" fontWeight="bold" color="var(--text-muted)" mb={2} px={2} textTransform="uppercase" letterSpacing="wide">
             Navigation
           </Text>
@@ -188,8 +199,47 @@ const Layout: FC<LayoutProps> = ({ children }) => {
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = item.path === '/'
-                ? location.pathname === '/' || location.pathname.startsWith('/conversations')
+                ? location.pathname === '/'
                 : location.pathname.startsWith(item.path);
+              return (
+                <Link
+                  key={item.id}
+                  to={item.path}
+                  style={{ textDecoration: 'none', width: '100%' }}
+                  onClick={closeMobileMenu}
+                >
+                  <HStack
+                    p={2.5}
+                    borderRadius="md"
+                    bg={isActive ? 'var(--bg-active)' : 'transparent'}
+                    _hover={{ bg: 'var(--bg-hover)' }}
+                    cursor="pointer"
+                    gap={3}
+                    transition="all 0.2s"
+                  >
+                    <Box color={isActive ? `${item.color}.400` : 'var(--text-muted)'}>
+                      <Icon />
+                    </Box>
+                    <Text
+                      fontSize="sm"
+                      color={isActive ? 'var(--text-heading)' : 'var(--text-secondary)'}
+                      fontWeight={isActive ? 'medium' : 'normal'}
+                    >
+                      {item.name}
+                    </Text>
+                  </HStack>
+                </Link>
+              );
+            })}
+          </VStack>
+
+          <Text fontSize="xs" fontWeight="bold" color="var(--text-muted)" mt={4} mb={2} px={2} textTransform="uppercase" letterSpacing="wide">
+            Dev
+          </Text>
+          <VStack gap={1} align="stretch">
+            {devItems.map((item) => {
+              const Icon = item.icon;
+              const isActive = location.pathname.startsWith(item.path);
               return (
                 <Link
                   key={item.id}

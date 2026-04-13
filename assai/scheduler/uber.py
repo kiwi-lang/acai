@@ -275,18 +275,21 @@ class UberScheduler:
         current_conv_id: str = "",
         provider: str = "auto",
         agent: str = "default",
+        route_only: bool = False,
     ) -> dict:
-        """Route a user message to the best conversation and queue the response.
+        """Route a user message to the best conversation and optionally queue the response.
 
-        1. Queue + wait for a routing task.
-        2. Create or select the target conversation.
-        3. Append the user message and queue the main LLM task.
+        When *route_only* is ``True`` the scheduler only picks (or creates)
+        the target conversation — it does **not** append the user message or
+        queue an LLM task.  The caller is expected to send the message
+        through the normal ``converse`` flow afterwards.
 
-        Returns ``task_id``, ``conversation``, and ``is_new``.
+        Returns ``conversation``, ``is_new``, and (unless *route_only*)
+        ``task_id``.
         """
         log.info(
-            "schedule() called  message=%r  current_conv=%s  agent=%s",
-            message[:80], current_conv_id or "(none)", agent,
+            "schedule() called  message=%r  current_conv=%s  agent=%s  route_only=%s",
+            message[:80], current_conv_id or "(none)", agent, route_only,
         )
 
         decision = self._route_message(message, current_conv_id)
@@ -306,6 +309,10 @@ class UberScheduler:
             conv_id = decision["id"]
             is_new = False
             log.info("routing to existing conversation %s", conv_id)
+
+        if route_only:
+            log.info("route_only — skipping message append and LLM task")
+            return {"conversation": conv_id, "is_new": is_new}
 
         self.chat.append(conv_id, {"role": "user", "content": message})
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect } from 'react';
+import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
 import { converse, getHistory, listProviders, listAgents, checkInflight, getContextStats } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
@@ -130,6 +130,16 @@ export interface ChatPanelProps {
     initialAgent?: string;
     onProviderChange?: (v: string) => void;
     onAgentChange?: (v: string) => void;
+    /** Override the default `converse()` call. Receives text + current conv id + provider + agent; must return task_id and target conversation. */
+    customSend?: (text: string, convId: string, provider: string, agent: string) => Promise<{task_id: string; conversation: string}>;
+    /** Rendered between the messages area and the input area. */
+    statusBar?: ReactNode;
+    /** Externally disable the input (e.g. during routing). */
+    disabled?: boolean;
+    /** Called when a streaming response completes. */
+    onResponseComplete?: () => void;
+    /** Custom placeholder for the text input. */
+    placeholder?: string;
 }
 
 const ChatPanel = ({
@@ -142,6 +152,11 @@ const ChatPanel = ({
     initialAgent,
     onProviderChange,
     onAgentChange,
+    customSend,
+    statusBar,
+    disabled: externalDisabled,
+    onResponseComplete,
+    placeholder: customPlaceholder,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -178,8 +193,10 @@ const ChatPanel = ({
 
     const onProviderChangeRef = useRef(onProviderChange);
     const onAgentChangeRef = useRef(onAgentChange);
+    const onResponseCompleteRef = useRef(onResponseComplete);
     onProviderChangeRef.current = onProviderChange;
     onAgentChangeRef.current = onAgentChange;
+    onResponseCompleteRef.current = onResponseComplete;
 
     const { joinConversation, leaveConversation } = useAgentSocket();
 
@@ -242,6 +259,7 @@ const ChatPanel = ({
             activeTaskRef.current = null;
             setIsLoading(false);
             closeEventSource();
+            onResponseCompleteRef.current?.();
         });
 
         es.addEventListener('error', (e: MessageEvent) => {
@@ -332,14 +350,14 @@ const ChatPanel = ({
     }, [conversationId]);
 
     useLayoutEffect(() => {
-        if (shouldRestoreFocusRef.current && textareaRef.current && !isLoading) {
+        if (shouldRestoreFocusRef.current && textareaRef.current && !isLoading && !externalDisabled) {
             const id = setTimeout(() => {
                 textareaRef.current?.focus();
                 shouldRestoreFocusRef.current = false;
             }, 50);
             return () => clearTimeout(id);
         }
-    }, [input, isLoading]);
+    }, [input, isLoading, externalDisabled]);
 
     /* ── Actions ── */
 
@@ -380,7 +398,7 @@ const ChatPanel = ({
 
     const handleSend = async () => {
         const text = input.trim();
-        if (!text || isLoading) return;
+        if (!text || isLoading || externalDisabled) return;
 
         if (document.activeElement === textareaRef.current) {
             shouldRestoreFocusRef.current = true;
@@ -389,19 +407,34 @@ const ChatPanel = ({
         setInput('');
         if (textareaRef.current) textareaRef.current.style.height = 'auto';
 
-        setMessages(prev => [...prev, { role: 'user', content: text }]);
+        const prevConvId = convIdRef.current;
+
+        if (!customSend) {
+            setMessages(prev => [...prev, { role: 'user', content: text }]);
+        }
         setIsLoading(true);
 
         try {
-            const resp = await converse(text, convIdRef.current || '', project || '', '', selectedProvider, selectedAgent);
+            const resp = customSend
+                ? await customSend(text, prevConvId || '', selectedProvider, selectedAgent)
+                : await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
+
             activeTaskRef.current = resp.task_id;
             convIdRef.current = resp.conversation;
-
             joinConversation(resp.conversation);
 
-            if (!conversationId) {
+            const convChanged = resp.conversation !== (prevConvId || '');
+
+            if (convChanged) {
+                if (prevConvId) leaveConversation(prevConvId);
                 justCreatedRef.current = true;
                 onConversationCreated?.(resp.conversation);
+                if (customSend) {
+                    const historyResp = await getHistory(resp.conversation);
+                    setMessages(historyResp.messages);
+                }
+            } else if (customSend) {
+                setMessages(prev => [...prev, { role: 'user', content: text }]);
             }
 
             setMessages(prev => [
@@ -412,7 +445,15 @@ const ChatPanel = ({
             openEventSource(resp.conversation);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            if (customSend) {
+                setMessages(prev => [
+                    ...prev,
+                    { role: 'user', content: text },
+                    { role: 'assistant', content: `Error: ${msg}` },
+                ]);
+            } else {
+                setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            }
             setIsLoading(false);
         }
     };
@@ -537,6 +578,8 @@ const ChatPanel = ({
                 )}
             </Box>
 
+            {statusBar}
+
             {/* Input */}
             <Box w="100%" bg="var(--bg-page)" borderTop="1px solid" borderColor="var(--border-primary)"
                 pt={2} pb={compact ? 2 : 4} px={compact ? 3 : 4}>
@@ -582,8 +625,8 @@ const ChatPanel = ({
                                 value={input}
                                 onChange={handleChange}
                                 onKeyDown={handleKeyDown}
-                                placeholder="Ask or instruct..."
-                                disabled={isLoading}
+                                placeholder={customPlaceholder || "Ask or instruct..."}
+                                disabled={isLoading || externalDisabled}
                                 rows={1} resize="none"
                                 bg="var(--bg-card)" border="1px solid" borderColor="var(--border-secondary)"
                                 _focus={{ borderColor: 'var(--accent)', boxShadow: 'none' }}
@@ -595,7 +638,7 @@ const ChatPanel = ({
                             <IconButton
                                 aria-label="Send"
                                 onMouseDown={(e) => { e.preventDefault(); handleSend(); }}
-                                disabled={isLoading || !input.trim()}
+                                disabled={isLoading || externalDisabled || !input.trim()}
                                 colorScheme="green" size="sm" borderRadius="lg"
                                 type="button" tabIndex={-1}>
                                 <SendIcon size={18} />
@@ -613,8 +656,8 @@ const ChatPanel = ({
                                     value={input}
                                     onChange={handleChange}
                                     onKeyDown={handleKeyDown}
-                                    placeholder="Describe what you want to build..."
-                                    disabled={isLoading}
+                                    placeholder={customPlaceholder || "Describe what you want to build..."}
+                                    disabled={isLoading || externalDisabled}
                                     rows={1} resize="none"
                                     border="none"
                                     _focus={{ outline: 'none', boxShadow: 'none' }}
@@ -626,7 +669,7 @@ const ChatPanel = ({
                             <IconButton
                                 aria-label="Send message"
                                 onMouseDown={(e) => { e.preventDefault(); handleSend(); }}
-                                disabled={isLoading || !input.trim()}
+                                disabled={isLoading || externalDisabled || !input.trim()}
                                 colorScheme="green" size="lg" borderRadius="xl"
                                 h="50px" w="50px" flexShrink={0}
                                 type="button" tabIndex={-1}>
