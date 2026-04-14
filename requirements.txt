@@ -5,8 +5,10 @@
 --find-links https://github.com/vllm-project/vllm/releases/expanded_assets/v0.18.1
 
 argklass
+fastapi
+uvicorn[standard]
+python-socketio
 flask
-flask[async]
 flask-socketio
 requests
 sqlalchemy

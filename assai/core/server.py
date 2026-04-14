@@ -1,6 +1,6 @@
 """Orchestrator HTTP server — owns the work queue and project state.
 
-The orchestrator is a Flask + SocketIO app that:
+The orchestrator is a FastAPI + SocketIO app that:
 
 * Accepts user conversation messages (async — queues work, returns task_id).
 * Serves ``GET /work/pop`` so workers can pull prepared work.
@@ -18,8 +18,11 @@ import os
 import threading
 import time
 
-from flask import Blueprint, Flask, Response, jsonify, request
-from flask_socketio import SocketIO, join_room, leave_room
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
+from starlette.responses import Response, StreamingResponse
+
+from assai.core.compat import SocketIO, join_room, leave_room
 
 from assai.core.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
 from assai.core.stream import StreamTracker
@@ -37,6 +40,18 @@ from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
 
 log = logging.getLogger(__name__)
+
+# ------------------------------------------------------------------
+# Helper: read JSON body (replaces request.get_json(silent=True))
+# ------------------------------------------------------------------
+
+async def _json_body(request: Request) -> dict:
+    """Read JSON body, returning ``{}`` on any parse error."""
+    try:
+        return await request.json()
+    except Exception:
+        return {}
+
 
 # ------------------------------------------------------------------
 # Orchestrator — watches completed items and chains tool calls
@@ -330,23 +345,24 @@ def _dump_request(workspace: str, task_id: str,
 
 
 # ------------------------------------------------------------------
-# Blueprint factory
+# Router factory
 # ------------------------------------------------------------------
 
-def create_blueprint(config: AssaiConfig | None = None,
-                     prefix: str = "/agent",
-                     stream_tracker: StreamTracker | None = None):
-    """Build the orchestrator Flask Blueprint.
+def create_router(config: AssaiConfig | None = None,
+                  prefix: str = "/agent",
+                  stream_tracker: StreamTracker | None = None):
+    """Build the orchestrator APIRouter.
 
-    Returns ``(bp, queue, events, chat, config, stream_tracker)`` so
-    the caller can compose with SocketIO and worker blueprints.
+    Returns ``(router, queue, events, chat, config, stream_tracker,
+    socketio_ref, pop_fn)`` so the caller can compose with SocketIO
+    and worker routers.
     """
     if config is None:
         config = AssaiConfig()
 
     tracker = stream_tracker or StreamTracker()
 
-    bp = Blueprint("agent", __name__, url_prefix=prefix)
+    router = APIRouter(prefix=prefix, tags=["agent"])
     _socketio_ref: list[SocketIO | None] = [None]
 
     events = EventBus()
@@ -369,7 +385,6 @@ def create_blueprint(config: AssaiConfig | None = None,
 
     configure_meta_tools(tool_registry)
 
-    # Start orchestrator chaining loop in background
     orc = Orchestrator(config, queue, socketio_ref=_socketio_ref, chat=chat)
     threading.Thread(target=orc.run, daemon=True, name="orchestrator").start()
 
@@ -377,24 +392,10 @@ def create_blueprint(config: AssaiConfig | None = None,
     # Scheduler driver — bridges async generators with the work queue
     # ==================================================================
 
-    # Persistent event loop for scheduler drivers.  Flask's WSGI async
-    # support tears down the per-request loop when the view returns,
-    # which would kill any background coroutine.  This dedicated loop
-    # runs in a daemon thread and stays alive for the process lifetime.
-    _driver_loop = asyncio.new_event_loop()
-    threading.Thread(
-        target=_driver_loop.run_forever, daemon=True, name="scheduler-driver",
-    ).start()
-
     _pending_steps: dict[str, dict] = {}
     _pending_steps_lock = threading.Lock()
 
     def _resolve_step(task_id: str, event_type: str, event_data: dict) -> bool:
-        """Feed a stream event into the pending step for *task_id*.
-
-        Returns ``True`` if the event was consumed by a scheduler-driven
-        step (caller should skip legacy handling), ``False`` otherwise.
-        """
         with _pending_steps_lock:
             entry = _pending_steps.get(task_id)
             if entry is None:
@@ -480,7 +481,6 @@ def create_blueprint(config: AssaiConfig | None = None,
         return True
 
     async def _await_step(sub_task_id: str, step: WorkStep, conv_id: str) -> StepResult:
-        """Register a pending step and wait for the worker to resolve it."""
         loop = asyncio.get_running_loop()
         future: asyncio.Future[StepResult] = loop.create_future()
 
@@ -500,12 +500,6 @@ def create_blueprint(config: AssaiConfig | None = None,
         return await future
 
     def _push_step(step: WorkStep, root_task_id: str, conv_id: str) -> str:
-        """Write the step payload to disk and push a sub-task to the queue.
-
-        The full hydrated payload is stored as ``scheduler_payload.json``
-        and the sub-task is tagged with ``ext.scheduler_driven = True``
-        so ``_do_pop`` can skip re-hydration.
-        """
         sub = queue.push(
             title=f"scheduler: {step.kind}",
             kind=step.kind,
@@ -543,7 +537,6 @@ def create_blueprint(config: AssaiConfig | None = None,
         return sub.id
 
     async def drive_scheduler(scheduler_instance, task, conv_id: str) -> None:
-        """Run a scheduler's async generator, driving each step through the queue."""
         gen = scheduler_instance.run(task, conv_id)
         try:
             step: WorkStep = await gen.__anext__()
@@ -594,7 +587,6 @@ def create_blueprint(config: AssaiConfig | None = None,
     # ==================================================================
 
     def _default_agent_for_project(proj_name: str) -> str:
-        """Agent slug to use when none is stored on the conversation (from project.refiner)."""
         pn = (proj_name or "").strip()
         if not pn:
             return "default"
@@ -613,13 +605,13 @@ def create_blueprint(config: AssaiConfig | None = None,
                 out["refiner"] = (getattr(p, "refiner", "") or "").strip() or "refiner"
         return out
 
-    @bp.route("/conversations", methods=["GET"])
+    @router.get("/conversations")
     def list_conversations():
-        return jsonify([_enrich_conversation_dict(m) for m in chat.list()])
+        return [_enrich_conversation_dict(m) for m in chat.list()]
 
-    @bp.route("/conversations", methods=["POST"])
-    def create_conversation():
-        data = request.get_json(silent=True) or {}
+    @router.post("/conversations", status_code=201)
+    async def create_conversation(request: Request):
+        data = await _json_body(request)
         proj = data.get("project", "")
         default_agent = _default_agent_for_project(proj)
         meta = chat.create(
@@ -628,41 +620,41 @@ def create_blueprint(config: AssaiConfig | None = None,
             provider=data.get("provider", "auto"),
             agent=data.get("agent", "") or default_agent,
         )
-        return jsonify(_enrich_conversation_dict(meta.to_dict())), 201
+        return _enrich_conversation_dict(meta.to_dict())
 
-    @bp.route("/conversations/<conv_id>", methods=["PATCH"])
-    def update_conversation(conv_id):
-        data = request.get_json(silent=True) or {}
+    @router.patch("/conversations/{conv_id}")
+    async def update_conversation(conv_id: str, request: Request):
+        data = await _json_body(request)
         allowed = {"title", "description", "provider", "agent", "tags"}
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:
-            return jsonify({"error": "no updatable fields"}), 400
+            return JSONResponse({"error": "no updatable fields"}, status_code=400)
         if "tags" in fields and isinstance(fields["tags"], str):
             fields["tags"] = [t.strip() for t in fields["tags"].split(",") if t.strip()]
         updated = chat.update_meta(conv_id, **fields)
         if updated is None:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(_enrich_conversation_dict(updated))
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _enrich_conversation_dict(updated)
 
-    @bp.route("/conversations/<conv_id>", methods=["GET"])
-    def get_conversation(conv_id):
+    @router.get("/conversations/{conv_id}")
+    def get_conversation(conv_id: str):
         meta = chat.get_meta(conv_id)
         if meta is None:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(_enrich_conversation_dict(meta))
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _enrich_conversation_dict(meta)
 
-    @bp.route("/conversations/<conv_id>", methods=["DELETE"])
-    def delete_conversation(conv_id):
+    @router.delete("/conversations/{conv_id}")
+    def delete_conversation(conv_id: str):
         chat.delete(conv_id)
-        return jsonify({"deleted": True})
+        return {"deleted": True}
 
     # ==================================================================
     # Converse (async — queues work, returns task_id)
     # ==================================================================
 
-    @bp.route("/converse", methods=["POST"])
-    def agent_converse():
-        data = request.get_json(silent=True) or {}
+    @router.post("/converse")
+    async def agent_converse(request: Request):
+        data = await _json_body(request)
         message = data.get("message", "")
         conversation = data.get("conversation", "")
         project = data.get("project", "")
@@ -671,7 +663,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         agent_name = data.get("agent", "")
         enable_thinking = data.get("enable_thinking")
         if not message:
-            return jsonify({"error": "message is required"}), 400
+            return JSONResponse({"error": "message is required"}, status_code=400)
 
         if not conversation:
             default_agent = _default_agent_for_project(project)
@@ -725,29 +717,30 @@ def create_blueprint(config: AssaiConfig | None = None,
             projects=projects,
             tool_registry=tool_registry,
         )
-        asyncio.run_coroutine_threadsafe(
-            drive_scheduler(sched, task, conversation), _driver_loop,
+        asyncio.create_task(
+            drive_scheduler(sched, task, conversation),
         )
 
-        return jsonify({"task_id": task.id, "conversation": conversation}), 202
+        return JSONResponse(
+            {"task_id": task.id, "conversation": conversation},
+            status_code=202,
+        )
 
-    @bp.route("/conversations/<conv_id>/context-stats", methods=["GET"])
-    def conversation_context_stats(conv_id):
-        """Estimate token count for this conversation's context."""
+    @router.get("/conversations/{conv_id}/context-stats")
+    def conversation_context_stats(conv_id: str):
         messages = chat.read(conv_id)
         total_chars = sum(len(m.get("content", "")) for m in messages)
         estimated_tokens = total_chars // 4
         active = scheduler.select("worker") or config.active_provider()
         max_context = active.context_window
-        return jsonify({
+        return {
             "estimated_tokens": estimated_tokens,
             "max_context": max_context,
             "message_count": len(messages),
-        })
+        }
 
-    @bp.route("/conversations/<conv_id>/inflight", methods=["GET"])
-    def conversation_inflight(conv_id):
-        """Check whether the conversation has any pending/in-progress tasks."""
+    @router.get("/conversations/{conv_id}/inflight")
+    def conversation_inflight(conv_id: str):
         active_statuses = (TaskStatus.PENDING, TaskStatus.READY, TaskStatus.IN_PROGRESS)
         for status in active_statuses:
             tasks = queue.list(status=status)
@@ -755,23 +748,23 @@ def create_blueprint(config: AssaiConfig | None = None,
                 if t.spec_path and t.spec_path.endswith("conversation.json"):
                     conv_dir = os.path.dirname(t.spec_path)
                     if os.path.basename(conv_dir) == conv_id:
-                        return jsonify({"inflight": True, "task_id": t.id, "status": t.status})
-        return jsonify({"inflight": False})
+                        return {"inflight": True, "task_id": t.id, "status": t.status}
+        return {"inflight": False}
 
     # ==================================================================
     # Uber conversation routing
     # ==================================================================
 
-    @bp.route("/uber/converse", methods=["POST"])
-    async def uber_converse():
-        data = request.get_json(silent=True) or {}
+    @router.post("/uber/converse")
+    async def uber_converse(request: Request):
+        data = await _json_body(request)
         message = data.get("message", "")
         current_conversation = data.get("current_conversation", "")
         provider_name = data.get("provider", "auto")
         agent_name = data.get("agent", "default")
         route_only = data.get("route_only", False)
         if not message:
-            return jsonify({"error": "message is required"}), 400
+            return JSONResponse({"error": "message is required"}, status_code=400)
 
         routing = await uber_scheduler.route(
             message=message,
@@ -782,7 +775,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         is_new = routing.get("is_new", False)
 
         if route_only:
-            return jsonify({"conversation": conv_id, "is_new": is_new})
+            return {"conversation": conv_id, "is_new": is_new}
 
         if provider_name and provider_name != "auto":
             chat.update_meta(conv_id, provider=provider_name)
@@ -810,29 +803,22 @@ def create_blueprint(config: AssaiConfig | None = None,
             projects=projects,
             tool_registry=tool_registry,
         )
-        asyncio.run_coroutine_threadsafe(
-            drive_scheduler(sched, task, conv_id), _driver_loop,
+        asyncio.create_task(
+            drive_scheduler(sched, task, conv_id),
         )
 
-        return jsonify({
-            "task_id": task.id,
-            "conversation": conv_id,
-            "is_new": is_new,
-        }), 202
+        return JSONResponse(
+            {"task_id": task.id, "conversation": conv_id, "is_new": is_new},
+            status_code=202,
+        )
 
     # ==================================================================
     # Think-then-generate conversation
     # ==================================================================
 
-    @bp.route("/think/converse", methods=["POST"])
-    def think_converse():
-        """Like ``/converse`` but chains a thinker step before the main agent.
-
-        The scheduler pushes a thinker task, streams its tokens as
-        reasoning events, then chains the main-agent task with reasoning
-        injected — all driven by :class:`ThinkScheduler`.
-        """
-        data = request.get_json(silent=True) or {}
+    @router.post("/think/converse")
+    async def think_converse(request: Request):
+        data = await _json_body(request)
         message = data.get("message", "")
         conversation = data.get("conversation", "")
         project = data.get("project", "")
@@ -840,7 +826,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         provider_name = data.get("provider", "")
         agent_name = data.get("agent", "")
         if not message:
-            return jsonify({"error": "message is required"}), 400
+            return JSONResponse({"error": "message is required"}, status_code=400)
 
         if not conversation:
             default_agent = _default_agent_for_project(project)
@@ -892,21 +878,24 @@ def create_blueprint(config: AssaiConfig | None = None,
             projects=projects,
             tool_registry=tool_registry,
         )
-        asyncio.run_coroutine_threadsafe(
-            drive_scheduler(sched, task, conversation), _driver_loop,
+        asyncio.create_task(
+            drive_scheduler(sched, task, conversation),
         )
 
-        return jsonify({"task_id": task.id, "conversation": conversation}), 202
+        return JSONResponse(
+            {"task_id": task.id, "conversation": conversation},
+            status_code=202,
+        )
 
     # ==================================================================
     # History
     # ==================================================================
 
-    @bp.route("/history", methods=["GET"])
-    def agent_history():
-        conversation = request.args.get("conversation", "")
+    @router.get("/history")
+    def agent_history(request: Request):
+        conversation = request.query_params.get("conversation", "")
         if not conversation:
-            return jsonify({"messages": [], "streaming": None})
+            return {"messages": [], "streaming": None}
 
         messages = chat.read(conversation)
         streaming = None
@@ -918,25 +907,20 @@ def create_blueprint(config: AssaiConfig | None = None,
                 "partial": partial,
             }
 
-        return jsonify({"messages": messages, "streaming": streaming})
+        return {"messages": messages, "streaming": streaming}
 
-    @bp.route("/history", methods=["DELETE"])
-    def agent_history_clear():
-        conversation = request.args.get("conversation", "")
+    @router.delete("/history")
+    def agent_history_clear(request: Request):
+        conversation = request.query_params.get("conversation", "")
         if conversation:
             chat.clear(conversation)
-        return jsonify({"cleared": True})
+        return {"cleared": True}
 
     # ==================================================================
     # Work endpoints (worker pulls work / pushes results)
     # ==================================================================
 
     def _resolve_provider_for_task(task, conv_id: str = "") -> dict | None:
-        """Look up the provider to use for a task.
-
-        Returns a dict with provider connection info for the worker,
-        or ``None`` to use the worker's default LLM config.
-        """
         provider_name = ""
         if conv_id:
             meta = chat.get_meta(conv_id)
@@ -963,12 +947,8 @@ def create_blueprint(config: AssaiConfig | None = None,
     def _do_pop() -> dict | None:
         """Pop and hydrate the next ready work item.
 
-        Returns the prepared work dict, or ``None`` when the queue is
-        empty.  Shared by both the HTTP endpoint and the SocketIO handler.
-
         Scheduler-driven root tasks (``kind="converse"`` / ``"think"``)
-        are set to ``IN_PROGRESS`` immediately by the endpoint and are
-        never in ``READY`` status, so they won't appear here.
+        are set to ``IN_PROGRESS`` immediately and never appear here.
         Sub-tasks pushed by the scheduler driver are tagged with
         ``ext.scheduler_driven`` and their pre-hydrated payload is
         returned directly.
@@ -1059,25 +1039,23 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         return result
 
-    @bp.route("/work/pop", methods=["GET"])
+    @router.get("/work/pop")
     def work_pop():
-        """Worker calls this to get the next prepared work item (HTTP fallback)."""
         result = _do_pop()
         if result is None:
-            return "", 204
-        return jsonify(result)
+            return Response(status_code=204)
+        return result
 
-    @bp.route("/work/result/<task_id>", methods=["POST"])
-    def work_result(task_id):
-        """Worker pushes a completed result back."""
-        data = request.get_json(silent=True) or {}
+    @router.post("/work/result/{task_id}")
+    async def work_result(task_id: str, request: Request):
+        data = await _json_body(request)
         result_text = data.get("result", "")
         error = data.get("error")
         kind = data.get("kind", "")
 
         task = queue.get(task_id)
         if task is None:
-            return jsonify({"error": "task not found"}), 404
+            return JSONResponse({"error": "task not found"}, status_code=404)
         conversation = task.conversation or ""
 
         ext = task.ext or {}
@@ -1145,7 +1123,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                         },
                     })
 
-        return jsonify({"ok": True})
+        return {"ok": True}
 
     # ==================================================================
     # Streaming: push (poller -> orchestrator) and SSE (orchestrator -> UI)
@@ -1155,10 +1133,6 @@ def create_blueprint(config: AssaiConfig | None = None,
     _active_streams_lock = threading.Lock()
 
     def _dispatch_tool_call(task_id: str, conv_id: str, call: dict) -> str:
-        """Create a tool_call work item for a completed tool call.
-
-        Returns the new tool task id.
-        """
         fn = call.get("function", {})
         tool_name = fn.get("name", "unknown")
         try:
@@ -1214,7 +1188,6 @@ def create_blueprint(config: AssaiConfig | None = None,
         return tool_task.id
 
     def _flush_tool_call(task_id: str, conv_id: str, stream_state: dict, index: int) -> None:
-        """If a tool call at *index* is accumulated, dispatch it."""
         tc = stream_state["tool_calls"].pop(index, None)
         if tc is None:
             return
@@ -1224,7 +1197,6 @@ def create_blueprint(config: AssaiConfig | None = None,
 
     def _handle_stream_event(task_id: str, conv_id: str,
                              event_type: str, event_data: dict):
-        """Process a single stream event (token / reasoning / tool_call_delta / done / error)."""
         if _resolve_step(task_id, event_type, event_data):
             return
 
@@ -1366,15 +1338,20 @@ def create_blueprint(config: AssaiConfig | None = None,
         else:
             tracker.push(conv_id, {"event_type": event_type, "data": event_data})
 
-    @bp.route("/stream/push", methods=["POST"])
-    def stream_push():
-        """Poller relays the worker's SSE stream as a single streaming
-        POST with an NDJSON body (one JSON object per line)."""
-        content_type = request.content_type or ""
+    @router.post("/stream/push")
+    async def stream_push(request: Request):
+        """Poller relays the worker's SSE stream as a streaming POST
+        with an NDJSON body (one JSON object per line).
+
+        Uses ``request.stream()`` so chunks are processed incrementally
+        — tokens reach the UI in real-time instead of buffering the
+        entire body first.
+        """
+        content_type = request.headers.get("content-type", "")
 
         if "ndjson" in content_type or "octet-stream" in content_type:
             buf = b""
-            for chunk in request.stream:
+            async for chunk in request.stream():
                 buf += chunk
                 while b"\n" in buf:
                     raw_line, buf = buf.split(b"\n", 1)
@@ -1406,23 +1383,24 @@ def create_blueprint(config: AssaiConfig | None = None,
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-            return jsonify({"ok": True})
+            return {"ok": True}
 
-        # Fallback: single JSON event (backwards compat)
-        data = request.get_json(silent=True) or {}
+        data = await _json_body(request)
         task_id = data.get("task_id", "")
         event_type = data.get("event_type", "")
         event_data = data.get("data", {})
         conv_id = data.get("conversation", "") or tracker.conv_for(task_id)
 
         if not task_id or not event_type:
-            return jsonify({"error": "task_id and event_type required"}), 400
+            return JSONResponse(
+                {"error": "task_id and event_type required"}, status_code=400,
+            )
 
         _handle_stream_event(task_id, conv_id, event_type, event_data)
-        return jsonify({"ok": True})
+        return {"ok": True}
 
-    @bp.route("/stream/<conv_id>", methods=["GET"])
-    def stream_sse(conv_id):
+    @router.get("/stream/{conv_id}")
+    def stream_sse(conv_id: str):
         """SSE endpoint — UI subscribes here to receive live events."""
         q = tracker.subscribe(conv_id)
 
@@ -1454,26 +1432,26 @@ def create_blueprint(config: AssaiConfig | None = None,
             finally:
                 tracker.unsubscribe(conv_id, q)
 
-        return Response(generate(), mimetype="text/event-stream")
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     # ==================================================================
     # Task queue CRUD
     # ==================================================================
 
-    @bp.route("/tasks", methods=["GET"])
-    def list_tasks():
-        status = request.args.get("status")
-        project = request.args.get("project")
-        root_only = request.args.get("root_only", "").lower() in ("1", "true", "yes")
+    @router.get("/tasks")
+    def list_tasks(request: Request):
+        status = request.query_params.get("status")
+        project = request.query_params.get("project")
+        root_only = request.query_params.get("root_only", "").lower() in ("1", "true", "yes")
         tasks = queue.list(status=status, project=project, root_only=root_only)
-        return jsonify([_task_json(t) for t in tasks])
+        return [_task_json(t) for t in tasks]
 
-    @bp.route("/tasks", methods=["POST"])
-    def create_task():
-        data = request.get_json(silent=True) or {}
+    @router.post("/tasks", status_code=201)
+    async def create_task(request: Request):
+        data = await _json_body(request)
         title = data.get("title", "")
         if not title:
-            return jsonify({"error": "title is required"}), 400
+            return JSONResponse({"error": "title is required"}, status_code=400)
 
         parent_id = data.get("parent_task", "")
         root = queue.resolve_root(parent_id) if parent_id else ""
@@ -1493,26 +1471,25 @@ def create_blueprint(config: AssaiConfig | None = None,
             parent_task=parent_id,
             root_task=root,
         )
-        return jsonify(_task_json(task)), 201
+        return _task_json(task)
 
-    @bp.route("/tasks/<task_id>", methods=["GET"])
-    def get_task(task_id):
+    @router.get("/tasks/{task_id}")
+    def get_task(task_id: str):
         task = queue.get(task_id)
         if task is None:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(_task_json(task))
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _task_json(task)
 
-    @bp.route("/tasks/<task_id>/tree", methods=["GET"])
-    def get_task_tree(task_id):
-        """Return the root task and all its descendants."""
+    @router.get("/tasks/{task_id}/tree")
+    def get_task_tree(task_id: str):
         tasks = queue.list_tree(task_id)
         if not tasks:
-            return jsonify({"error": "not found"}), 404
-        return jsonify([_task_json(t) for t in tasks])
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return [_task_json(t) for t in tasks]
 
-    @bp.route("/tasks/<task_id>", methods=["PATCH"])
-    def update_task(task_id):
-        data = request.get_json(silent=True) or {}
+    @router.patch("/tasks/{task_id}")
+    async def update_task(task_id: str, request: Request):
+        data = await _json_body(request)
         allowed = {
             "title", "description", "status", "priority",
             "spec", "spec_path", "assigned_to", "depends_on", "max_retries",
@@ -1520,48 +1497,48 @@ def create_blueprint(config: AssaiConfig | None = None,
         }
         fields = {k: v for k, v in data.items() if k in allowed}
         if not fields:
-            return jsonify({"error": "no updatable fields provided"}), 400
+            return JSONResponse({"error": "no updatable fields provided"}, status_code=400)
 
         queue.update(task_id, **fields)
         task = queue.get(task_id)
         if task is None:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(_task_json(task))
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _task_json(task)
 
     # ==================================================================
     # Specs
     # ==================================================================
 
-    @bp.route("/specs", methods=["GET"])
+    @router.get("/specs")
     def list_specs():
         specs_dir = config.scribe.specs_dir
         if not os.path.isdir(specs_dir):
-            return jsonify([])
+            return []
         names = sorted(
             n for n in os.listdir(specs_dir)
             if os.path.isfile(os.path.join(specs_dir, n))
         )
-        return jsonify(names)
+        return names
 
-    @bp.route("/specs/<name>", methods=["GET"])
-    def get_spec(name):
+    @router.get("/specs/{name}")
+    def get_spec(name: str):
         path = os.path.join(config.scribe.specs_dir, name)
         if not os.path.isfile(path):
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
         with open(path) as f:
-            return jsonify({"name": name, "content": f.read()})
+            return {"name": name, "content": f.read()}
 
     # ==================================================================
     # Git worktrees
     # ==================================================================
 
-    @bp.route("/worktrees", methods=["GET"])
+    @router.get("/worktrees")
     def list_worktrees():
         wts = git.list_worktrees()
-        return jsonify([
+        return [
             {"path": w.path, "branch": w.branch, "head": w.head}
             for w in wts
-        ])
+        ]
 
     # ==================================================================
     # Providers CRUD
@@ -1573,42 +1550,42 @@ def create_blueprint(config: AssaiConfig | None = None,
         d["active"] = (p.name == active_name)
         return d
 
-    @bp.route("/providers", methods=["GET"])
+    @router.get("/providers")
     def list_providers_route():
         active = config.active_provider()
-        return jsonify([_provider_json(p, active.name) for p in config.providers])
+        return [_provider_json(p, active.name) for p in config.providers]
 
-    @bp.route("/providers", methods=["POST"])
-    def create_provider():
-        data = request.get_json(silent=True) or {}
+    @router.post("/providers", status_code=201)
+    async def create_provider(request: Request):
+        data = await _json_body(request)
         name = data.get("name", "").strip()
         if not name:
-            return jsonify({"error": "name is required"}), 400
+            return JSONResponse({"error": "name is required"}, status_code=400)
         if config.get_provider(name) is not None:
-            return jsonify({"error": f"provider '{name}' already exists"}), 409
+            return JSONResponse({"error": f"provider '{name}' already exists"}, status_code=409)
 
         prov = ProviderConfig.from_dict({**data, "name": name})
         config.providers.append(prov)
         save_providers(config.workspace, config.providers)
 
         active = config.active_provider()
-        return jsonify(_provider_json(prov, active.name)), 201
+        return _provider_json(prov, active.name)
 
-    @bp.route("/providers/<name>", methods=["GET"])
-    def get_provider_route(name):
+    @router.get("/providers/{name}")
+    def get_provider_route(name: str):
         prov = config.get_provider(name)
         if prov is None:
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
         active = config.active_provider()
-        return jsonify(_provider_json(prov, active.name))
+        return _provider_json(prov, active.name)
 
-    @bp.route("/providers/<name>", methods=["PUT"])
-    def update_provider(name):
+    @router.put("/providers/{name}")
+    async def update_provider(name: str, request: Request):
         prov = config.get_provider(name)
         if prov is None:
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
 
-        data = request.get_json(silent=True) or {}
+        data = await _json_body(request)
         for key in ("backend", "model", "slug", "endpoint", "api_key",
                      "server_port", "launch_template", "max_tokens",
                      "temperature", "context_window", "priority", "roles"):
@@ -1628,54 +1605,54 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         save_providers(config.workspace, config.providers)
         active = config.active_provider()
-        return jsonify(_provider_json(prov, active.name))
+        return _provider_json(prov, active.name)
 
-    @bp.route("/providers/<name>", methods=["DELETE"])
-    def delete_provider(name):
+    @router.delete("/providers/{name}")
+    def delete_provider(name: str):
         prov = config.get_provider(name)
         if prov is None:
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
         config.providers = [p for p in config.providers if p.name != name]
         save_providers(config.workspace, config.providers)
-        return jsonify({"deleted": True})
+        return {"deleted": True}
 
-    @bp.route("/providers/<name>/activate", methods=["POST"])
-    def activate_provider(name):
+    @router.post("/providers/{name}/activate")
+    def activate_provider(name: str):
         prov = config.get_provider(name)
         if prov is None:
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
         config.set_active(name)
-        return jsonify(_provider_json(prov, name))
+        return _provider_json(prov, name)
 
     # ==================================================================
     # Status
     # ==================================================================
 
-    @bp.route("/status", methods=["GET"])
+    @router.get("/status")
     def agent_status():
         counts = {}
         for s in _STATUS_KINDS:
             counts[s] = len(queue.list(status=s))
 
         active = config.active_provider()
-        return jsonify({
+        return {
             "queue": counts,
             "events": len(events.history),
             "llm_backend": active.backend,
             "llm_endpoint": active.endpoint,
             "active_provider": active.name,
             "providers_count": len(config.providers),
-        })
+        }
 
     # ==================================================================
     # Events log
     # ==================================================================
 
-    @bp.route("/events", methods=["GET"])
-    def list_events():
-        limit = request.args.get("limit", 50, type=int)
+    @router.get("/events")
+    def list_events(request: Request):
+        limit = int(request.query_params.get("limit", "50"))
         recent = events.history[-limit:]
-        return jsonify([
+        return [
             {
                 "kind": e.kind.value,
                 "source": e.source,
@@ -1683,7 +1660,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                 "timestamp": e.timestamp.isoformat(),
             }
             for e in recent
-        ])
+        ]
 
     # ==================================================================
     # Projects
@@ -1693,16 +1670,16 @@ def create_blueprint(config: AssaiConfig | None = None,
         from dataclasses import asdict
         return asdict(p)
 
-    @bp.route("/projects", methods=["GET"])
+    @router.get("/projects")
     def list_projects():
-        return jsonify([_project_json(p) for p in projects.list()])
+        return [_project_json(p) for p in projects.list()]
 
-    @bp.route("/projects", methods=["POST"])
-    def create_project():
-        data = request.get_json(silent=True) or {}
+    @router.post("/projects", status_code=201)
+    async def create_project(request: Request):
+        data = await _json_body(request)
         name = data.get("name", "").strip()
         if not name:
-            return jsonify({"error": "name is required"}), 400
+            return JSONResponse({"error": "name is required"}, status_code=400)
 
         slug = name.replace(" ", "-").lower()
 
@@ -1727,35 +1704,35 @@ def create_blueprint(config: AssaiConfig | None = None,
                 scaffold(proj)
             projects.save(proj)
         except Exception as exc:
-            return jsonify({"error": str(exc)}), 500
+            return JSONResponse({"error": str(exc)}, status_code=500)
 
-        return jsonify(_project_json(proj)), 201
+        return _project_json(proj)
 
-    @bp.route("/projects/<name>", methods=["GET"])
-    def get_project(name):
+    @router.get("/projects/{name}")
+    def get_project(name: str):
         proj = projects.get(name)
         if proj is None:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(_project_json(proj))
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _project_json(proj)
 
-    @bp.route("/projects/<name>", methods=["PATCH"])
-    def update_project(name):
+    @router.patch("/projects/{name}")
+    async def update_project(name: str, request: Request):
         proj = projects.get(name)
         if proj is None:
-            return jsonify({"error": "not found"}), 404
-        data = request.get_json(silent=True) or {}
+            return JSONResponse({"error": "not found"}, status_code=404)
+        data = await _json_body(request)
         _STR_FIELDS = ("language", "template", "repo_url", "provider",
                         "python_version", "venv_path", "refiner", "path")
         for key in _STR_FIELDS:
             if key in data:
                 setattr(proj, key, str(data[key] or "").strip())
         projects.save(proj)
-        return jsonify(_project_json(proj))
+        return _project_json(proj)
 
-    @bp.route("/projects/<name>", methods=["DELETE"])
-    def delete_project(name):
+    @router.delete("/projects/{name}")
+    def delete_project(name: str):
         projects.delete(name)
-        return jsonify({"deleted": True})
+        return {"deleted": True}
 
     # ==================================================================
     # Agents CRUD
@@ -1764,38 +1741,38 @@ def create_blueprint(config: AssaiConfig | None = None,
     def _agent_json(a: AgentDef) -> dict:
         return a.to_dict()
 
-    @bp.route("/agents", methods=["GET"])
+    @router.get("/agents")
     def list_agents():
-        return jsonify([_agent_json(a) for a in agent_store.list()])
+        return [_agent_json(a) for a in agent_store.list()]
 
-    @bp.route("/agents", methods=["POST"])
-    def create_agent():
-        data = request.get_json(silent=True) or {}
+    @router.post("/agents", status_code=201)
+    async def create_agent(request: Request):
+        data = await _json_body(request)
         name = data.get("name", "").strip()
         if not name:
-            return jsonify({"error": "name is required"}), 400
+            return JSONResponse({"error": "name is required"}, status_code=400)
         slug = name.replace(" ", "-").lower()
         if agent_store.get(slug) is not None:
-            return jsonify({"error": f"agent '{slug}' already exists"}), 409
+            return JSONResponse({"error": f"agent '{slug}' already exists"}, status_code=409)
 
         agent = AgentDef.from_dict({**data, "name": slug})
         agent_store.scaffold(agent)
-        return jsonify(_agent_json(agent)), 201
+        return _agent_json(agent)
 
-    @bp.route("/agents/<name>", methods=["GET"])
-    def get_agent(name):
+    @router.get("/agents/{name}")
+    def get_agent(name: str):
         agent = agent_store.get(name)
         if agent is None:
-            return jsonify({"error": "not found"}), 404
-        return jsonify(_agent_json(agent))
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _agent_json(agent)
 
-    @bp.route("/agents/<name>", methods=["PUT"])
-    def update_agent(name):
+    @router.put("/agents/{name}")
+    async def update_agent(name: str, request: Request):
         agent = agent_store.get(name)
         if agent is None:
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
 
-        data = request.get_json(silent=True) or {}
+        data = await _json_body(request)
         updatable = (
             "description", "role", "avatar", "provider", "output_format",
             "model_overrides", "system_template", "context_sources",
@@ -1815,53 +1792,52 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         agent_store.save(agent)
         agent.builtin = False
-        return jsonify(_agent_json(agent))
+        return _agent_json(agent)
 
-    @bp.route("/agents/<name>", methods=["DELETE"])
-    def delete_agent(name):
+    @router.delete("/agents/{name}")
+    def delete_agent(name: str):
         agent = agent_store.get(name)
         if agent is None:
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
         if agent.builtin:
-            return jsonify({"error": "cannot delete a built-in agent"}), 403
+            return JSONResponse({"error": "cannot delete a built-in agent"}, status_code=403)
         agent_store.delete(name)
         remaining = agent_store.get(name)
-        return jsonify({"deleted": True, "builtin_revealed": remaining is not None})
+        return {"deleted": True, "builtin_revealed": remaining is not None}
 
-    @bp.route("/agents/<name>/template", methods=["GET"])
-    def get_agent_template(name):
+    @router.get("/agents/{name}/template")
+    def get_agent_template(name: str):
         agent = agent_store.get(name)
         if agent is None:
-            return jsonify({"error": "not found"}), 404
+            return JSONResponse({"error": "not found"}, status_code=404)
         content = agent_store.read_template(name)
-        return jsonify({"name": name, "content": content})
+        return {"name": name, "content": content}
 
-    @bp.route("/agents/<name>/template", methods=["PUT"])
-    def update_agent_template(name):
+    @router.put("/agents/{name}/template")
+    async def update_agent_template(name: str, request: Request):
         agent = agent_store.get(name)
         if agent is None:
-            return jsonify({"error": "not found"}), 404
-        data = request.get_json(silent=True) or {}
+            return JSONResponse({"error": "not found"}, status_code=404)
+        data = await _json_body(request)
         content = data.get("content", "")
         agent_store.save_template(name, content)
-        return jsonify({"name": name, "content": content})
+        return {"name": name, "content": content}
 
-    @bp.route("/agents/<name>/reset", methods=["POST"])
-    def reset_agent(name):
-        """Delete workspace override, restoring the built-in version."""
+    @router.post("/agents/{name}/reset")
+    def reset_agent(name: str):
         if not agent_store._is_builtin(name):
-            return jsonify({"error": "not a built-in agent"}), 400
+            return JSONResponse({"error": "not a built-in agent"}, status_code=400)
         agent_store.delete(name)
         agent = agent_store.get(name)
         if agent is None:
-            return jsonify({"error": "built-in not found after reset"}), 500
-        return jsonify(_agent_json(agent))
+            return JSONResponse({"error": "built-in not found after reset"}, status_code=500)
+        return _agent_json(agent)
 
     # ==================================================================
     # Tool namespaces (from the builtin registry)
     # ==================================================================
 
-    @bp.route("/tools/namespaces", methods=["GET"])
+    @router.get("/tools/namespaces")
     def list_tool_namespaces():
         result = []
         for ns in tool_registry.namespaces():
@@ -1870,19 +1846,19 @@ def create_blueprint(config: AssaiConfig | None = None,
                 "namespace": ns,
                 "tools": [t.qualified_name for t in tools],
             })
-        return jsonify(result)
+        return result
 
     # ==================================================================
     # Toast (worker → orchestrator → frontend via WebSocket)
     # ==================================================================
 
-    @bp.route("/toast", methods=["POST"])
-    def receive_toast():
-        data = request.get_json(silent=True) or {}
+    @router.post("/toast")
+    async def receive_toast(request: Request):
+        data = await _json_body(request)
         sio = _socketio_ref[0]
         if sio is None:
             log.warning("toast received but SocketIO not initialised")
-            return jsonify({"error": "socketio not ready"}), 503
+            return JSONResponse({"error": "socketio not ready"}, status_code=503)
 
         sio.emit("toast", {
             "message": data.get("message", ""),
@@ -1890,9 +1866,9 @@ def create_blueprint(config: AssaiConfig | None = None,
             "status": data.get("status", "info"),
             "duration": data.get("duration", 5000),
         })
-        return jsonify({"ok": True})
+        return {"ok": True}
 
-    return bp, queue, events, chat, config, tracker, _socketio_ref, _do_pop
+    return router, queue, events, chat, config, tracker, _socketio_ref, _do_pop
 
 
 # ------------------------------------------------------------------
@@ -1908,8 +1884,13 @@ _STATUS_KINDS = (
 
 def setup_socketio(socketio: SocketIO, config: AssaiConfig,
                    queue: WorkQueue, events: EventBus,
-                   pop_fn=None):
-    """Wire SocketIO event handlers and start the background emitter."""
+                   pop_fn=None, app=None):
+    """Wire SocketIO event handlers.
+
+    If *app* is given the broadcast emitter is started as a native
+    ``asyncio.Task`` on the FastAPI event loop (via a startup handler)
+    instead of a daemon thread.
+    """
 
     @socketio.on("connect")
     def handle_connect():
@@ -1937,20 +1918,20 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
     if pop_fn is not None:
         @socketio.on("work_pop")
         def handle_work_pop():
-            """Worker requests work via WebSocket instead of HTTP."""
             result = pop_fn()
             return result or {}
 
-    def _emit_loop():
+    async def _async_emit_loop():
+        sio = socketio.server
         while True:
-            socketio.sleep(2)
+            await asyncio.sleep(2)
             try:
                 tasks = queue.list()
-                socketio.emit("tasks", [_task_json(t) for t in tasks])
+                await sio.emit("tasks", [_task_json(t) for t in tasks])
 
                 counts = {s: len(queue.list(status=s)) for s in _STATUS_KINDS}
                 active = config.active_provider()
-                socketio.emit("status", {
+                await sio.emit("status", {
                     "queue": counts,
                     "events": len(events.history),
                     "llm_backend": active.backend,
@@ -1960,7 +1941,7 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
                 })
 
                 recent = events.history[-100:]
-                socketio.emit("events", [
+                await sio.emit("events", [
                     {
                         "kind": e.kind.value,
                         "source": e.source,
@@ -1972,7 +1953,40 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
             except Exception:
                 log.exception("emitter error")
 
-    socketio.start_background_task(_emit_loop)
+    if app is not None:
+        @app.on_event("startup")
+        async def _start_emitter():
+            asyncio.create_task(_async_emit_loop())
+    else:
+        def _sync_emit_loop():
+            while True:
+                socketio.sleep(2)
+                try:
+                    tasks = queue.list()
+                    socketio.emit("tasks", [_task_json(t) for t in tasks])
+                    counts = {s: len(queue.list(status=s)) for s in _STATUS_KINDS}
+                    active = config.active_provider()
+                    socketio.emit("status", {
+                        "queue": counts,
+                        "events": len(events.history),
+                        "llm_backend": active.backend,
+                        "llm_endpoint": active.endpoint,
+                        "active_provider": active.name,
+                        "providers_count": len(config.providers),
+                    })
+                    recent = events.history[-100:]
+                    socketio.emit("events", [
+                        {
+                            "kind": e.kind.value,
+                            "source": e.source,
+                            "data": e.data,
+                            "timestamp": e.timestamp.isoformat(),
+                        }
+                        for e in recent
+                    ])
+                except Exception:
+                    log.exception("emitter error")
+        socketio.start_background_task(_sync_emit_loop)
 
 
 # ------------------------------------------------------------------
@@ -1980,20 +1994,25 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
 # ------------------------------------------------------------------
 
 def routes(app, config: AssaiConfig | None = None, prefix: str = "/agent"):
-    """Register orchestrator routes and SocketIO on an existing Flask app.
+    """Register orchestrator routes and SocketIO on an existing app.
 
     Returns ``(app, socketio, queue, events, chat, config, stream_tracker)``
-    so callers can compose with worker blueprints (uber mode).
+    so callers can compose with worker routers (uber mode).
     """
     tracker = StreamTracker()
 
-    bp, queue, events, chat, resolved_config, tracker, sio_ref, pop_fn = create_blueprint(
+    router, queue, events, chat, resolved_config, tracker, sio_ref, pop_fn = create_router(
         config, prefix, stream_tracker=tracker,
     )
-    app.register_blueprint(bp)
+    app.include_router(router)
 
-    socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+    socketio = SocketIO(app, cors_allowed_origins="*")
     sio_ref[0] = socketio
-    setup_socketio(socketio, resolved_config, queue, events, pop_fn=pop_fn)
+    setup_socketio(socketio, resolved_config, queue, events, pop_fn=pop_fn, app=app)
+
+    @app.on_event("startup")
+    async def _capture_loop():
+        from assai.core.compat import _main_loop_ref
+        _main_loop_ref[0] = asyncio.get_running_loop()
 
     return app, socketio, queue, events, chat, resolved_config, tracker

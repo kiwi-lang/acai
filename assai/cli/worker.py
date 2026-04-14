@@ -1,4 +1,4 @@
-"""Run the worker Flask server (LLM + tools, polls orchestrator)."""
+"""Run the worker server (LLM + tools, polls orchestrator)."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ class WorkerArguments(CommonArguments):
 
 
 class Worker(Command):
-    """Run the worker Flask server (LLM + tools, polls orchestrator)."""
+    """Run the worker server (LLM + tools, polls orchestrator)."""
 
     name = "worker"
 

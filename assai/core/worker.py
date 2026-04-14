@@ -1,4 +1,4 @@
-"""Worker Flask app — executes LLM completions and tool calls.
+"""Worker app — executes LLM completions and tool calls.
 
 The worker exposes:
 
@@ -22,8 +22,11 @@ import time
 from typing import TYPE_CHECKING
 
 import requests as http
-from flask import Blueprint, Flask, Response, jsonify, request as flask_request
-from flask_socketio import SocketIO, emit
+from fastapi import APIRouter, FastAPI, Request
+from fastapi.responses import JSONResponse
+from starlette.responses import Response, StreamingResponse
+
+from assai.core.compat import SocketIO, emit
 
 from assai.core.agent_store import compress_messages
 from assai.core.llm import (
@@ -39,15 +42,26 @@ log = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
-# Worker blueprint
+# Helper: read JSON body
 # ------------------------------------------------------------------
 
-def create_worker_blueprint(
+async def _json_body(request: Request) -> dict:
+    try:
+        return await request.json()
+    except Exception:
+        return {}
+
+
+# ------------------------------------------------------------------
+# Worker router
+# ------------------------------------------------------------------
+
+def create_worker_router(
     config: AssaiConfig,
     prefix: str = "/worker",
     extern_llm: bool = False,
-) -> tuple[Blueprint, LLMServer, ToolRegistry]:
-    """Build the worker Flask blueprint.
+) -> tuple[APIRouter, LLMServer, ToolRegistry]:
+    """Build the worker APIRouter.
 
     The ``/llm/complete`` endpoint streams results as SSE.
 
@@ -55,9 +69,9 @@ def create_worker_blueprint(
     LLM server — it assumes an externally managed instance is running
     at the configured endpoint.
 
-    Returns ``(bp, llm_server, registry)``.
+    Returns ``(router, llm_server, registry)``.
     """
-    bp = Blueprint("worker", __name__, url_prefix=prefix)
+    router = APIRouter(prefix=prefix, tags=["worker"])
 
     provider = config.local_provider() or config.active_provider()
     llm_server = LLMServer(provider, workspace=config.workspace)
@@ -67,7 +81,7 @@ def create_worker_blueprint(
     configure_meta_tools(registry)
 
     log.info(
-        "worker blueprint created  model=%s  backend=%s  tools=%d  extern_llm=%s",
+        "worker router created  model=%s  backend=%s  tools=%d  extern_llm=%s",
         provider.model, provider.backend, len(registry.all_tools()), extern_llm,
     )
 
@@ -78,9 +92,9 @@ def create_worker_blueprint(
     def _sse_event(event: str, data: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-    @bp.route("/llm/complete", methods=["POST"])
-    def llm_complete():
-        body = flask_request.get_json(silent=True) or {}
+    @router.post("/llm/complete")
+    async def llm_complete(request: Request):
+        body = await _json_body(request)
         messages = body.get("messages", [])
         tools = body.get("tools")
         task_id = body.get("task_id", "")
@@ -109,9 +123,9 @@ def create_worker_blueprint(
             except LLMServerError as exc:
                 log.error("[%s] LLM server failed to start: %s", task_id, exc)
                 return Response(
-                    _sse_event("error", {"task_id": task_id, "error": str(exc)}),
-                    status=503,
-                    mimetype="text/event-stream",
+                    content=_sse_event("error", {"task_id": task_id, "error": str(exc)}),
+                    status_code=503,
+                    media_type="text/event-stream",
                 )
 
         llm = create_llm(llm_cfg)
@@ -129,11 +143,11 @@ def create_worker_blueprint(
                 if enable_thinking:
                     prefix = "<think>\n"
                     suffix = "\nI have to give the solution based on the reasoning directly now."
-    
+
                 else:
                     prefix = "</think>\n"
                     suffix = ""
-                
+
                 for msg in reversed(messages):
                     if msg.get("role") == "user":
                         content = msg.get("content") or ""
@@ -177,23 +191,17 @@ def create_worker_blueprint(
                     err_msg = f"LLM server crashed during inference. {llm_server.read_log(tail=30)}"
                 yield _sse_event("error", {"task_id": task_id, "error": err_msg})
 
-        return Response(generate(), mimetype="text/event-stream")
+        return StreamingResponse(generate(), media_type="text/event-stream")
 
     # ------------------------------------------------------------------
     # POST /worker/switch-model
     # ------------------------------------------------------------------
 
-    @bp.route("/switch-model", methods=["POST"])
-    def switch_model():
-        """Switch the LLM server to a different provider config.
-
-        Accepts a JSON body with provider fields (backend, model, slug,
-        endpoint, api_key, server_port, etc.).  For local backends the
-        current server is stopped and restarted with the new config.
-        """
+    @router.post("/switch-model")
+    async def switch_model(request: Request):
         from assai.core.config import ProviderConfig
 
-        data = flask_request.get_json(silent=True) or {}
+        data = await _json_body(request)
         new_prov = ProviderConfig.from_dict(data)
 
         if not extern_llm and llm_server.is_running():
@@ -208,33 +216,30 @@ def create_worker_blueprint(
             try:
                 llm_server.start()
             except LLMServerError as exc:
-                return jsonify({"error": str(exc)}), 503
+                return JSONResponse({"error": str(exc)}, status_code=503)
 
         log.info("switch-model: now using %s (%s)", new_prov.slug, new_prov.backend)
-        return jsonify({"ok": True, "model": new_prov.model, "slug": new_prov.slug})
+        return {"ok": True, "model": new_prov.model, "slug": new_prov.slug}
 
     # ------------------------------------------------------------------
     # GET /worker/logs
     # ------------------------------------------------------------------
 
-    @bp.route("/logs", methods=["GET"])
-    def worker_logs():
-        tail = flask_request.args.get("tail", 200, type=int)
+    @router.get("/logs")
+    def worker_logs(request: Request):
+        tail = int(request.query_params.get("tail", "200"))
         content = llm_server.read_log(tail=tail)
         log_path = llm_server.latest_log_path() or "(none)"
-        return Response(
-            json.dumps({"path": log_path, "content": content}, ensure_ascii=False),
-            mimetype="application/json",
-        )
+        return {"path": log_path, "content": content}
 
     # ------------------------------------------------------------------
     # GET /worker/status
     # ------------------------------------------------------------------
 
-    @bp.route("/status", methods=["GET"])
+    @router.get("/status")
     def worker_status():
         active = config.active_provider()
-        return jsonify({
+        return {
             "telemetry": True,
             "tools": [td.qualified_name for td in registry.all_tools()],
             "namespaces": registry.namespaces(),
@@ -244,9 +249,13 @@ def create_worker_blueprint(
             "llm_backend": active.backend,
             "extern_llm": extern_llm,
             "log_path": llm_server.latest_log_path(),
-        })
+        }
 
-    return bp, llm_server, registry
+    return router, llm_server, registry
+
+
+# Keep the old name as an alias for backward compat with CLI imports
+create_worker_blueprint = create_worker_router
 
 
 # ------------------------------------------------------------------
@@ -295,7 +304,6 @@ class WorkerPoller:
         )
 
     def _connect_ws(self):
-        """Establish a SocketIO client connection to the orchestrator."""
         if self._sio is not None and self._sio.connected:
             return True
         try:
@@ -377,10 +385,6 @@ class WorkerPoller:
         self._push_result(task_id, kind, result, work, error=error)
 
     def _prepare_llm_work(self, work: dict) -> None:
-        """Set up worktree and compress context before LLM dispatch.
-
-        Mutates *work* in place.
-        """
         task_id = work.get("task_id", "")
         agent = work.get("agent", "")
 
@@ -424,14 +428,7 @@ class WorkerPoller:
                 log.exception("[%s] context compression failed, using full context", task_id)
 
     def _setup_worktree(self, work: dict) -> str | None:
-        """Create or reuse a git worktree for a work task.
-
-        Returns the worktree path, or ``None`` if unavailable.
-        """
-
         # FIXME: Maybe this need to be somewhere else
-        # the worker should be the one to do it but I think this might be deserving of its own
-        #
         project_path = work.get("project_path", "")
         project_name = work.get("project_name", "")
         task_id = work.get("task_id", "")
@@ -462,8 +459,6 @@ class WorkerPoller:
             return project_path
 
     def _dispatch_llm(self, work: dict) -> tuple[str | dict, str | None]:
-        """Consume the worker's SSE stream and relay to the orchestrator
-        via a single streaming POST (NDJSON body, chunked transfer)."""
         task_id = work.get("task_id", "")
         conversation = work.get("conversation", "")
         n_msgs = len(work.get("messages", []))
@@ -496,7 +491,6 @@ class WorkerPoller:
             error_msg = None
 
             def _event_generator():
-                """Yield NDJSON lines from the worker's SSE stream."""
                 nonlocal accumulated_text, accumulated_reasoning, error_msg
                 event_type = ""
 
@@ -673,23 +667,23 @@ class WorkerPoller:
 
 def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None,
                       extern_llm: bool = False):
-    """Create a standalone worker Flask app.
+    """Create a standalone worker app.
 
     Returns ``(app, socketio, poller, llm_server)``.
     """
-    app = Flask(__name__)
+    app = FastAPI()
 
     if socketio is None:
-        socketio = SocketIO(app, cors_allowed_origins="*", async_mode="threading")
+        socketio = SocketIO(app, cors_allowed_origins="*")
     else:
         socketio.init_app(app)
 
-    bp, llm_server, registry = create_worker_blueprint(
+    router, llm_server, registry = create_worker_router(
         config, extern_llm=extern_llm,
     )
-    tool_bp = registry.blueprint(url_prefix="/tools")
-    app.register_blueprint(bp)
-    app.register_blueprint(tool_bp)
+    tool_router = registry.router(url_prefix="/tools")
+    app.include_router(router)
+    app.include_router(tool_router)
 
     _setup_telemetry(socketio)
 
@@ -711,12 +705,6 @@ def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None,
 # ------------------------------------------------------------------
 
 def _setup_telemetry(socketio: SocketIO):
-    """Register telemetry SocketIO handlers.
-
-    Initializes the system monitor eagerly in a background thread so
-    the first ``request_telemetry`` from the frontend gets an instant
-    response instead of blocking on hardware probing.
-    """
     _observer = None
 
     def _init_observer():

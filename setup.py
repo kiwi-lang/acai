@@ -33,6 +33,9 @@ if __name__ == "__main__":
         },
         install_requires=[
             "argklass",
+            "fastapi",
+            "uvicorn[standard]",
+            "python-socketio",
             "flask",
             "flask-socketio",
             "requests",

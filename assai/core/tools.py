@@ -39,7 +39,8 @@ from typing import (
     get_type_hints,
 )
 
-from flask import Blueprint, jsonify, request as flask_request
+from fastapi import APIRouter, Request
+from fastapi.responses import JSONResponse
 
 log = logging.getLogger(__name__)
 
@@ -286,15 +287,15 @@ class ToolRegistry:
         return defs
 
     # ------------------------------------------------------------------
-    # Flask blueprint
+    # FastAPI router
     # ------------------------------------------------------------------
 
-    def blueprint(
+    def router(
         self,
         namespaces: list[str] | None = None,
         url_prefix: str = "/tools",
-    ) -> Blueprint:
-        """Create a Flask blueprint that exposes each tool as a POST endpoint.
+    ) -> APIRouter:
+        """Create a router that exposes each tool as a POST endpoint.
 
         ``POST <url_prefix>/call`` with JSON body::
 
@@ -302,29 +303,34 @@ class ToolRegistry:
 
         ``GET <url_prefix>/list`` returns the MCP definitions.
         """
-        bp = Blueprint("tools", __name__, url_prefix=url_prefix)
+        rt = APIRouter(prefix=url_prefix, tags=["tools"])
         registry = self
 
-        @bp.route("/list", methods=["GET"])
-        def list_tools():
-            ns_filter = flask_request.args.getlist("namespace") or None
+        @rt.get("/list")
+        def list_tools(request: Request):
+            ns_filter = request.query_params.getlist("namespace") if hasattr(request.query_params, "getlist") else None
+            if not ns_filter:
+                ns_filter = None
             effective = namespaces if ns_filter is None else ns_filter
-            return jsonify(registry.mcp_definitions(effective))
+            return registry.mcp_definitions(effective)
 
-        @bp.route("/call", methods=["POST"])
-        def call_tool():
+        @rt.post("/call")
+        async def call_tool(request: Request):
             from assai.core.context import WorkerContext, OrchestratorClient, set_context, reset_context
 
-            body = flask_request.get_json(silent=True) or {}
+            try:
+                body = await request.json()
+            except Exception:
+                body = {}
             tool_name = body.get("tool", "")
             args = body.get("args", {})
             ctx_data = body.get("context")
 
             td = registry.get(tool_name)
             if td is None:
-                return jsonify({"error": f"unknown tool: {tool_name}"}), 404
+                return JSONResponse({"error": f"unknown tool: {tool_name}"}, status_code=404)
             if namespaces is not None and td.namespace not in namespaces:
-                return jsonify({"error": f"tool not exposed: {tool_name}"}), 403
+                return JSONResponse({"error": f"tool not exposed: {tool_name}"}, status_code=403)
 
             token = None
             if ctx_data and isinstance(ctx_data, dict):
@@ -335,14 +341,18 @@ class ToolRegistry:
 
             try:
                 result = td.fn(**args)
-                return jsonify({"result": result})
+                return {"result": result}
             except Exception as exc:
-                return jsonify({"error": str(exc)}), 500
+                return JSONResponse({"error": str(exc)}, status_code=500)
             finally:
                 if token is not None:
                     reset_context(token)
 
-        return bp
+        return rt
+
+    def blueprint(self, *args, **kwargs):
+        """Alias for backward compat — returns an APIRouter."""
+        return self.router(*args, **kwargs)
 
     # ------------------------------------------------------------------
     # Merge
