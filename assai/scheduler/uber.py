@@ -6,8 +6,9 @@ to the most relevant conversation.  The scheduler:
 1. Collects metadata (id, title, description, tags) for every conversation.
 2. Queues a fast **routing** task that asks the LLM to pick the best
    conversation (or create a new one).
-3. Appends the user message to the chosen conversation and queues the
-   main **LLM response** task through the normal pipeline.
+3. Returns the target conversation to the caller, which then delegates
+   the actual response to a :class:`ConversationScheduler` via the
+   scheduler driver.
 
 The scheduler never creates an LLM client — all inference goes through
 the shared work queue.
@@ -19,7 +20,6 @@ import json
 import logging
 import re
 
-from assai.queue.work import TaskStatus
 from assai.scheduler.base import BaseScheduler
 
 from typing import TYPE_CHECKING
@@ -185,32 +185,26 @@ class UberScheduler(BaseScheduler):
         return {"id": "new", "title": message.strip().split("\n")[0][:60], "tags": []}
 
     # ------------------------------------------------------------------
-    # Schedule — main entry point
+    # Route — main entry point
     # ------------------------------------------------------------------
 
-    async def schedule(
+    async def route(
         self,
         message: str,
         current_conv_id: str = "",
-        provider: str = "auto",
         agent: str = "default",
-        route_only: bool = False,
     ) -> dict:
-        """Route a user message to the best conversation and optionally queue the response.
+        """Route a user message to the best conversation (or create one).
 
-        When *route_only* is ``True`` the scheduler only picks (or creates)
-        the target conversation — it does **not** append the user message or
-        queue an LLM task.  The caller is expected to send the message
-        through the normal ``converse`` flow afterwards.
-
-        Returns ``conversation``, ``is_new``, and (unless *route_only*)
-        ``task_id``.
+        Returns ``{"conversation": "<id>", "is_new": bool}``.
+        The caller is responsible for appending the user message and
+        launching the scheduler driver for the actual LLM response.
         """
         self._active_conversation = current_conv_id
 
         log.info(
-            "schedule() called  message=%r  current_conv=%s  agent=%s  route_only=%s",
-            message[:80], current_conv_id or "(none)", agent, route_only,
+            "route() called  message=%r  current_conv=%s  agent=%s",
+            message[:80], current_conv_id or "(none)", agent,
         )
 
         decision = await self._route_message(message, current_conv_id)
@@ -230,32 +224,7 @@ class UberScheduler(BaseScheduler):
         else:
             conv_id = decision["id"]
             is_new = False
-            self.notify(f"Routed to existing conversation")
+            self.notify("Routed to existing conversation")
             log.info("routing to existing conversation %s", conv_id)
 
-        if route_only:
-            log.info("route_only — skipping message append and LLM task")
-            return {"conversation": conv_id, "is_new": is_new}
-
-        self.chat.append(conv_id, {"role": "user", "content": message})
-
-        conv_path = self.chat._msg_path(conv_id)
-        task = self.queue.push(
-            title=f"converse: {message[:60]}",
-            kind="llm_complete",
-            spec_path=conv_path,
-            agent=agent,
-        )
-        self.queue.update(task.id, status=TaskStatus.READY)
-        self.tracker.register(task.id, conv_id)
-
-        log.info(
-            "main task queued  task_id=%s  conversation=%s  is_new=%s",
-            task.id, conv_id, is_new,
-        )
-
-        return {
-            "task_id": task.id,
-            "conversation": conv_id,
-            "is_new": is_new,
-        }
+        return {"conversation": conv_id, "is_new": is_new}

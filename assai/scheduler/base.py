@@ -2,6 +2,11 @@
 
 Provides reusable primitives that any scheduler can compose:
 
+* :class:`Scheduler` — ABC for the generator-based scheduler protocol.
+  Subclasses implement ``run()`` as an async generator that yields
+  :class:`~assai.scheduler.types.WorkStep` objects and receives
+  :class:`~assai.scheduler.types.StepResult` via ``asend()``.
+
 * :class:`AsyncTask` — a handle to a queued work item with an awaitable result.
 * :class:`AgentContext` — accumulates messages for an LLM call, then submits.
 * :class:`BaseScheduler` — owns the queue/chat/tracker wiring and exposes
@@ -18,17 +23,130 @@ import asyncio
 import json
 import logging
 import os
+from abc import ABC, abstractmethod
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
 from assai.core.stream import StreamTracker
 from assai.queue.work import TaskStatus, WorkQueue
 
 if TYPE_CHECKING:
+    from assai.core.agent_store import AgentStore
     from assai.core.chat import ChatStore
     from assai.core.config import AssaiConfig
-    from assai.core.projects import Project
+    from assai.core.projects import Project, ProjectStore
+    from assai.queue.work import Task as QueueTask
+
+    from .types import StepResult, WorkStep
 
 log = logging.getLogger(__name__)
+
+
+# ------------------------------------------------------------------
+# Scheduler ABC — generator-based protocol for the driver loop
+# ------------------------------------------------------------------
+
+
+class Scheduler(ABC):
+    """Abstract base for generator-based schedulers.
+
+    Subclasses implement :meth:`run` as an async generator that
+    **yields** :class:`WorkStep` objects (hydrated payloads for the
+    worker) and **receives** :class:`StepResult` objects via
+    ``asend()``.  The orchestrator *driver loop* pushes each yielded
+    step to the work queue, collects stream events from the worker, and
+    feeds the accumulated result back to the generator.
+
+    Parameters
+    ----------
+    config : AssaiConfig
+    chat : ChatStore
+    queue : WorkQueue
+    tracker : StreamTracker
+    agent_store : AgentStore
+    projects : ProjectStore | None
+    """
+
+    def __init__(
+        self,
+        config: AssaiConfig,
+        chat: ChatStore,
+        queue: WorkQueue,
+        tracker: StreamTracker,
+        agent_store: AgentStore,
+        projects: ProjectStore | None = None,
+    ):
+        self.config = config
+        self.chat = chat
+        self.queue = queue
+        self.tracker = tracker
+        self.agent_store = agent_store
+        self.projects = projects
+        self.tasks_dir = config.worker.tasks_dir
+
+    # ------------------------------------------------------------------
+    # Tool resolution helpers
+    # ------------------------------------------------------------------
+
+    def resolve_tools(
+        self,
+        agent_def,
+        tool_registry=None,
+    ) -> tuple[list[dict] | None, str]:
+        """Resolve MCP tool definitions and build a text description.
+
+        Returns ``(tool_defs, tools_description)`` where *tool_defs* is
+        the list of function-call schemas (or ``None``) and
+        *tools_description* is a human-readable markdown summary for
+        injection into the system prompt.
+
+        Parameters
+        ----------
+        agent_def : AgentDef
+            The agent whose ``tools`` namespaces to resolve.
+        tool_registry : optional
+            Registry to look up MCP tool definitions.  Falls back to
+            ``self.tool_registry`` if available on the subclass.
+        """
+        registry = tool_registry or getattr(self, "tool_registry", None)
+        if not agent_def.tools or registry is None:
+            return None, ""
+
+        tool_defs = registry.mcp_definitions(namespaces=agent_def.tools)
+        if not tool_defs:
+            return None, ""
+
+        lines: list[str] = []
+        for td in tool_defs:
+            fn = td.get("function", {})
+            params = fn.get("parameters", {}).get("properties", {})
+            param_strs = [
+                f"  - {k}: {v.get('description', v.get('type', ''))}"
+                for k, v in params.items()
+            ]
+            lines.append(f"- **{fn.get('name', '')}**: {fn.get('description', '')}")
+            lines.extend(param_strs)
+
+        return tool_defs, "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Abstract interface
+    # ------------------------------------------------------------------
+
+    @abstractmethod
+    async def run(
+        self,
+        task: QueueTask,
+        conversation: str,
+    ) -> AsyncGenerator[WorkStep, StepResult]:
+        """Yield work steps, receive results.
+
+        The generator owns the task graph for this execution.  Each
+        ``yield`` hands a :class:`WorkStep` to the driver; the driver
+        pushes it to the queue, waits for the worker to finish, and
+        ``asend()``s the :class:`StepResult` back.
+        """
+        yield  # type: ignore[misc]  # pragma: no cover
 
 
 class AsyncTask:

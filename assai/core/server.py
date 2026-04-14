@@ -11,6 +11,7 @@ The orchestrator is a Flask + SocketIO app that:
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -28,8 +29,9 @@ from assai.core.config import (
 )
 from assai.core.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
-from assai.scheduler.thinking import ThinkingScheduler
 from assai.scheduler.uber import UberScheduler
+from assai.scheduler.types import StepResult, WorkStep
+from assai.scheduler.registry import get_scheduler as _get_scheduler
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
@@ -215,7 +217,11 @@ class Orchestrator:
         now = datetime.now(timezone.utc)
         in_progress = self.queue.list(status=TaskStatus.IN_PROGRESS)
 
+        _DRIVER_KINDS = {"converse", "think"}
+
         for task in in_progress:
+            if task.kind in _DRIVER_KINDS:
+                continue
             if task.started_at is None:
                 continue
             started = task.started_at
@@ -353,7 +359,6 @@ def create_blueprint(config: AssaiConfig | None = None,
     scheduler = ProviderScheduler(config.providers)
 
     uber_scheduler = UberScheduler(config, chat, queue, tracker)
-    thinking_scheduler = ThinkingScheduler(chat, queue, tracker)
 
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
@@ -367,6 +372,222 @@ def create_blueprint(config: AssaiConfig | None = None,
     # Start orchestrator chaining loop in background
     orc = Orchestrator(config, queue, socketio_ref=_socketio_ref, chat=chat)
     threading.Thread(target=orc.run, daemon=True, name="orchestrator").start()
+
+    # ==================================================================
+    # Scheduler driver — bridges async generators with the work queue
+    # ==================================================================
+
+    # Persistent event loop for scheduler drivers.  Flask's WSGI async
+    # support tears down the per-request loop when the view returns,
+    # which would kill any background coroutine.  This dedicated loop
+    # runs in a daemon thread and stays alive for the process lifetime.
+    _driver_loop = asyncio.new_event_loop()
+    threading.Thread(
+        target=_driver_loop.run_forever, daemon=True, name="scheduler-driver",
+    ).start()
+
+    _pending_steps: dict[str, dict] = {}
+    _pending_steps_lock = threading.Lock()
+
+    def _resolve_step(task_id: str, event_type: str, event_data: dict) -> bool:
+        """Feed a stream event into the pending step for *task_id*.
+
+        Returns ``True`` if the event was consumed by a scheduler-driven
+        step (caller should skip legacy handling), ``False`` otherwise.
+        """
+        with _pending_steps_lock:
+            entry = _pending_steps.get(task_id)
+            if entry is None:
+                return False
+
+        step: WorkStep = entry["step"]
+
+        if event_type == "token":
+            token = event_data.get("token", "")
+            entry["text"] += token
+
+            if step.stream_mode == "token":
+                tracker.push(entry["conv_id"], {"event_type": "token", "data": event_data})
+            elif step.stream_mode == "reasoning":
+                tracker.push(entry["conv_id"], {"event_type": "reasoning", "data": event_data})
+
+        elif event_type == "reasoning":
+            entry["reasoning"] += event_data.get("token", "")
+            if step.stream_mode != "silent":
+                tracker.push(entry["conv_id"], {"event_type": "reasoning", "data": event_data})
+
+        elif event_type == "tool_call_delta":
+            idx = event_data.get("index", 0)
+            tc_id = event_data.get("id")
+            tc_name = event_data.get("name")
+            tc_args = event_data.get("arguments")
+
+            tcs = entry["tool_calls"]
+            if idx not in tcs:
+                tcs[idx] = {
+                    "id": tc_id or "",
+                    "type": "function",
+                    "function": {"name": "", "arguments": ""},
+                }
+            tc_entry = tcs[idx]
+            if tc_id:
+                tc_entry["id"] = tc_id
+            if tc_name:
+                tc_entry["function"]["name"] = tc_name
+            if tc_args:
+                tc_entry["function"]["arguments"] += tc_args
+
+        elif event_type == "done":
+            tool_calls_list = [
+                entry["tool_calls"][i] for i in sorted(entry["tool_calls"])
+            ]
+            result = StepResult(
+                text=entry["text"],
+                reasoning=entry["reasoning"],
+                tool_calls=tool_calls_list,
+            )
+
+            with _pending_steps_lock:
+                _pending_steps.pop(task_id, None)
+
+            loop = entry.get("loop")
+            future = entry["future"]
+            if loop is not None and not future.done():
+                loop.call_soon_threadsafe(future.set_result, result)
+
+            return True
+
+        elif event_type == "error":
+            error_msg = event_data.get("message", "unknown error")
+            result = StepResult(error=error_msg)
+
+            with _pending_steps_lock:
+                _pending_steps.pop(task_id, None)
+
+            loop = entry.get("loop")
+            future = entry["future"]
+            if loop is not None and not future.done():
+                loop.call_soon_threadsafe(future.set_result, result)
+
+            if step.stream_mode != "silent":
+                tracker.push(entry["conv_id"], {"event_type": "error", "data": event_data})
+            return True
+
+        else:
+            if step.stream_mode != "silent":
+                tracker.push(entry["conv_id"], {"event_type": event_type, "data": event_data})
+
+        return True
+
+    async def _await_step(sub_task_id: str, step: WorkStep, conv_id: str) -> StepResult:
+        """Register a pending step and wait for the worker to resolve it."""
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[StepResult] = loop.create_future()
+
+        entry = {
+            "step": step,
+            "conv_id": conv_id,
+            "future": future,
+            "loop": loop,
+            "text": "",
+            "reasoning": "",
+            "tool_calls": {},
+        }
+
+        with _pending_steps_lock:
+            _pending_steps[sub_task_id] = entry
+
+        return await future
+
+    def _push_step(step: WorkStep, root_task_id: str, conv_id: str) -> str:
+        """Write the step payload to disk and push a sub-task to the queue.
+
+        The full hydrated payload is stored as ``scheduler_payload.json``
+        and the sub-task is tagged with ``ext.scheduler_driven = True``
+        so ``_do_pop`` can skip re-hydration.
+        """
+        sub = queue.push(
+            title=f"scheduler: {step.kind}",
+            kind=step.kind,
+            spec_path="",
+            project=step.payload.get("project_name", ""),
+            agent=step.payload.get("agent", ""),
+            parent_task=root_task_id,
+            root_task=root_task_id,
+            conversation=conv_id,
+            enable_thinking=step.payload.get("enable_thinking"),
+        )
+
+        final_payload = dict(step.payload)
+
+        if step.kind == "llm_complete" and "provider" not in final_payload and conv_id:
+            prov_info = _resolve_provider_for_task(sub, conv_id)
+            if prov_info:
+                final_payload["provider"] = prov_info
+
+        task_dir = os.path.join(config.worker.tasks_dir, sub.id)
+        os.makedirs(task_dir, exist_ok=True)
+
+        payload_path = os.path.join(task_dir, "scheduler_payload.json")
+        with open(payload_path, "w", encoding="utf-8") as f:
+            json.dump(final_payload, f, ensure_ascii=False)
+
+        queue.update(sub.id, spec_path=payload_path, ext={"scheduler_driven": True})
+        queue.update(sub.id, status=TaskStatus.READY)
+        tracker.register(sub.id, conv_id)
+
+        log.info(
+            "push_step  sub_task=%s  kind=%s  root=%s  conv=%s",
+            sub.id, step.kind, root_task_id, conv_id,
+        )
+        return sub.id
+
+    async def drive_scheduler(scheduler_instance, task, conv_id: str) -> None:
+        """Run a scheduler's async generator, driving each step through the queue."""
+        gen = scheduler_instance.run(task, conv_id)
+        try:
+            step: WorkStep = await gen.__anext__()
+
+            result: StepResult | None = None
+            while True:
+                sub_task_id = _push_step(step, task.id, conv_id)
+
+                result = await _await_step(sub_task_id, step, conv_id)
+
+                if result.error:
+                    log.error(
+                        "scheduler step failed  task=%s  sub=%s: %s",
+                        task.id, sub_task_id, result.error,
+                    )
+                    queue.update(task.id, status=TaskStatus.FAILED, error_log=result.error)
+                    tracker.push(conv_id, {"event_type": "error", "data": {"message": result.error}})
+                    break
+
+                try:
+                    step = await gen.asend(result)
+                except StopAsyncIteration:
+                    break
+
+            if result and not result.error:
+                if result.text:
+                    chat.append(conv_id, {
+                        "role": "assistant",
+                        "content": result.text,
+                        **({"reasoning": result.reasoning} if result.reasoning else {}),
+                    })
+                queue.update(task.id, status=TaskStatus.COMPLETED)
+                tracker.push(conv_id, {"event_type": "done", "data": {}})
+                log.info("driver completed  task=%s  conv=%s  chars=%d",
+                         task.id, conv_id, len(result.text) if result.text else 0)
+
+        except StopAsyncIteration:
+            queue.update(task.id, status=TaskStatus.COMPLETED)
+            tracker.push(conv_id, {"event_type": "done", "data": {}})
+            log.info("driver completed (empty)  task=%s  conv=%s", task.id, conv_id)
+        except Exception:
+            log.exception("scheduler driver crashed  task=%s", task.id)
+            queue.update(task.id, status=TaskStatus.FAILED, error_log="scheduler driver crash")
+            tracker.push(conv_id, {"event_type": "error", "data": {"message": "scheduler error"}})
 
     # ==================================================================
     # Conversations CRUD
@@ -482,7 +703,7 @@ def create_blueprint(config: AssaiConfig | None = None,
         conv_path = chat._msg_path(conversation)
         task = queue.push(
             title=f"converse: {message[:60]}",
-            kind="llm_complete",
+            kind="converse",
             spec_path=conv_path,
             project=project or proj,
             agent=effective_agent,
@@ -491,8 +712,22 @@ def create_blueprint(config: AssaiConfig | None = None,
             enable_thinking=enable_thinking,
             conversation=conversation,
         )
-        queue.update(task.id, status=TaskStatus.READY)
+        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
         tracker.register(task.id, conversation)
+
+        sched = _get_scheduler(
+            "converse",
+            config=config,
+            chat=chat,
+            queue=queue,
+            tracker=tracker,
+            agent_store=agent_store,
+            projects=projects,
+            tool_registry=tool_registry,
+        )
+        asyncio.run_coroutine_threadsafe(
+            drive_scheduler(sched, task, conversation), _driver_loop,
+        )
 
         return jsonify({"task_id": task.id, "conversation": conversation}), 202
 
@@ -532,20 +767,58 @@ def create_blueprint(config: AssaiConfig | None = None,
         data = request.get_json(silent=True) or {}
         message = data.get("message", "")
         current_conversation = data.get("current_conversation", "")
-        provider = data.get("provider", "auto")
-        agent = data.get("agent", "default")
+        provider_name = data.get("provider", "auto")
+        agent_name = data.get("agent", "default")
         route_only = data.get("route_only", False)
         if not message:
             return jsonify({"error": "message is required"}), 400
 
-        result = await uber_scheduler.schedule(
+        routing = await uber_scheduler.route(
             message=message,
             current_conv_id=current_conversation,
-            provider=provider,
-            agent=agent,
-            route_only=bool(route_only),
+            agent=agent_name,
         )
-        return jsonify(result), 202
+        conv_id = routing["conversation"]
+        is_new = routing.get("is_new", False)
+
+        if route_only:
+            return jsonify({"conversation": conv_id, "is_new": is_new})
+
+        if provider_name and provider_name != "auto":
+            chat.update_meta(conv_id, provider=provider_name)
+
+        chat.append(conv_id, {"role": "user", "content": message})
+
+        conv_path = chat._msg_path(conv_id)
+        task = queue.push(
+            title=f"converse: {message[:60]}",
+            kind="converse",
+            spec_path=conv_path,
+            agent=agent_name,
+            conversation=conv_id,
+        )
+        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
+        tracker.register(task.id, conv_id)
+
+        sched = _get_scheduler(
+            "converse",
+            config=config,
+            chat=chat,
+            queue=queue,
+            tracker=tracker,
+            agent_store=agent_store,
+            projects=projects,
+            tool_registry=tool_registry,
+        )
+        asyncio.run_coroutine_threadsafe(
+            drive_scheduler(sched, task, conv_id), _driver_loop,
+        )
+
+        return jsonify({
+            "task_id": task.id,
+            "conversation": conv_id,
+            "is_new": is_new,
+        }), 202
 
     # ==================================================================
     # Think-then-generate conversation
@@ -555,9 +828,9 @@ def create_blueprint(config: AssaiConfig | None = None,
     def think_converse():
         """Like ``/converse`` but chains a thinker step before the main agent.
 
-        The scheduler pushes a thinker task whose tokens stream as
-        reasoning events.  When the thinker finishes the scheduler
-        automatically chains the main-agent task with reasoning injected.
+        The scheduler pushes a thinker task, streams its tokens as
+        reasoning events, then chains the main-agent task with reasoning
+        injected — all driven by :class:`ThinkScheduler`.
         """
         data = request.get_json(silent=True) or {}
         message = data.get("message", "")
@@ -594,14 +867,36 @@ def create_blueprint(config: AssaiConfig | None = None,
         meta_agent = (conv_meta.get("agent") or "").strip()
         effective_agent = agent_name or meta_agent or default_agent
 
-        result = thinking_scheduler.schedule(
-            conversation=conversation,
-            agent=effective_agent,
-            project=project or proj,
-            parent_task=parent_task,
+        root = queue.resolve_root(parent_task) if parent_task else ""
+        conv_path = chat._msg_path(conversation)
+        task = queue.push(
             title=f"think: {message[:60]}",
+            kind="think",
+            spec_path=conv_path,
+            project=project or proj,
+            agent=effective_agent,
+            parent_task=parent_task,
+            root_task=root,
+            conversation=conversation,
         )
-        return jsonify(result), 202
+        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
+        tracker.register(task.id, conversation)
+
+        sched = _get_scheduler(
+            "think",
+            config=config,
+            chat=chat,
+            queue=queue,
+            tracker=tracker,
+            agent_store=agent_store,
+            projects=projects,
+            tool_registry=tool_registry,
+        )
+        asyncio.run_coroutine_threadsafe(
+            drive_scheduler(sched, task, conversation), _driver_loop,
+        )
+
+        return jsonify({"task_id": task.id, "conversation": conversation}), 202
 
     # ==================================================================
     # History
@@ -670,6 +965,13 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         Returns the prepared work dict, or ``None`` when the queue is
         empty.  Shared by both the HTTP endpoint and the SocketIO handler.
+
+        Scheduler-driven root tasks (``kind="converse"`` / ``"think"``)
+        are set to ``IN_PROGRESS`` immediately by the endpoint and are
+        never in ``READY`` status, so they won't appear here.
+        Sub-tasks pushed by the scheduler driver are tagged with
+        ``ext.scheduler_driven`` and their pre-hydrated payload is
+        returned directly.
         """
         task = queue.pop(status=TaskStatus.READY)
         if task is None:
@@ -677,8 +979,21 @@ def create_blueprint(config: AssaiConfig | None = None,
 
         queue.update(task.id, status=TaskStatus.IN_PROGRESS)
 
-        if task.kind == "tool_call":
+        ext = task.ext or {}
+        if ext.get("scheduler_driven"):
             payload: dict = {}
+            if task.spec_path and os.path.isfile(task.spec_path):
+                with open(task.spec_path) as f:
+                    try:
+                        payload = json.load(f)
+                    except (json.JSONDecodeError, ValueError):
+                        payload = {}
+            payload["task_id"] = task.id
+            payload["kind"] = task.kind
+            return payload
+
+        if task.kind == "tool_call":
+            payload = {}
             if task.spec_path and os.path.isfile(task.spec_path):
                 with open(task.spec_path) as f:
                     try:
@@ -742,22 +1057,6 @@ def create_blueprint(config: AssaiConfig | None = None,
         if task.enable_thinking is not None:
             result["enable_thinking"] = task.enable_thinking
 
-        ext = task.ext or {}
-        injected_reasoning = ext.get("injected_reasoning")
-        if injected_reasoning:
-            reasoning_msg = {
-                "role": "system",
-                "content": (
-                    "## Prior Reasoning\n"
-                    "The following analysis was produced about this task. "
-                    "Use it to inform your response.\n\n"
-                    + injected_reasoning
-                ),
-            }
-            msgs = result["messages"]
-            pos = 1 if msgs and msgs[0].get("role") == "system" else 0
-            msgs.insert(pos, reasoning_msg)
-
         return result
 
     @bp.route("/work/pop", methods=["GET"])
@@ -780,6 +1079,9 @@ def create_blueprint(config: AssaiConfig | None = None,
         if task is None:
             return jsonify({"error": "task not found"}), 404
         conversation = task.conversation or ""
+
+        ext = task.ext or {}
+        is_scheduler_driven = bool(ext.get("scheduler_driven"))
 
         result_dir = os.path.join(config.worker.tasks_dir, task_id)
         os.makedirs(result_dir, exist_ok=True)
@@ -806,7 +1108,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                     task_id, status=TaskStatus.FAILED,
                     result_path=result_path, error_log=error,
                 )
-                if conversation:
+                if conversation and not is_scheduler_driven:
                     chat.append(conversation, {
                         "role": "assistant",
                         "content": f"[Error] {error}",
@@ -818,28 +1120,30 @@ def create_blueprint(config: AssaiConfig | None = None,
                 queue.update(task_id, result_path=result_path)
             else:
                 queue.update(task_id, status=TaskStatus.COMPLETED, result_path=result_path)
-            reasoning_text = data.get("reasoning", "")
-            if kind == "llm_complete" and (result_text or reasoning_text) and conversation and not already_chained:
-                msg: dict = {"role": "assistant", "content": result_text}
-                if reasoning_text:
-                    msg["reasoning"] = reasoning_text
-                chat.append(conversation, msg)
-            elif kind == "tool_call" and conversation:
-                tool_name = data.get("tool", task.title.replace("tool: ", ""))
-                result_preview = result_text[:500] if result_text else ""
-                chat.append(conversation, {
-                    "role": "tool_result",
-                    "content": result_preview,
-                    "name": tool_name,
-                })
-                tracker.push(conversation, {
-                    "event_type": "tool_end",
-                    "data": {
-                        "conversation": conversation,
-                        "tool_name": tool_name,
-                        "result_preview": result_preview[:200],
-                    },
-                })
+
+            if not is_scheduler_driven:
+                reasoning_text = data.get("reasoning", "")
+                if kind == "llm_complete" and (result_text or reasoning_text) and conversation and not already_chained:
+                    msg: dict = {"role": "assistant", "content": result_text}
+                    if reasoning_text:
+                        msg["reasoning"] = reasoning_text
+                    chat.append(conversation, msg)
+                elif kind == "tool_call" and conversation:
+                    tool_name = data.get("tool", task.title.replace("tool: ", ""))
+                    result_preview = result_text[:500] if result_text else ""
+                    chat.append(conversation, {
+                        "role": "tool_result",
+                        "content": result_preview,
+                        "name": tool_name,
+                    })
+                    tracker.push(conversation, {
+                        "event_type": "tool_end",
+                        "data": {
+                            "conversation": conversation,
+                            "tool_name": tool_name,
+                            "result_preview": result_preview[:200],
+                        },
+                    })
 
         return jsonify({"ok": True})
 
@@ -921,6 +1225,9 @@ def create_blueprint(config: AssaiConfig | None = None,
     def _handle_stream_event(task_id: str, conv_id: str,
                              event_type: str, event_data: dict):
         """Process a single stream event (token / reasoning / tool_call_delta / done / error)."""
+        if _resolve_step(task_id, event_type, event_data):
+            return
+
         if event_type == "reasoning":
             with _active_streams_lock:
                 if task_id not in _active_streams:
@@ -938,7 +1245,6 @@ def create_blueprint(config: AssaiConfig | None = None,
             tracker.push(conv_id, {"event_type": "reasoning", "data": event_data})
 
         elif event_type == "token":
-            is_thinker = thinking_scheduler.is_thinking_task(task_id)
             with _active_streams_lock:
                 if task_id not in _active_streams:
                     _active_streams[task_id] = {
@@ -951,10 +1257,7 @@ def create_blueprint(config: AssaiConfig | None = None,
                     }
                 _active_streams[task_id]["text"] += event_data.get("token", "")
 
-            if is_thinker:
-                tracker.push(conv_id, {"event_type": "reasoning", "data": event_data})
-            else:
-                tracker.push(conv_id, {"event_type": "token", "data": event_data})
+            tracker.push(conv_id, {"event_type": "token", "data": event_data})
 
         elif event_type == "tool_call_delta":
             with _active_streams_lock:
@@ -995,10 +1298,6 @@ def create_blueprint(config: AssaiConfig | None = None,
         elif event_type == "done":
             with _active_streams_lock:
                 ss = _active_streams.pop(task_id, None)
-
-            reasoning = (ss or {}).get("text", "")
-            if thinking_scheduler.on_complete(task_id, reasoning):
-                return
 
             if ss:
                 for idx in sorted(ss["tool_calls"]):

@@ -1,123 +1,145 @@
-"""ThinkingScheduler — orchestrates emulated reasoning.
+"""ThinkScheduler — generator-based emulated reasoning.
 
-Composition logic lives here, not in the worker or the stream handler.
-
-Flow:
-1. ``schedule()`` pushes a thinker task and records continuation metadata.
-2. The stream handler calls ``is_thinking_task()`` to remap tokens → reasoning.
-3. On thinker "done", the stream handler calls ``on_complete()`` which:
-   - Chains the main-agent task with reasoning stored in ``ext.injected_reasoning``
-   - Returns ``True`` so the stream handler suppresses the "done" event
-     (the SSE stays open for the main task's events).
+Two-step flow:
+1. **Think**: Run a thinker agent whose tokens stream as ``reasoning``
+   events to the UI.
+2. **Reply**: Run the main agent with the thinker's output injected,
+   streaming tokens normally.  Tool-call follow-ups are handled the
+   same way as :class:`ConversationScheduler`.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-import threading
+from collections.abc import AsyncGenerator
 from typing import TYPE_CHECKING
 
-from assai.queue.work import TaskStatus
+from assai.scheduler.base import Scheduler
+from assai.scheduler.conversation import ConversationScheduler
+from assai.scheduler.types import StepResult, WorkStep
 
 if TYPE_CHECKING:
+    from assai.core.agent_store import AgentStore
     from assai.core.chat import ChatStore
+    from assai.core.config import AssaiConfig
+    from assai.core.projects import ProjectStore
     from assai.core.stream import StreamTracker
-    from assai.queue.work import WorkQueue
+    from assai.queue.work import Task as QueueTask, WorkQueue
 
 log = logging.getLogger(__name__)
 
 THINKER_AGENT = "thinker"
 
 
-class ThinkingScheduler:
-    def __init__(self, chat: ChatStore, queue: WorkQueue, tracker: StreamTracker):
-        self._chat = chat
-        self._queue = queue
-        self._tracker = tracker
-        self._lock = threading.Lock()
-        self._pending: dict[str, dict] = {}
+class ThinkScheduler(Scheduler):
+    """Think-then-reply scheduler using the generator protocol.
 
-    def schedule(
+    Parameters
+    ----------
+    thinker_agent : str
+        Agent name for the thinking step (default ``"thinker"``).
+    tool_registry : optional
+        Passed through for tool resolution during hydration.
+    """
+
+    def __init__(
         self,
+        config: AssaiConfig,
+        chat: ChatStore,
+        queue: WorkQueue,
+        tracker: StreamTracker,
+        agent_store: AgentStore,
+        projects: ProjectStore | None = None,
+        tool_registry=None,
+        thinker_agent: str = THINKER_AGENT,
+    ):
+        super().__init__(config, chat, queue, tracker, agent_store, projects)
+        self.tool_registry = tool_registry
+        self.thinker_agent = thinker_agent
+        self._conversation_sched = ConversationScheduler(
+            config=config,
+            chat=chat,
+            queue=queue,
+            tracker=tracker,
+            agent_store=agent_store,
+            projects=projects,
+            tool_registry=tool_registry,
+        )
+
+    async def run(
+        self,
+        task: QueueTask,
         conversation: str,
-        agent: str = "default",
-        project: str = "",
-        parent_task: str = "",
-        title: str = "",
-    ) -> dict:
-        """Push the thinker task and register for chaining."""
-        root = self._queue.resolve_root(parent_task) if parent_task else ""
-        conv_path = self._chat._msg_path(conversation)
-
-        task = self._queue.push(
-            title=title or "think",
-            kind="llm_complete",
-            spec_path=conv_path,
-            project=project,
-            agent=THINKER_AGENT,
-            parent_task=parent_task,
-            root_task=root,
-            conversation=conversation,
+    ) -> AsyncGenerator[WorkStep, StepResult]:
+        # Step 1: Think — thinker agent, tokens forwarded as reasoning
+        think_payload = self._conversation_sched.hydrate(
+            task, agent_override=self.thinker_agent,
         )
-        self._queue.update(task.id, status=TaskStatus.READY)
-        self._tracker.register(task.id, conversation)
-
-        with self._lock:
-            self._pending[task.id] = {
-                "agent": agent,
-                "project": project,
-                "parent_task": parent_task,
-                "conversation": conversation,
-            }
-
-        log.info(
-            "[%s] thinker task queued  conversation=%s  continuation_agent=%s",
-            task.id, conversation, agent,
+        reasoning_result: StepResult = yield WorkStep(
+            payload=think_payload, stream_mode="reasoning",
         )
-        return {"task_id": task.id, "conversation": conversation}
 
-    def is_thinking_task(self, task_id: str) -> bool:
-        with self._lock:
-            return task_id in self._pending
-
-    def on_complete(self, task_id: str, reasoning: str) -> bool:
-        """Chain the main-agent task after the thinker finishes.
-
-        Returns ``True`` if this task was a thinker (caller should
-        suppress the normal "done" event), ``False`` otherwise.
-        """
-        with self._lock:
-            meta = self._pending.pop(task_id, None)
-        if meta is None:
-            return False
-
-        conversation = meta["conversation"]
-        agent = meta["agent"]
-        parent = meta.get("parent_task", "")
-        project = meta.get("project", "")
-
-        root = self._queue.resolve_root(parent) if parent else ""
-        conv_path = self._chat._msg_path(conversation)
-
-        main_task = self._queue.push(
-            title="converse (post-think)",
-            kind="llm_complete",
-            spec_path=conv_path,
-            project=project,
-            agent=agent,
-            parent_task=parent,
-            root_task=root,
-            conversation=conversation,
+        # Step 2: Reply — main agent with reasoning injected
+        reply_payload = self._conversation_sched.hydrate(
+            task, injected_reasoning=reasoning_result.text,
         )
-        self._queue.update(main_task.id, ext={
-            "injected_reasoning": reasoning,
-        })
-        self._queue.update(main_task.id, status=TaskStatus.READY)
-        self._tracker.register(main_task.id, conversation)
-        self._queue.update(task_id, status="chained")
-
-        log.info(
-            "[%s] thinker done — chained main task %s  agent=%s  reasoning=%d chars",
-            task_id, main_task.id, agent, len(reasoning),
+        result: StepResult = yield WorkStep(
+            payload=reply_payload, stream_mode="token",
         )
-        return True
+
+        # Tool-call follow-up loop (same as ConversationScheduler)
+        while result.tool_calls:
+            tool_results: list[StepResult] = []
+            dispatched_calls: list[dict] = []
+
+            for call in result.tool_calls:
+                tool_payload = self._conversation_sched._build_tool_payload(
+                    call, task, conversation,
+                )
+                dispatched_calls.append(call)
+
+                self.chat.append(conversation, {
+                    "role": "tool_call",
+                    "content": json.dumps(
+                        {"tool": tool_payload["tool"], "args": tool_payload["args"]},
+                        ensure_ascii=False,
+                    ),
+                    "name": tool_payload["tool"],
+                })
+                self.tracker.push(conversation, {
+                    "event_type": "tool_start",
+                    "data": {
+                        "conversation": conversation,
+                        "tool_name": tool_payload["tool"],
+                        "args": tool_payload["args"],
+                    },
+                })
+
+                tr: StepResult = yield WorkStep(
+                    payload=tool_payload, kind="tool_call", stream_mode="tool",
+                )
+                tool_results.append(tr)
+
+                result_preview = tr.text[:500] if tr.text else ""
+                self.chat.append(conversation, {
+                    "role": "tool_result",
+                    "content": result_preview,
+                    "name": tool_payload["tool"],
+                })
+                self.tracker.push(conversation, {
+                    "event_type": "tool_end",
+                    "data": {
+                        "conversation": conversation,
+                        "tool_name": tool_payload["tool"],
+                        "result_preview": result_preview[:200],
+                    },
+                })
+
+            followup_messages = self._conversation_sched._build_followup_messages(
+                reply_payload["messages"], result, dispatched_calls, tool_results,
+            )
+            followup_payload = dict(reply_payload)
+            followup_payload["messages"] = followup_messages
+
+            result = yield WorkStep(payload=followup_payload, stream_mode="token")
