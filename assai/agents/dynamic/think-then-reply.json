@@ -1,15 +1,12 @@
 {
   "id": "think-then-reply",
   "name": "Think then Reply",
-  "description": "Appends conversation and message, sends to a thinker agent, appends the thinker's reply to the conversation, then passes the full conversation to a default agent for the final reply.",
+  "description": "Thinker agent's stream fans out to Forward (reasoning display) and Accumulate (response data). The response is appended to the conversation for the replier, whose stream fans out to Forward (visible reply) and Accumulate.",
   "nodes": [
     {
       "id": "start",
       "type": "start",
-      "position": {
-        "x": 18.333858808737908,
-        "y": 125.51358902379215
-      },
+      "position": { "x": 20, "y": 200 },
       "data": {
         "label": "Start",
         "preview_message": "What is the meaning of life?"
@@ -18,158 +15,71 @@
     {
       "id": "append1",
       "type": "append",
-      "position": {
-        "x": 154.32097566073986,
-        "y": 125.59672500082985
-      },
-      "data": {
-        "label": "Build Context"
-      }
+      "position": { "x": 220, "y": 200 },
+      "data": { "label": "Build Context" }
     },
     {
       "id": "thinker",
       "type": "agent",
-      "position": {
-        "x": 360.5339153196722,
-        "y": 32.66439604734807
-      },
-      "data": {
-        "agent": "thinker",
-        "label": "Thinker",
-        "stream_mode": "reasoning"
-      }
+      "position": { "x": 420, "y": 100 },
+      "data": { "agent": "thinker", "label": "Thinker" }
+    },
+    {
+      "id": "fwd_think",
+      "type": "forward",
+      "position": { "x": 620, "y": 30 },
+      "data": { "label": "As Reasoning", "mode": "reasoning" }
+    },
+    {
+      "id": "acc_think",
+      "type": "accumulate",
+      "position": { "x": 620, "y": 170 },
+      "data": { "label": "Collect" }
     },
     {
       "id": "append2",
       "type": "append",
-      "position": {
-        "x": 602.6071244499439,
-        "y": 127.45395304149835
-      },
-      "data": {
-        "label": "Add Reply"
-      }
+      "position": { "x": 830, "y": 200 },
+      "data": { "label": "Add Reply" }
     },
     {
       "id": "replier",
       "type": "agent",
-      "position": {
-        "x": 804.6316745913389,
-        "y": 127.54150798337224
-      },
-      "data": {
-        "agent": "default",
-        "label": "Replier"
-      }
+      "position": { "x": 1030, "y": 200 },
+      "data": { "agent": "default", "label": "Replier" }
     },
     {
-      "id": "end",
-      "type": "output",
-      "position": {
-        "x": 960.4382628232491,
-        "y": 113.7471766649925
-      },
-      "data": {
-        "label": "Done"
-      }
+      "id": "fwd_reply",
+      "type": "forward",
+      "position": { "x": 1230, "y": 130 },
+      "data": { "label": "As Reply", "mode": "token" }
+    },
+    {
+      "id": "acc_reply",
+      "type": "accumulate",
+      "position": { "x": 1230, "y": 270 },
+      "data": { "label": "Collect" }
     }
   ],
   "edges": [
-    {
-      "id": "e1",
-      "source": "start",
-      "target": "append1",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "e2",
-      "source": "append1",
-      "target": "thinker",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "e3",
-      "source": "thinker",
-      "target": "append2",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "e4",
-      "source": "append2",
-      "target": "replier",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "e5",
-      "source": "replier",
-      "target": "end",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "d1",
-      "source": "start",
-      "target": "append1",
-      "sourceHandle": "data_conversation",
-      "targetHandle": "data_a",
-      "type": "data"
-    },
-    {
-      "id": "d2",
-      "source": "start",
-      "target": "append1",
-      "sourceHandle": "data_message",
-      "targetHandle": "data_b",
-      "type": "data"
-    },
-    {
-      "id": "d3",
-      "source": "append1",
-      "target": "thinker",
-      "sourceHandle": "data_result",
-      "targetHandle": "data_context",
-      "type": "data"
-    },
-    {
-      "id": "d4",
-      "source": "append1",
-      "target": "append2",
-      "sourceHandle": "data_result",
-      "targetHandle": "data_a",
-      "type": "data"
-    },
-    {
-      "id": "d5",
-      "source": "thinker",
-      "target": "append2",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_b",
-      "type": "data"
-    },
-    {
-      "id": "d6",
-      "source": "append2",
-      "target": "replier",
-      "sourceHandle": "data_result",
-      "targetHandle": "data_context",
-      "type": "data"
-    },
-    {
-      "id": "d7",
-      "source": "replier",
-      "target": "end",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_response",
-      "type": "data"
-    }
+    { "id": "e1", "source": "start",     "target": "append1",   "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e2", "source": "append1",    "target": "thinker",  "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e3", "source": "thinker",    "target": "fwd_think","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e4", "source": "fwd_think",  "target": "acc_think","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e5", "source": "acc_think",  "target": "append2",  "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e6", "source": "append2",    "target": "replier",  "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e7", "source": "replier",    "target": "fwd_reply","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e8", "source": "fwd_reply",  "target": "acc_reply","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+
+    { "id": "d1",  "source": "start",     "target": "append1",   "sourceHandle": "data_conversation", "targetHandle": "data_a",        "type": "data" },
+    { "id": "d2",  "source": "start",     "target": "append1",   "sourceHandle": "data_message",      "targetHandle": "data_b",        "type": "data" },
+    { "id": "d3",  "source": "append1",   "target": "thinker",   "sourceHandle": "data_result",       "targetHandle": "data_context",  "type": "data" },
+    { "id": "d4",  "source": "thinker",   "target": "fwd_think", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" },
+    { "id": "d5",  "source": "thinker",   "target": "acc_think", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" },
+    { "id": "d6",  "source": "acc_think", "target": "append2",   "sourceHandle": "data_response",     "targetHandle": "data_b",        "type": "data" },
+    { "id": "d7",  "source": "append1",   "target": "append2",   "sourceHandle": "data_result",       "targetHandle": "data_a",        "type": "data" },
+    { "id": "d8",  "source": "append2",   "target": "replier",   "sourceHandle": "data_result",       "targetHandle": "data_context",  "type": "data" },
+    { "id": "d9",  "source": "replier",   "target": "fwd_reply", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" },
+    { "id": "d10", "source": "replier",   "target": "acc_reply", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" }
   ]
 }

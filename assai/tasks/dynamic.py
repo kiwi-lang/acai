@@ -1,54 +1,27 @@
-"""DynamicGraph — execute a workflow defined by a JSON spec with dual-pin edges.
+"""DynamicGraph — execute a workflow defined by a JSON spec.
 
-The spec uses **execution pins** (``exec_*``) to control traversal order
-and **data pins** (``data_*``) to route typed JSON values between nodes.
+The spec uses **execution pins** (``exec_*``) to control traversal
+order and **data pins** (``data_*``) to route typed JSON values
+between nodes.
 
-Data types
-----------
-* **conversation** (blue)  — ``list[dict]``, array of message objects.
-* **message** (amber)      — ``dict``, single message ``{"role": …, "content": …}``.
-* **string** (green)       — plain text.
-* **reference** (cyan)     — agent/tool name string.
-
-Node types
-----------
-* **start**     — entry point; outputs ``data_conversation`` (list) and ``data_message`` (dict).
-* **agent**     — LLM agent call; inputs ``data_agent`` (str), ``data_context`` (list);
-                  outputs ``data_response`` (dict — message object).
-* **tool**      — single tool call; inputs ``data_tool`` (str), ``data_input`` (str);
-                  outputs ``data_result`` (str).
-* **append**    — append item to array; inputs ``data_a`` (list), ``data_b`` (dict);
-                  outputs ``data_result`` (list).
-* **condition** — branch; input ``data_value`` (any); exec outs ``exec_true`` / ``exec_false``.
-* **output**    — terminal; input ``data_response`` (dict — message object or str).
-
-Edge types
-----------
-* ``"exec"``  — execution flow (handle ids: ``exec_in``, ``exec_out``, ``exec_true``, ``exec_false``).
-* ``"data"``  — data flow (handle ids: ``data_<name>``).
+Node types are loaded from the :mod:`assai.tasks.nodes` registry.
+See that module for the built-in set and instructions for adding
+custom node types.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import re
 import traceback as _tb
 from collections import defaultdict
 from typing import Any, AsyncIterator
 
-from assai.tasks.graph import Acc, TaskGraph
+from assai.tasks.graph import TaskGraph
+from assai.tasks import nodes as node_registry
+from assai.tasks.nodes import NodeContext
 
 log = logging.getLogger(__name__)
-
-_VAR_RE = re.compile(r"\{\{(\w+)\}\}")
-
-
-def _substitute(template: str, variables: dict[str, str]) -> str:
-    """Replace ``{{name}}`` placeholders with values from *variables*."""
-    def _repl(m: re.Match) -> str:
-        return variables.get(m.group(1), m.group(0))
-    return _VAR_RE.sub(_repl, template)
 
 
 # ------------------------------------------------------------------
@@ -121,17 +94,13 @@ class WorkflowSpec:
 # ------------------------------------------------------------------
 
 class DynamicGraph(TaskGraph):
-    """Execute a workflow by following execution pins and resolving data pins.
+    """Execute a workflow by following execution pins and resolving
+    data pins.
 
-    The executor walks exec edges from the start node.  At each node it
-    resolves data inputs by tracing data edges backward to source nodes'
-    stored outputs, executes the node, stores per-handle outputs, then
-    follows the exec_out edge to the next node.
-
-    Agent nodes stream their tokens through the SSE channel so the UI
-    can display them in real time.  Each agent emits ``agent_token``
-    events (with ``node_id`` and ``stream_mode`` to distinguish thinker
-    reasoning from replier text).
+    Node behaviour is delegated to :class:`~assai.tasks.nodes.NodeType`
+    instances looked up from the node registry.  Streaming nodes (like
+    ``agent``) yield SSE events in real time while the graph accumulates
+    their final output for downstream data pins.
     """
 
     async def run(self, work: dict) -> AsyncIterator[dict]:  # noqa: C901
@@ -177,15 +146,26 @@ class DynamicGraph(TaskGraph):
             ntype = node.get("type", "")
             data = node.get("data") or {}
 
+            # -- resolve data-pin inputs from upstream outputs -----------
             resolved: dict[str, Any] = {}
             for edge in spec.data_inputs(current_id):
                 src_id = edge["source"]
                 src_handle = edge.get("sourceHandle", "")
                 tgt_handle = edge.get("targetHandle", "")
-                pin_name = tgt_handle.removeprefix("data_") if tgt_handle.startswith("data_") else tgt_handle
-                src_pin = src_handle.removeprefix("data_") if src_handle.startswith("data_") else src_handle
+                pin_name = (tgt_handle.removeprefix("data_")
+                            if tgt_handle.startswith("data_") else tgt_handle)
+                src_pin = (src_handle.removeprefix("data_")
+                           if src_handle.startswith("data_") else src_handle)
                 if src_id in outputs and src_pin in outputs[src_id]:
                     resolved[pin_name] = outputs[src_id][src_pin]
+
+            # -- look up node type from registry -------------------------
+            node_type = node_registry.get(ntype)
+            if node_type is None:
+                yield self._error_event(
+                    f"Unknown node type '{ntype}' on node '{current_id}'",
+                )
+                return
 
             yield {
                 "event_type": "node_start",
@@ -193,18 +173,25 @@ class DynamicGraph(TaskGraph):
                          "label": data.get("label", current_id)},
             }
 
+            ctx = NodeContext(
+                graph=self,
+                node_id=current_id,
+                data=data,
+                inputs=resolved,
+                work=work,
+            )
+
+            # -- execute (streaming or sync) -----------------------------
             try:
-                if ntype == "agent":
-                    node_out = {}
-                    async for item in self._exec_agent_stream(
-                        current_id, data, resolved, work,
-                    ):
+                if node_type.streaming:
+                    node_out: dict[str, Any] = {}
+                    async for item in node_type.execute_stream(ctx):
                         if isinstance(item, dict) and "event_type" in item:
                             yield item
                         else:
                             node_out = item
                 else:
-                    node_out = await self._exec_node(ntype, data, resolved, work)
+                    node_out = await node_type.execute(ctx)
             except Exception as exc:
                 log.exception("node %s failed", current_id)
                 yield self._error_event(
@@ -215,10 +202,12 @@ class DynamicGraph(TaskGraph):
 
             outputs[current_id] = node_out
 
+            # -- build preview for node_end event ------------------------
             preview = ""
             for v in node_out.values():
                 if v:
-                    preview = (v if isinstance(v, str) else json.dumps(v, ensure_ascii=False))[:200]
+                    preview = (v if isinstance(v, str)
+                               else json.dumps(v, ensure_ascii=False))[:200]
                     break
 
             node_end_data: dict[str, Any] = {
@@ -229,27 +218,32 @@ class DynamicGraph(TaskGraph):
             if ntype == "output":
                 resp = resolved.get("response", "")
                 if isinstance(resp, dict):
-                    node_end_data["final_output"] = resp.get("content", "") or json.dumps(resp, ensure_ascii=False)
+                    node_end_data["final_output"] = (
+                        resp.get("content", "")
+                        or json.dumps(resp, ensure_ascii=False)
+                    )
                 elif isinstance(resp, str):
                     node_end_data["final_output"] = resp
                 else:
-                    node_end_data["final_output"] = json.dumps(resp, ensure_ascii=False)
+                    node_end_data["final_output"] = json.dumps(
+                        resp, ensure_ascii=False,
+                    )
 
-            yield {
-                "event_type": "node_end",
-                "data": node_end_data,
-            }
+            yield {"event_type": "node_end", "data": node_end_data}
 
+            # -- output node → extract final text and stop ---------------
             if ntype == "output":
                 resp = resolved.get("response", "")
                 if isinstance(resp, dict):
-                    final_text = resp.get("content", "") or json.dumps(resp, ensure_ascii=False)
+                    final_text = (resp.get("content", "")
+                                  or json.dumps(resp, ensure_ascii=False))
                 elif isinstance(resp, str):
                     final_text = resp
                 else:
                     final_text = json.dumps(resp, ensure_ascii=False)
                 break
 
+            # -- follow exec edge to the next node -----------------------
             if ntype == "condition":
                 cond_result = node_out.get("_condition", True)
                 handle = "exec_true" if cond_result else "exec_false"
@@ -259,6 +253,7 @@ class DynamicGraph(TaskGraph):
 
             current_id = nexts[0]["target"] if nexts else None
 
+        # -- persist final response to conversation ----------------------
         if final_text and self.conversation:
             self.chat.append(self.conversation, {
                 "role": "assistant", "content": final_text,
@@ -269,245 +264,3 @@ class DynamicGraph(TaskGraph):
             "data": {"workflow_id": spec.id, "output": final_text[:500]},
         }
         yield self._done_event()
-
-    # ------------------------------------------------------------------
-    # Node executors — each returns {handle_name: value}
-    # Values are typed JSON: lists, dicts, or strings.
-    # ------------------------------------------------------------------
-
-    async def _exec_node(
-        self, ntype: str, data: dict,
-        inputs: dict[str, Any], work: dict,
-    ) -> dict[str, Any]:
-        if ntype == "start":
-            return self._exec_start(data, work)
-        elif ntype == "tool":
-            return await self._exec_tool(data, inputs)
-        elif ntype == "append":
-            return self._exec_append(inputs)
-        elif ntype == "condition":
-            return self._exec_condition(data, inputs)
-        elif ntype == "output":
-            return {}
-        else:
-            log.warning("Unknown node type %r — passing through", ntype)
-            return {}
-
-    # -- start ----------------------------------------------------------
-
-    def _exec_start(self, data: dict, work: dict) -> dict[str, Any]:
-        msg_text = work.get("message", "") or data.get("preview_message", "")
-        message: dict = {"role": "user", "content": msg_text}
-
-        conv_raw = work.get("conversation_preview", "") or data.get("preview_conversation", "")
-        conversation: list[dict] = []
-
-        if conv_raw:
-            if isinstance(conv_raw, list):
-                conversation = conv_raw
-            elif isinstance(conv_raw, str):
-                conv_raw = conv_raw.strip()
-                if conv_raw.startswith("["):
-                    try:
-                        conversation = json.loads(conv_raw)
-                    except json.JSONDecodeError:
-                        conversation = [{"role": "user", "content": conv_raw}]
-                elif conv_raw:
-                    conversation = [{"role": "user", "content": conv_raw}]
-
-        if not conversation and self.conversation:
-            conversation = list(self.chat.read(self.conversation))
-
-        return {"message": message, "conversation": conversation}
-
-    # -- agent (streaming) -----------------------------------------------
-
-    async def _exec_agent_stream(
-        self, node_id: str, data: dict, inputs: dict[str, Any], work: dict,
-    ) -> AsyncIterator[dict[str, Any] | dict]:
-        """Run an agent node, yielding SSE events for each token/reasoning chunk.
-
-        The ``stream_mode`` field in node data controls whether tokens are
-        emitted as ``"token"`` (default) or ``"reasoning"`` events.  This
-        allows the think-then-reply pattern where the thinker streams as
-        reasoning and the replier streams as tokens.
-
-        Yields SSE event dicts during streaming.  The final yield is the
-        node output dict ``{"response": {...}}``.
-        """
-        agent_name = inputs.get("agent", "") or data.get("agent", "default")
-        context = inputs.get("context", [])
-        stream_mode = data.get("stream_mode", "token")
-
-        agent_work = dict(work)
-
-        if isinstance(context, list):
-            context_str = "\n".join(
-                f"{m.get('role', 'user')}: {m.get('content', '')}"
-                for m in context if isinstance(m, dict)
-            ) if context else ""
-        else:
-            context_str = str(context)
-
-        agent_work["message"] = context_str
-
-        if data.get("prompt_template"):
-            variables = {"context": context_str, "input": context_str,
-                         "message": work.get("message", "")}
-            agent_work["message"] = _substitute(data["prompt_template"], variables)
-
-        payload = self.prepare(agent_name, agent_work)
-
-        if isinstance(context, list) and context:
-            payload["messages"] = list(context) + payload.get("messages", [])[-1:]
-
-        acc = Acc(self.dispatch(payload))
-        async for event in acc:
-            etype = event.get("event_type", "")
-            edata = event.get("data", {})
-
-            if etype == "token":
-                yield {
-                    "event_type": "agent_token",
-                    "data": {
-                        "node_id": node_id,
-                        "token": edata.get("token", ""),
-                        "stream_mode": stream_mode,
-                    },
-                }
-            elif etype == "reasoning":
-                yield {
-                    "event_type": "agent_token",
-                    "data": {
-                        "node_id": node_id,
-                        "token": edata.get("token", ""),
-                        "stream_mode": "reasoning",
-                    },
-                }
-            elif etype == "error":
-                yield event
-
-        while acc.tool_calls:
-            followup = list(payload["messages"])
-            followup.append({
-                "role": "assistant",
-                "content": acc.text or None,
-                "tool_calls": acc.tool_calls,
-            })
-
-            for call in acc.tool_calls:
-                fn = call.get("function", {})
-                tool_name = fn.get("name", "")
-                try:
-                    tool_args = json.loads(fn.get("arguments", "{}"))
-                except (json.JSONDecodeError, TypeError):
-                    tool_args = {}
-
-                yield {
-                    "event_type": "tool_start",
-                    "data": {"node_id": node_id, "tool_name": tool_name,
-                             "args": tool_args},
-                }
-
-                try:
-                    result_text = await self.dispatch_tool(tool_name, tool_args)
-                except Exception as exc:
-                    log.exception("tool dispatch error: %s", tool_name)
-                    result_text = f"[Tool error] {type(exc).__name__}: {exc}"
-
-                followup.append({
-                    "role": "tool",
-                    "tool_call_id": call.get("id", ""),
-                    "content": result_text,
-                })
-
-                yield {
-                    "event_type": "tool_end",
-                    "data": {"node_id": node_id, "tool_name": tool_name,
-                             "result_preview": result_text[:200]},
-                }
-
-            followup_payload = dict(payload)
-            followup_payload["messages"] = followup
-            payload = followup_payload
-
-            acc = Acc(self.dispatch(followup_payload))
-            async for event in acc:
-                etype = event.get("event_type", "")
-                edata = event.get("data", {})
-                if etype == "token":
-                    yield {
-                        "event_type": "agent_token",
-                        "data": {
-                            "node_id": node_id,
-                            "token": edata.get("token", ""),
-                            "stream_mode": stream_mode,
-                        },
-                    }
-                elif etype == "reasoning":
-                    yield {
-                        "event_type": "agent_token",
-                        "data": {
-                            "node_id": node_id,
-                            "token": edata.get("token", ""),
-                            "stream_mode": "reasoning",
-                        },
-                    }
-                elif etype == "error":
-                    yield event
-
-        yield {"response": {"role": "assistant", "content": acc.text}}
-
-    # -- tool -----------------------------------------------------------
-
-    async def _exec_tool(self, data: dict, inputs: dict[str, Any]) -> dict[str, Any]:
-        tool_name = str(inputs.get("tool", "") or data.get("tool", ""))
-        if not tool_name:
-            return {"result": "[Error] Tool node has no tool name"}
-
-        raw_args = data.get("args") or {}
-        node_input = str(inputs.get("input", ""))
-        variables = {"input": node_input}
-        args: dict[str, Any] = {}
-        for k, v in raw_args.items():
-            args[k] = _substitute(str(v), variables) if isinstance(v, str) else v
-
-        try:
-            result = await self.dispatch_tool(tool_name, args)
-        except Exception as exc:
-            log.exception("tool node error: %s", tool_name)
-            result = f"[Tool error] {type(exc).__name__}: {exc}"
-
-        return {"result": result}
-
-    # -- append ---------------------------------------------------------
-
-    def _exec_append(self, inputs: dict[str, Any]) -> dict[str, Any]:
-        a = inputs.get("a", [])
-        b = inputs.get("b", {})
-        if not isinstance(a, list):
-            a = [a] if a else []
-        result = list(a)
-        if isinstance(b, dict):
-            result.append(b)
-        elif isinstance(b, list):
-            result.extend(b)
-        elif b:
-            result.append({"role": "assistant", "content": str(b)})
-        return {"result": result}
-
-    # -- condition ------------------------------------------------------
-
-    def _exec_condition(self, data: dict, inputs: dict[str, Any]) -> dict[str, Any]:
-        value = inputs.get("value", "")
-        if isinstance(value, (list, dict)):
-            input_for_eval = json.dumps(value, ensure_ascii=False)
-        else:
-            input_for_eval = str(value)
-        expression = data.get("expression", "True")
-        try:
-            result = bool(eval(expression, {"__builtins__": {}},  # noqa: S307
-                               {"input": input_for_eval, "value": value, "len": len}))
-        except Exception:
-            result = True
-        return {"_condition": result, "value": value}

@@ -99,10 +99,27 @@ const NODE_DEFS: NodeDef[] = [
   {
     type: 'agent', label: 'Agent', accent: C.blue, description: 'LLM agent call',
     pins: [
+      { id: 'exec_in',      label: '',        color: C.white,  side: 'left',  kind: 'exec' },
+      { id: 'exec_out',     label: '',        color: C.white,  side: 'right', kind: 'exec' },
+      { id: 'data_agent',   label: 'agent',   color: C.cyan,   side: 'left',  kind: 'data' },
+      { id: 'data_context', label: 'context', color: C.blue,   side: 'left',  kind: 'data' },
+      { id: 'data_stream',  label: 'stream',  color: C.green,  side: 'right', kind: 'data' },
+    ],
+  },
+  {
+    type: 'forward', label: 'Forward', accent: C.purple, description: 'Stream to user',
+    pins: [
+      { id: 'exec_in',     label: '',       color: C.white,  side: 'left',  kind: 'exec' },
+      { id: 'exec_out',    label: '',       color: C.white,  side: 'right', kind: 'exec' },
+      { id: 'data_stream', label: 'stream', color: C.green,  side: 'left',  kind: 'data' },
+    ],
+  },
+  {
+    type: 'accumulate', label: 'Accumulate', accent: C.green, description: 'Stream to response',
+    pins: [
       { id: 'exec_in',       label: '',         color: C.white,  side: 'left',  kind: 'exec' },
       { id: 'exec_out',      label: '',         color: C.white,  side: 'right', kind: 'exec' },
-      { id: 'data_agent',    label: 'agent',    color: C.cyan,   side: 'left',  kind: 'data' },
-      { id: 'data_context',  label: 'context',  color: C.blue,   side: 'left',  kind: 'data' },
+      { id: 'data_stream',   label: 'stream',   color: C.green,  side: 'left',  kind: 'data' },
       { id: 'data_response', label: 'response', color: C.amber,  side: 'right', kind: 'data' },
     ],
   },
@@ -483,6 +500,14 @@ function ToolNode({ data, selected }: NodeProps) {
   return <NodeShell def={NODE_DEF_MAP['tool']} selected={selected} {...nodeProps(data)} />;
 }
 
+function ForwardNode({ data, selected }: NodeProps) {
+  return <NodeShell def={NODE_DEF_MAP['forward']} selected={selected} {...nodeProps(data)} />;
+}
+
+function AccumulateNode({ data, selected }: NodeProps) {
+  return <NodeShell def={NODE_DEF_MAP['accumulate']} selected={selected} {...nodeProps(data)} />;
+}
+
 function AppendNode({ data, selected }: NodeProps) {
   return <NodeShell def={NODE_DEF_MAP['append']} selected={selected} {...nodeProps(data)} />;
 }
@@ -498,6 +523,8 @@ function OutputNode({ data, selected }: NodeProps) {
 const nodeTypes: NodeTypes = {
   start: StartNode,
   agent: AgentNode,
+  forward: ForwardNode,
+  accumulate: AccumulateNode,
   tool: ToolNode,
   append: AppendNode,
   condition: ConditionNode,
@@ -605,9 +632,57 @@ interface ChatMessage {
   nodeLabel?: string;
 }
 
-function ChatBubble({ msg }: { msg: ChatMessage }) {
+function ChatBubble({ msg, streaming }: { msg: ChatMessage; streaming?: boolean }) {
   const isUser = msg.role === 'user';
   const isReasoning = msg.role === 'reasoning';
+  const [expanded, setExpanded] = useState(false);
+
+  if (isReasoning) {
+    const label = msg.nodeLabel ? `${msg.nodeLabel} thinking` : 'thinking';
+    const preview = msg.content.length > 80
+      ? msg.content.slice(0, 80) + '…'
+      : msg.content;
+    return (
+      <div style={{ display: 'flex', justifyContent: 'flex-start', padding: '2px 0' }}>
+        <div style={{
+          maxWidth: '85%', borderRadius: 6, overflow: 'hidden',
+          background: C.purple + '12', border: `1px solid ${C.purple}33`,
+        }}>
+          <div
+            onClick={() => !streaming && setExpanded(e => !e)}
+            style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              padding: '5px 10px', cursor: streaming ? 'default' : 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            <span style={{
+              fontSize: 8, color: C.purple, transition: 'transform .15s',
+              display: 'inline-block',
+              transform: expanded || streaming ? 'rotate(90deg)' : 'rotate(0deg)',
+            }}>&#9654;</span>
+            <span style={{ fontSize: 10, color: C.purple, fontWeight: 500 }}>{label}</span>
+            {!expanded && !streaming && (
+              <span style={{ fontSize: 10, color: C.purple + '88', fontStyle: 'italic', marginLeft: 2 }}>
+                {preview}
+              </span>
+            )}
+          </div>
+          {(expanded || streaming) && (
+            <div style={{
+              padding: '2px 10px 8px 22px',
+              fontSize: 10, lineHeight: '15px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+              color: C.purple + 'cc', fontStyle: 'italic',
+              maxHeight: 300, overflowY: 'auto',
+            }}>
+              {msg.content}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div style={{
       display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start',
@@ -616,15 +691,11 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
       <div style={{
         maxWidth: '85%', padding: '6px 10px', borderRadius: 6,
         fontSize: 11, lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-        background: isUser ? C.blue + '33' : isReasoning ? C.purple + '1a' : '#333',
-        color: isReasoning ? C.purple : C.text,
-        border: `1px solid ${isUser ? C.blue + '44' : isReasoning ? C.purple + '33' : C.border}`,
-        ...(isReasoning ? { fontStyle: 'italic', fontSize: 10 } : {}),
+        background: isUser ? C.blue + '33' : '#333',
+        color: C.text,
+        border: `1px solid ${isUser ? C.blue + '44' : C.border}`,
       }}>
         {msg.role === 'system' && <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>system</div>}
-        {isReasoning && <div style={{ fontSize: 9, color: C.purple, marginBottom: 2, fontStyle: 'normal' }}>
-          {msg.nodeLabel ? `${msg.nodeLabel} thinking` : 'thinking'}
-        </div>}
         {msg.role === 'assistant' && msg.nodeLabel && (
           <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>{msg.nodeLabel}</div>
         )}
@@ -694,23 +765,6 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
         <>
           {field('Agent', 'agent', { placeholder: 'default' })}
           {field('Prompt Template', 'prompt_template', { placeholder: '{{context}}', rows: 4 })}
-          <div style={{ marginBottom: 8 }}>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>Stream Mode</div>
-            <HStack gap={1}>
-              {['token', 'reasoning'].map(mode => (
-                <Button key={mode} size="xs" variant="outline" flex={1}
-                  bg={(data as any).stream_mode === mode || (!((data as any).stream_mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple + '33' : C.cyan + '33') : 'transparent'}
-                  borderColor={(data as any).stream_mode === mode || (!((data as any).stream_mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple : C.cyan) : C.border}
-                  color={(data as any).stream_mode === mode || (!((data as any).stream_mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple : C.cyan) : C.muted}
-                  onClick={() => onUpdate(node.id, { ...data, stream_mode: mode })}
-                  _hover={{ bg: '#333' }} fontSize="10px"
-                >{mode}</Button>
-              ))}
-            </HStack>
-            <Text fontSize="9px" color={C.muted} mt={1}>
-              token = visible reply, reasoning = thinking phase
-            </Text>
-          </div>
         </>
       )}
       {ntype === 'tool' && (
@@ -718,6 +772,25 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
           {field('Tool Name', 'tool', { placeholder: 'e.g. web.search' })}
           {field('Args (JSON)', 'args_json', { placeholder: '{"query": "{{input}}"}', rows: 3, mono: true })}
         </>
+      )}
+      {ntype === 'forward' && (
+        <div style={{ marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>Mode</div>
+          <HStack gap={1}>
+            {['token', 'reasoning'].map(mode => (
+              <Button key={mode} size="xs" variant="outline" flex={1}
+                bg={(data as any).mode === mode || (!((data as any).mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple + '33' : C.green + '33') : 'transparent'}
+                borderColor={(data as any).mode === mode || (!((data as any).mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple : C.green) : C.border}
+                color={(data as any).mode === mode || (!((data as any).mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple : C.green) : C.muted}
+                onClick={() => onUpdate(node.id, { ...data, mode })}
+                _hover={{ bg: '#333' }} fontSize="10px"
+              >{mode}</Button>
+            ))}
+          </HStack>
+          <Text fontSize="9px" color={C.muted} mt={1}>
+            token = visible reply, reasoning = thinking bubble
+          </Text>
+        </div>
       )}
       {ntype === 'condition' && (
         <>
@@ -1046,7 +1119,7 @@ const WorkflowEditor: FC = () => {
           setStreamingNodeLabel(currentNodeLabel);
           setRunLog(p => [...p, `  \u2192 ${currentNodeLabel} [${data.type}]`]);
 
-          if (data.type === 'agent') {
+          if (data.type === 'forward') {
             accTokens = '';
             accReasoning = '';
             setStreamingText('');
@@ -1067,7 +1140,7 @@ const WorkflowEditor: FC = () => {
           const pv = data.output_preview ? `: ${data.output_preview.slice(0, 120)}` : '';
           setRunLog(p => [...p, `  \u2713 ${data.node_id}${pv}`]);
 
-          if (data.type === 'agent') {
+          if (data.type === 'forward') {
             if (accReasoning) {
               finishedMessages.push({
                 role: 'reasoning', content: accReasoning,
@@ -1369,7 +1442,7 @@ const WorkflowEditor: FC = () => {
               <ChatBubble key={i} msg={msg} />
             ))}
             {isRunning && streamingReasoning && (
-              <ChatBubble msg={{
+              <ChatBubble streaming msg={{
                 role: 'reasoning', content: streamingReasoning + '\u2588',
                 nodeLabel: streamingNodeLabel,
               }} />

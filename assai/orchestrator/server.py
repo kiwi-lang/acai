@@ -543,6 +543,12 @@ def create_router(config: AssaiConfig | None = None,
                 continue
         return results
 
+    @router.get("/workflows/node-types")
+    def get_node_types():
+        """Return all registered node type definitions (pins, colors, etc.)."""
+        from assai.tasks.nodes import all_types
+        return [nt.to_dict() for nt in all_types()]
+
     @router.get("/workflows")
     def list_workflows():
         user_wfs = _scan_wf_dir(workflows_dir, builtin=False)
