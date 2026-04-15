@@ -26,16 +26,16 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response, StreamingResponse
 
-from assai.core.compat import SocketIO, emit
+from assai.orchestrator.compat import SocketIO, emit
 
-from assai.core.llm import (
+from assai.worker.llm import (
     ContentToken, LLMServer, LLMServerError, ReasoningToken, StreamDone,
     ToolCallDelta, create_llm,
 )
-from assai.core.tools import ToolRegistry, discover_tools
+from assai.orchestrator.tools import ToolRegistry, discover_tools
 
 if TYPE_CHECKING:
-    from assai.core.config import AssaiConfig
+    from assai.orchestrator.config import AssaiConfig
 
 log = logging.getLogger(__name__)
 
@@ -107,7 +107,7 @@ def create_worker_router(
         )
 
         if isinstance(provider_override, dict) and provider_override.get("endpoint"):
-            from assai.core.config import ProviderConfig
+            from assai.orchestrator.config import ProviderConfig
             override_cfg = ProviderConfig.from_dict(provider_override)
             llm_cfg = override_cfg
             use_local = False
@@ -198,7 +198,7 @@ def create_worker_router(
 
     @router.post("/switch-model")
     async def switch_model(request: Request):
-        from assai.core.config import ProviderConfig
+        from assai.orchestrator.config import ProviderConfig
 
         data = await _json_body(request)
         new_prov = ProviderConfig.from_dict(data)
@@ -349,7 +349,7 @@ class HealthReporter:
 
     def _init_observer(self) -> None:
         try:
-            from assai.core.system_monitor import throttled_monitor
+            from assai.worker.system_monitor import throttled_monitor
             self._observer = throttled_monitor()
         except Exception:
             log.debug("system_monitor not available for health reporter")
@@ -462,7 +462,7 @@ def _setup_telemetry(socketio: SocketIO):
     def _init_observer():
         nonlocal _observer
         try:
-            from assai.core.system_monitor import throttled_monitor
+            from assai.worker.system_monitor import throttled_monitor
             _observer = throttled_monitor()
             log.info("system monitor initialized")
         except Exception:

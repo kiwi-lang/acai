@@ -19,11 +19,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
-from assai.core.agent_store import AgentDef, AgentStore
-from assai.core.chat import ChatStore
-from assai.core.config import AssaiConfig
-from assai.core.load_balancer import LoadBalancer
-from assai.core.stream import StreamTracker
+from assai.orchestrator.agent_store import AgentDef, AgentStore
+from assai.orchestrator.chat import ChatStore
+from assai.orchestrator.config import AssaiConfig
+from assai.orchestrator.load_balancer import LoadBalancer
+from assai.orchestrator.stream import StreamTracker
 
 # ======================================================================
 # Mock worker application

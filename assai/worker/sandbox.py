@@ -13,7 +13,7 @@ import time
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from assai.core.agent_store import SandboxConfig
+    from assai.orchestrator.agent_store import SandboxConfig
 
 log = logging.getLogger(__name__)
 

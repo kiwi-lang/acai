@@ -30,7 +30,7 @@ class Orchestrator(Command):
         config, _ = setup(args)
 
         from fastapi import FastAPI
-        from assai.core.server import routes
+        from assai.orchestrator.server import routes
 
         if args.debug:
             config.dump_rendered_request = True

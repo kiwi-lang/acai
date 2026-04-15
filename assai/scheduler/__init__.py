@@ -14,7 +14,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from assai.core.config import ProviderConfig
+    from assai.orchestrator.config import ProviderConfig
 
 __all__ = ["ProviderScheduler"]
 

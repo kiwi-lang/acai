@@ -12,10 +12,10 @@ import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from assai.core.agent_store import AgentStore
-    from assai.core.chat import ChatStore
-    from assai.core.config import AssaiConfig
-    from assai.core.load_balancer import WorkerInfo
+    from assai.orchestrator.agent_store import AgentStore
+    from assai.orchestrator.chat import ChatStore
+    from assai.orchestrator.config import AssaiConfig
+    from assai.orchestrator.load_balancer import WorkerInfo
 
 log = logging.getLogger(__name__)
 
@@ -79,7 +79,7 @@ class UberRouter:
 
         Returns ``{"conversation": "<id>", "is_new": bool}``.
         """
-        from assai.core.iterator import AsyncSSEIterator
+        from assai.orchestrator.iterator import AsyncSSEIterator
 
         catalogue = self._build_catalogue()
         log.info(

@@ -76,7 +76,7 @@ class TestThinkGraph:
         self, load_balancer, chat_store, graph_deps,
     ):
         """Acc captures reasoning text correctly across the stream."""
-        from assai.core.graph import Acc
+        from assai.tasks.graph import Acc
 
         conv = chat_store.create(title="acc test")
         chat_store.append(conv.id, {"role": "user", "content": "think about it"})

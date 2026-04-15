@@ -1,7 +1,7 @@
 """Task management tools — lets agents create and manipulate tasks.
 
 Job metadata (project, conversation, …) and the orchestrator client
-are available via :func:`assai.core.context.current_context`.
+are available via :func:`assai.orchestrator.context.current_context`.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import logging
 import requests as http
 from dataclasses import dataclass
 
-from assai.core.context import current_context, current_client
+from assai.orchestrator.context import current_context, current_client
 
 @dataclass
 class Task:

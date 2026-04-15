@@ -48,7 +48,7 @@ class Serve(Command):
         provider = config.local_provider() or config.active_provider()
 
         if args.model:
-            from assai.core.config import _model_to_slug
+            from assai.orchestrator.config import _model_to_slug
             provider.model = args.model
             provider.slug = _model_to_slug(args.model)
         if args.backend:
@@ -59,7 +59,7 @@ class Serve(Command):
         if args.launch_template:
             provider.launch_template = args.launch_template
 
-        from assai.core.llm import LLMServer, LLMServerError
+        from assai.worker.llm import LLMServer, LLMServerError
 
         server = LLMServer(provider, workspace=config.workspace)
 

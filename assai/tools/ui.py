@@ -1,7 +1,7 @@
 """UI tools — lets the LLM push visual feedback to the user's browser.
 
 The orchestrator client is obtained from the worker context
-(see :mod:`assai.core.context`).
+(see :mod:`assai.orchestrator.context`).
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import json
 import logging
 from typing import Optional
 
-from assai.core.context import current_client
+from assai.orchestrator.context import current_client
 
 log = logging.getLogger(__name__)
 

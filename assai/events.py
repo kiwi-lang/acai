@@ -1,3 +1,3 @@
-"""Re-export events from assai.core.events for convenience."""
+"""Re-export events from assai.orchestrator.events for convenience."""
 
-from assai.core.events import Event, EventBus, EventKind  # noqa: F401
+from assai.orchestrator.events import Event, EventBus, EventKind  # noqa: F401

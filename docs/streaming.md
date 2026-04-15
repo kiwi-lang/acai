@@ -22,26 +22,26 @@ Overview
 Components
 ----------
 
-**Worker** (``assai/core/worker.py``)
+**Worker** (``assai/worker/app.py``)
     Hosts the ``POST /worker/llm/complete`` endpoint that calls the
     local LLM and streams SSE events.  Also hosts ``POST /tools/call``
     for tool execution.  Workers register with the ``LoadBalancer`` and
     are acquired by the orchestrator on demand.
 
-**TaskGraph** (``assai/core/graph.py``)
+**TaskGraph** (``assai/tasks/graph.py``)
     The orchestrator-side execution engine.  ``dispatch()`` opens an
     ``AsyncSSEIterator`` to the worker's ``/llm/complete`` endpoint,
     consumes SSE events, pushes them to the ``StreamTracker``, and
     yields them as dicts.  ``_run_with_tools()`` wraps dispatch with
     a tool-call follow-up loop.
 
-**StreamTracker** (``assai/core/stream.py``)
+**StreamTracker** (``assai/orchestrator/stream.py``)
     A thread-safe pub-sub hub living in the orchestrator process.  Each
     stream (keyed by conversation ID) has a list of subscriber
     ``Queue`` objects.  ``push(stream_id, event)`` fans out to all
     subscribers.  ``subscribe(stream_id)`` returns a new queue.
 
-**SSE endpoint** (``GET /stream/<stream_id>`` in ``assai/core/server.py``)
+**SSE endpoint** (``GET /stream/<stream_id>`` in ``assai/orchestrator/server.py``)
     UI clients can subscribe to ongoing streams via this endpoint for
     reconnection or background-task monitoring.  The endpoint subscribes
     to the ``StreamTracker``, enters a blocking loop on the queue, and

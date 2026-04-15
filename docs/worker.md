@@ -1,7 +1,7 @@
 Worker
 ======
 
-The worker (``assai/core/worker.py`` + ``assai/core/llm.py``) is the
+The worker (``assai/worker/app.py`` + ``assai/worker/llm.py``) is the
 execution engine.  It hosts the LLM, runs tools, and streams results
 back to the orchestrator.
 

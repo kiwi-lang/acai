@@ -47,7 +47,7 @@ define the same agent name, the workspace version wins.
 AgentDef
 --------
 
-Dataclass defined in ``assai/core/agent_store.py``.  Key fields:
+Dataclass defined in ``assai/orchestrator/agent_store.py``.  Key fields:
 
 ================= ====================================================
 Field             Description
@@ -71,7 +71,7 @@ Field             Description
 AgentStore
 ----------
 
-``AgentStore`` (``assai/core/agent_store.py``) loads agent definitions:
+``AgentStore`` (``assai/orchestrator/agent_store.py``) loads agent definitions:
 
 ``get(name) -> AgentDef | None``
     Tries ``<workspace>/agents/<name>/definition.json`` first, then

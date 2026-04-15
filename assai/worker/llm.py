@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Generator
 import requests
 
 if TYPE_CHECKING:
-    from assai.core.config import ProviderConfig
+    from assai.orchestrator.config import ProviderConfig
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ class LLMServer:
 
         self._kill_stale_lock()
 
-        from assai.core.env import build_env
+        from assai.orchestrator.env import build_env
 
         cmd = self.config.build_command()
         env = build_env()

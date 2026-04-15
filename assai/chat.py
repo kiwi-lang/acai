@@ -1,3 +1,3 @@
-"""Re-export chat from assai.core.chat for convenience."""
+"""Re-export chat from assai.orchestrator.chat for convenience."""
 
-from assai.core.chat import ChatStore, ConversationMeta  # noqa: F401
+from assai.orchestrator.chat import ChatStore, ConversationMeta  # noqa: F401

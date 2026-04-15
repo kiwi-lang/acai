@@ -36,12 +36,12 @@ from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from assai.core.agent_store import AgentDef, AgentStore
-    from assai.core.chat import ChatStore
-    from assai.core.config import AssaiConfig
-    from assai.core.load_balancer import WorkerInfo
-    from assai.core.projects import ProjectStore
-    from assai.core.stream import StreamTracker
+    from assai.orchestrator.agent_store import AgentDef, AgentStore
+    from assai.orchestrator.chat import ChatStore
+    from assai.orchestrator.config import AssaiConfig
+    from assai.orchestrator.load_balancer import WorkerInfo
+    from assai.orchestrator.projects import ProjectStore
+    from assai.orchestrator.stream import StreamTracker
 
 log = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ class TaskGraph:
 
         Returns a hydrated payload dict ready for ``dispatch()``.
         """
-        from assai.core.agent_store import hydrate_task, resolve_task
+        from assai.orchestrator.agent_store import hydrate_task, resolve_task
 
         agent_def = self.agent(agent_name) or self.agent("default")
         tool_defs, tools_desc = self._resolve_tools(agent_def)
@@ -290,7 +290,7 @@ class TaskGraph:
         **not** yielded — use ``run()`` for graph-level completion.
         """
         import aiohttp
-        from assai.core.iterator import AsyncSSEIterator
+        from assai.orchestrator.iterator import AsyncSSEIterator
 
         url = f"{self.worker.url}/llm/complete"
 
@@ -343,7 +343,7 @@ class TaskGraph:
 
     async def dispatch_tool(self, tool_name: str, args: dict) -> str:
         """Dispatch a tool call to the worker and return the result text."""
-        from assai.core.dispatcher import dispatch_tool
+        from assai.orchestrator.dispatcher import dispatch_tool
         base_url = self.worker.url.rsplit("/worker", 1)[0]
         ctx: dict = {
             "conversation": self.conversation,

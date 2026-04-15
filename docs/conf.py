@@ -37,7 +37,7 @@ src_path = os.path.abspath(os.path.join(docs_src_path, ".."))
 sys.path.insert(0, src_path)
 
 
-import assai.core  # noqa
+import assai.orchestrator  # noqa
 
 # -- General configuration ------------------------------------------------
 
@@ -64,9 +64,9 @@ autodoc_inherit_docstrings = True
 
 # General information about the project.
 project = "assai"
-_full_version = assai.core.__version__
-author = assai.core.__author__
-copyright = assai.core.__copyright__
+_full_version = assai.orchestrator.__version__
+author = assai.orchestrator.__author__
+copyright = assai.orchestrator.__copyright__
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -221,7 +221,7 @@ texinfo_documents = [
         "assai Documentation",
         author,
         "assai",
-        assai.core.__descr__,
+        assai.orchestrator.__descr__,
         "Miscellaneous",
     ),
 ]

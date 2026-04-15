@@ -22,7 +22,7 @@ from assai.retired import Agent, load_prompt
 from assai.events import EventKind
 
 if TYPE_CHECKING:
-    from assai.core.llm import LLM
+    from assai.worker.llm import LLM
     from assai.events import EventBus
 
 

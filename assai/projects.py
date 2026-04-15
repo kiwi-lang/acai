@@ -1,6 +1,6 @@
-"""Re-export projects from assai.core.projects for convenience."""
+"""Re-export projects from assai.orchestrator.projects for convenience."""
 
-from assai.core.projects import (  # noqa: F401
+from assai.orchestrator.projects import (  # noqa: F401
     Project,
     ProjectStore,
     clone,

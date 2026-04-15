@@ -24,7 +24,7 @@ from argklass import argument
 from argklass.cli import CommandLineInterface
 
 import assai.cli
-from assai.core.env import apply_env
+from assai.orchestrator.env import apply_env
 
 apply_env()
 
@@ -40,7 +40,7 @@ class CommonArguments:
 
 def setup(args):
     """Load config, create queue, return (config, queue)."""
-    from assai.core.config import AssaiConfig, load_config, apply_config
+    from assai.orchestrator.config import AssaiConfig, load_config, apply_config
     from assai.queue.work import WorkQueue
 
     level = logging.DEBUG if args.verbose else logging.INFO

@@ -1,4 +1,4 @@
-"""Tests for assai.core.load_balancer."""
+"""Tests for assai.orchestrator.load_balancer."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from assai.core.load_balancer import LoadBalancer, WorkerInfo, WorkerStatus
+from assai.orchestrator.load_balancer import LoadBalancer, WorkerInfo, WorkerStatus
 
 
 class TestLoadBalancerRegistration:

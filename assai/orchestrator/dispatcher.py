@@ -18,10 +18,10 @@ from typing import TYPE_CHECKING
 
 import aiohttp
 
-from assai.core.iterator import AsyncSSEIterator
+from assai.orchestrator.iterator import AsyncSSEIterator
 
 if TYPE_CHECKING:
-    from assai.core.stream import StreamTracker
+    from assai.orchestrator.stream import StreamTracker
 
 log = logging.getLogger(__name__)
 

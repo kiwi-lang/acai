@@ -28,7 +28,7 @@ class Tools(Command):
 
     @staticmethod
     def execute(args) -> int:
-        from assai.core.tools import discover_tools
+        from assai.orchestrator.tools import discover_tools
 
         registry = discover_tools()
         from assai.tools.meta import _configure as configure_meta_tools

@@ -7,7 +7,7 @@ import re
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from assai.core.tools import ToolRegistry
+    from assai.orchestrator.tools import ToolRegistry
 
 _registry: Optional["ToolRegistry"] = None
 
@@ -22,7 +22,7 @@ def _get_registry() -> "ToolRegistry":
     global _registry
     if _registry is not None:
         return _registry
-    from assai.core.tools import discover_tools
+    from assai.orchestrator.tools import discover_tools
 
     return discover_tools()
 

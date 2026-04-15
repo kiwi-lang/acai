@@ -24,16 +24,16 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response, StreamingResponse
 
-from assai.core.compat import SocketIO, join_room, leave_room
+from assai.orchestrator.compat import SocketIO, join_room, leave_room
 
-from assai.core.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
-from assai.core.load_balancer import LoadBalancer
-from assai.core.stream import StreamTracker
-from assai.core.chat import ChatStore
-from assai.core.config import (
+from assai.orchestrator.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
+from assai.orchestrator.load_balancer import LoadBalancer
+from assai.orchestrator.stream import StreamTracker
+from assai.orchestrator.chat import ChatStore
+from assai.orchestrator.config import (
     AssaiConfig, ProviderConfig, load_config, load_providers, save_providers,
 )
-from assai.core.projects import Project, ProjectStore, scaffold, clone
+from assai.orchestrator.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
 from assai.tasks import ConverseGraph, ThinkGraph
 from assai.tasks.uber import UberRouter
@@ -239,7 +239,7 @@ def create_router(config: AssaiConfig | None = None,
 
     uber_router = UberRouter(chat=chat, agent_store=agent_store, config=config)
 
-    from assai.core.tools import discover_tools
+    from assai.orchestrator.tools import discover_tools
     tool_registry = discover_tools()
     from assai.tools.meta import _configure as configure_meta_tools
 
@@ -958,7 +958,7 @@ def create_router(config: AssaiConfig | None = None,
                 setattr(prov, key, val)
 
         if prov.model and not prov.slug:
-            from assai.core.config import _model_to_slug
+            from assai.orchestrator.config import _model_to_slug
             prov.slug = _model_to_slug(prov.model)
 
         save_providers(config.workspace, config.providers)
@@ -1143,7 +1143,7 @@ def create_router(config: AssaiConfig | None = None,
             if key in data:
                 val = data[key]
                 if key == "sandbox" and isinstance(val, dict):
-                    from assai.core.agent_store import SandboxConfig
+                    from assai.orchestrator.agent_store import SandboxConfig
                     val = SandboxConfig(**val)
                 if key == "max_iterations":
                     val = int(val)
@@ -1383,7 +1383,7 @@ def routes(app, config: AssaiConfig | None = None, prefix: str = "/agent",
 
     @app.on_event("startup")
     async def _capture_loop():
-        from assai.core.compat import _main_loop_ref
+        from assai.orchestrator.compat import _main_loop_ref
         _main_loop_ref[0] = asyncio.get_running_loop()
 
     return app, socketio, queue, events, chat, resolved_config, tracker, lb

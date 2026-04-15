@@ -1,6 +1,6 @@
-"""Re-export config from assai.core.config for convenience."""
+"""Re-export config from assai.orchestrator.config for convenience."""
 
-from assai.core.config import (  # noqa: F401
+from assai.orchestrator.config import (  # noqa: F401
     AssaiConfig,
     CuratorConfig,
     GitConfig,

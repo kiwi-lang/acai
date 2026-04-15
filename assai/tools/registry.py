@@ -1,5 +1,5 @@
-"""Backward-compatibility shim — canonical location is :mod:`assai.core.tools`."""
+"""Backward-compatibility shim — canonical location is :mod:`assai.orchestrator.tools`."""
 
-from assai.core.tools import ToolDef, ToolRegistry, discover_tools, tool  # noqa: F401
+from assai.orchestrator.tools import ToolDef, ToolRegistry, discover_tools, tool  # noqa: F401
 
 __all__ = ["ToolDef", "ToolRegistry", "discover_tools", "tool"]

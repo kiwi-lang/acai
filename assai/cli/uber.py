@@ -49,9 +49,9 @@ def create_app():
         config.dump_rendered_request = True
 
     from fastapi import FastAPI
-    from assai.core.load_balancer import LoadBalancer
-    from assai.core.server import routes
-    from assai.core.worker import (
+    from assai.orchestrator.load_balancer import LoadBalancer
+    from assai.orchestrator.server import routes
+    from assai.worker.app import (
         _setup_telemetry,
         create_worker_router,
     )

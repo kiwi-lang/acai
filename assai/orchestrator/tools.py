@@ -6,7 +6,7 @@ namespace (e.g. ``assai/tools/filesystem.py`` → namespace ``filesystem``).
 
 An optional ``@tool`` decorator can annotate constraints::
 
-    from assai.core.tools import tool
+    from assai.orchestrator.tools import tool
 
     @tool(gpu=True)
     def heavy_inference(prompt: str) -> str:
@@ -316,7 +316,7 @@ class ToolRegistry:
 
         @rt.post("/call")
         async def call_tool(request: Request):
-            from assai.core.context import WorkerContext, OrchestratorClient, set_context, reset_context
+            from assai.orchestrator.context import WorkerContext, OrchestratorClient, set_context, reset_context
 
             try:
                 body = await request.json()

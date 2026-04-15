@@ -38,7 +38,7 @@ class Worker(Command):
         if args.orchestrator_url:
             config.worker.orchestrator_url = args.orchestrator_url
 
-        from assai.core.worker import create_worker_app
+        from assai.worker.app import create_worker_app
 
         app, socketio, poller, llm_server = create_worker_app(config)
 

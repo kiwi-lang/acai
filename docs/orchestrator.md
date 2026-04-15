@@ -1,7 +1,7 @@
 Orchestrator
 ============
 
-The orchestrator (``assai/core/server.py``) is the central coordinator
+The orchestrator (``assai/orchestrator/server.py``) is the central coordinator
 of the system.  It acquires workers, dispatches LLM calls via
 ``TaskGraph`` subclasses, streams results to the frontend, and keeps
 the books.
@@ -99,7 +99,7 @@ Class                    Description
                          direct LLM call (not a TaskGraph subclass).
 ======================== =========================================
 
-The base ``TaskGraph`` (``assai/core/graph.py``) provides the building
+The base ``TaskGraph`` (``assai/tasks/graph.py``) provides the building
 blocks: ``prepare()``, ``dispatch()``, ``_run_with_tools()``, and
 shared helpers for error events, done events, and chat persistence.
 

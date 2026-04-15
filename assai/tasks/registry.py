@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from assai.core.graph import TaskGraph
-    from assai.core.load_balancer import WorkerInfo
+    from assai.tasks.graph import TaskGraph
+    from assai.orchestrator.load_balancer import WorkerInfo
 
 from assai.tasks.converse import ConverseGraph
 from assai.tasks.think import ThinkGraph

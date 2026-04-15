@@ -1,5 +1,5 @@
 import assai.plugins
-from assai.core import discover_plugins
+from assai.server.run import discover_plugins
 
 
 def test_plugins():

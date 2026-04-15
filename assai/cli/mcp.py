@@ -53,7 +53,7 @@ class Mcp(Command):
         import uvicorn
         from fastapi import FastAPI
 
-        from assai.core.tools import discover_tools
+        from assai.orchestrator.tools import discover_tools
 
         registry = discover_tools()
         from assai.tools.meta import _configure as configure_meta_tools

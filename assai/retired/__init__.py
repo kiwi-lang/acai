@@ -3,7 +3,7 @@
 .. deprecated::
     These legacy agent classes are kept for reference only.
     The current system uses the orchestrator work queue with
-    configurable agents (see assai.core.agent_store).
+    configurable agents (see assai.orchestrator.agent_store).
 """
 
 from __future__ import annotations

@@ -6,7 +6,7 @@ import logging
 import traceback as _tb
 from typing import AsyncIterator
 
-from assai.core.graph import Acc, TaskGraph
+from assai.tasks.graph import Acc, TaskGraph
 
 log = logging.getLogger(__name__)
 
