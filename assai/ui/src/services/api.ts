@@ -44,7 +44,7 @@ export class SSEStream {
     private listeners: Record<string, Array<(e: MessageEvent) => void>> = {};
     private _closed = false;
 
-    onerror: (() => void) | null = null;
+    onerror: ((reason?: string) => void) | null = null;
 
     constructor(response: Response) {
         if (!response.body) throw new Error('Response has no body');
@@ -58,8 +58,11 @@ export class SSEStream {
 
     close() {
         this._closed = true;
-        this.reader?.cancel();
+        this.onerror = null;
+        this.listeners = {};
+        const r = this.reader;
         this.reader = null;
+        r?.cancel().catch(() => {});
     }
 
     private async _pump() {
@@ -67,24 +70,29 @@ export class SSEStream {
         try {
             while (!this._closed && this.reader) {
                 const { done, value } = await this.reader.read();
-                if (done) break;
+                if (done || this._closed) break;
 
                 buffer += this.decoder.decode(value, { stream: true });
                 const frames = buffer.split('\n\n');
                 buffer = frames.pop()!;
 
                 for (const frame of frames) {
-                    if (!frame.trim()) continue;
+                    if (!frame.trim() || this._closed) continue;
                     this._dispatch(frame);
                 }
             }
-        } catch {
-            // stream closed or network error
+        } catch (err) {
+            if (this._closed) return;
+            const reason = err instanceof Error ? err.message : 'Connection lost';
+            this._dispatch(`event: error\ndata: ${JSON.stringify({ message: reason })}`);
+            this.onerror?.(reason);
+            return;
         }
-        if (!this._closed && this.onerror) this.onerror();
+        if (!this._closed) this.onerror?.('Stream ended unexpectedly');
     }
 
     private _dispatch(frame: string) {
+        if (this._closed) return;
         let eventType = 'message';
         const dataLines: string[] = [];
 

@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
-import { uberConverse, listProviders, listAgents } from '../services/api';
+import { uberConverse, listProviders, listAgents, type SSEStream } from '../services/api';
 import type { AgentDef, Provider } from '../services/types';
 
 const SendIcon = ({ size = 20 }: { size?: number }) => (
@@ -32,11 +32,13 @@ const Home = () => {
     const [thinkingMode, setThinkingMode] = useState<ThinkingMode>('native');
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const routeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const streamRef = useRef<SSEStream | null>(null);
 
     useEffect(() => {
         document.title = 'ASSAI';
         listProviders().then(setProviders).catch(() => {});
         listAgents().then(setAgents).catch(() => {});
+        return () => { streamRef.current?.close(); };
     }, []);
 
     const clearRouteTimer = useCallback(() => {
@@ -94,28 +96,45 @@ const Home = () => {
 
         setIsRouting(true);
         try {
+            streamRef.current?.close();
             const resp = await uberConverse(text, '', selectedAgent);
             const stream = resp.stream;
+            streamRef.current = stream;
 
             stream.addEventListener('route', (e: MessageEvent) => {
                 const data = JSON.parse(e.data);
                 stream.close();
+                streamRef.current = null;
+                if (data.is_new) {
+                    goToConversation(data.conversation, text);
+                    return;
+                }
                 setRoutePending({
                     conversation: data.conversation,
-                    is_new: data.is_new,
+                    is_new: false,
                     title: data.title || '',
                     message: text,
                     countdown: 5,
                 });
             });
             stream.addEventListener('error', (e: MessageEvent) => {
+                let errorMsg = 'Routing failed';
+                try {
+                    const data = JSON.parse(e.data);
+                    errorMsg = data.message || data.error || errorMsg;
+                } catch { /* raw event */ }
+                console.error('[UberRoute]', errorMsg);
                 stream.close();
+                streamRef.current = null;
                 setIsRouting(false);
             });
-            stream.onerror = () => {
+            stream.onerror = (reason) => {
+                console.error('[UberRoute]', reason || 'Connection lost');
+                streamRef.current = null;
                 setIsRouting(false);
             };
-        } catch {
+        } catch (err) {
+            console.error('[UberRoute]', err instanceof Error ? err.message : err);
             setIsRouting(false);
         }
     };

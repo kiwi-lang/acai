@@ -7,6 +7,7 @@ export interface AgentMessage {
     name?: string;
     isStreaming?: boolean;
     taskId?: string;
+    error?: string;
 }
 
 export interface StreamChunk {

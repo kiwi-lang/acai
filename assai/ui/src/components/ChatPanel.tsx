@@ -278,9 +278,11 @@ const ChatPanel = ({
     }, []);
 
     const closeEventSource = useCallback(() => {
-        if (eventSourceRef.current) {
-            eventSourceRef.current.close();
+        const es = eventSourceRef.current;
+        if (es) {
             eventSourceRef.current = null;
+            es.onerror = null;
+            es.close();
         }
     }, []);
 
@@ -356,11 +358,19 @@ const ChatPanel = ({
 
         es.addEventListener('tool_start', (e: MessageEvent) => {
             const data = JSON.parse(e.data);
-            setMessages(prev => [...prev, {
-                role: 'tool_call' as const,
-                content: JSON.stringify({ tool: data.tool_name, args: data.args }, null, 2),
-                name: data.tool_name,
-            }]);
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.isStreaming) {
+                    copy[copy.length - 1] = { ...last, isStreaming: false };
+                }
+                copy.push({
+                    role: 'tool_call' as const,
+                    content: JSON.stringify({ tool: data.tool_name, args: data.args }, null, 2),
+                    name: data.tool_name,
+                });
+                return copy;
+            });
         });
 
         es.addEventListener('tool_end', (e: MessageEvent) => {
@@ -373,14 +383,9 @@ const ChatPanel = ({
         });
 
         es.addEventListener('done', () => {
-            setMessages(prev => {
-                const copy = [...prev];
-                const last = copy[copy.length - 1];
-                if (last && last.isStreaming) {
-                    copy[copy.length - 1] = { ...last, isStreaming: false };
-                }
-                return copy;
-            });
+            setMessages(prev =>
+                prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m),
+            );
             activeTaskRef.current = null;
             setIsLoading(false);
             closeEventSource();
@@ -395,14 +400,16 @@ const ChatPanel = ({
                 errorMsg = data.message || data.error || errorMsg;
                 tracebackStr = data.traceback || '';
             } catch { /* raw error event from EventSource */ }
-            const fullError = tracebackStr
-                ? `Error: ${errorMsg}\n\n\`\`\`\n${tracebackStr}\`\`\``
-                : `Error: ${errorMsg}`;
+            const detail = tracebackStr
+                ? `${errorMsg}\n\n\`\`\`\n${tracebackStr}\`\`\``
+                : errorMsg;
             setMessages(prev => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
                 if (last && last.isStreaming) {
-                    copy[copy.length - 1] = { ...last, content: fullError, isStreaming: false };
+                    copy[copy.length - 1] = { ...last, isStreaming: false, error: detail };
+                } else {
+                    copy.push({ role: 'assistant', content: '', error: detail });
                 }
                 return copy;
             });
@@ -411,7 +418,18 @@ const ChatPanel = ({
             closeEventSource();
         });
 
-        es.onerror = () => {
+        es.onerror = (evt?: Event | string) => {
+            const reason = typeof evt === 'string' ? evt : 'Connection lost';
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.isStreaming) {
+                    copy[copy.length - 1] = { ...last, content: last.content || '', isStreaming: false, error: reason };
+                } else {
+                    copy.push({ role: 'assistant', content: '', error: reason });
+                }
+                return copy;
+            });
             activeTaskRef.current = null;
             setIsLoading(false);
             closeEventSource();
@@ -428,6 +446,69 @@ const ChatPanel = ({
 
     const autoSendRef = useRef(autoSendMessage);
 
+    const loadConversation = useCallback(async (convId: string, pending?: string, signal?: { cancelled: boolean }) => {
+        let history: AgentMessage[] = [];
+        try {
+            const resp = await getHistory(convId);
+            if (signal?.cancelled) return;
+            if (pending) autoSendRef.current = undefined;
+            history = resp.messages;
+
+            if (resp.streaming) {
+                const tid = resp.streaming.task_id;
+                activeTaskRef.current = tid;
+                setIsLoading(true);
+                setMessages([
+                    ...history,
+                    { role: 'assistant', content: resp.streaming!.partial, isStreaming: true, taskId: tid },
+                ]);
+                openEventSource(convId);
+                return;
+            }
+        } catch (err) {
+            if (signal?.cancelled) return;
+            const reason = err instanceof Error ? err.message : 'Failed to load conversation';
+            setMessages([{ role: 'assistant', content: '', error: `Could not load history: ${reason}` }]);
+            setIsLoading(false);
+            return;
+        }
+
+        if (!pending) {
+            setMessages(history);
+            return;
+        }
+
+        setMessages([...history, { role: 'user', content: pending }]);
+        setIsLoading(true);
+
+        try {
+            const think = initialThinkingMode ?? (initialThinking === false ? 'off' : 'native');
+            if (think === 'emulated') {
+                const r = await thinkConverse(pending, convId, project || '', '',
+                    initialProviderRef.current, initialAgentRef.current);
+                if (signal?.cancelled) return;
+                activeTaskRef.current = r.task_id;
+                setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true, taskId: r.task_id }]);
+                openEventSource(convId);
+            } else {
+                const r = await converse(pending, convId, project || '', '',
+                    initialProviderRef.current, initialAgentRef.current,
+                    think === 'native' ? true : undefined);
+                if (signal?.cancelled) { r.stream.close(); return; }
+                setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
+                attachListeners(r.stream);
+            }
+        } catch (err) {
+            if (signal?.cancelled) return;
+            const detail = err instanceof Error ? err.message : String(err);
+            setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
+            setIsLoading(false);
+        }
+    }, [openEventSource, attachListeners, initialThinkingMode, initialThinking, project]);
+
+    const loadConversationRef = useRef(loadConversation);
+    loadConversationRef.current = loadConversation;
+
     useEffect(() => {
         convIdRef.current = conversationId;
 
@@ -435,6 +516,8 @@ const ChatPanel = ({
             justCreatedRef.current = false;
             return;
         }
+
+        const signal = { cancelled: false };
 
         setSelectedProvider(initialProviderRef.current);
         setSelectedAgent(initialAgentRef.current);
@@ -446,26 +529,12 @@ const ChatPanel = ({
         activeTaskRef.current = null;
         closeEventSource();
 
-        if (!conversationId) return;
+        if (!conversationId) return () => { signal.cancelled = true; };
 
-        getHistory(conversationId).then(resp => {
-            setMessages(resp.messages);
-            if (resp.streaming) {
-                const tid = resp.streaming.task_id;
-                activeTaskRef.current = tid;
-                setIsLoading(true);
-                setMessages(prev => [
-                    ...prev,
-                    { role: 'assistant', content: resp.streaming!.partial, isStreaming: true, taskId: tid },
-                ]);
-                openEventSource(conversationId);
-            } else if (autoSendRef.current) {
-                const msg = autoSendRef.current;
-                autoSendRef.current = undefined;
-                setTimeout(() => handleSendRef.current(msg), 0);
-            }
-        }).catch(() => {});
-    }, [conversationId, closeEventSource, openEventSource, clearRouteTimer]);
+        loadConversationRef.current(conversationId, autoSendRef.current, signal);
+
+        return () => { signal.cancelled = true; };
+    }, [conversationId, closeEventSource, clearRouteTimer]);
 
     useEffect(() => {
         if (conversationId) joinConversation(conversationId);
@@ -535,8 +604,8 @@ const ChatPanel = ({
             ]);
             attachListeners(resp.stream);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Request failed';
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            const detail = err instanceof Error ? err.message : String(err);
+            setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
     }, [project, selectedProvider, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer]);
@@ -562,8 +631,8 @@ const ChatPanel = ({
             ]);
             attachListeners(resp.stream);
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Request failed';
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            const detail = err instanceof Error ? err.message : String(err);
+            setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
     }, [routePending, project, selectedProvider, selectedAgent, thinkingMode, attachListeners, clearRouteTimer]);
@@ -616,8 +685,8 @@ const ChatPanel = ({
                 attachListeners(resp.stream);
             }
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Request failed';
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            const detail = err instanceof Error ? err.message : String(err);
+            setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
     }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, openEventSource, attachListeners]);
@@ -670,14 +739,11 @@ const ChatPanel = ({
                 attachListeners(resp.stream);
             }
         } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Request failed';
-            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            const detail = err instanceof Error ? err.message : String(err);
+            setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
     };
-
-    const handleSendRef = useRef(handleSend);
-    handleSendRef.current = handleSend;
 
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -732,18 +798,52 @@ const ChatPanel = ({
                                 if (prev) return null;
                             }
 
+                            const isSameTurnAsAssistant = (idx: number) => {
+                                for (let j = idx - 1; j >= 0; j--) {
+                                    const r = messages[j].role;
+                                    if (r === 'tool_call' || r === 'tool_result') continue;
+                                    return r === 'assistant';
+                                }
+                                return false;
+                            };
+
+                            const isToolContinuation = msg.role === 'assistant' && i > 0 &&
+                                ['tool_call', 'tool_result'].includes(messages[i - 1]?.role);
+
                             if (msg.role === 'tool_call') {
                                 const result = messages.slice(i + 1)
                                     .find(m => m.role === 'tool_result' && m.name === msg.name);
+                                const showBadge = !isSameTurnAsAssistant(i);
                                 return (
                                     <Box key={i} w="100%" bg="var(--bg-card)" py={compact ? 2 : 3} px={compact ? 3 : 4}>
                                         <HStack maxW={maxW} mx={mx} align="flex-start" gap={compact ? 2 : 4}>
-                                            <AssistantIcon />
+                                            {showBadge ? <AssistantIcon /> : <Box w="28px" flexShrink={0} />}
                                             <VStack align="flex-start" flex={1} gap={1}>
-                                                <Text fontWeight="semibold" fontSize={compact ? 'xs' : 'sm'} color="var(--text-assistant-label)">
-                                                    Agent
-                                                </Text>
+                                                {showBadge && (
+                                                    <Text fontWeight="semibold" fontSize={compact ? 'xs' : 'sm'} color="var(--text-assistant-label)">
+                                                        Agent
+                                                    </Text>
+                                                )}
                                                 <ToolCallCard callMsg={msg} resultMsg={result} />
+                                            </VStack>
+                                        </HStack>
+                                    </Box>
+                                );
+                            }
+
+                            if (isToolContinuation) {
+                                return (
+                                    <Box key={i} w="100%" bg="var(--bg-card)"
+                                        py={compact ? 3 : 6} px={compact ? 3 : 4}>
+                                        <HStack maxW={maxW} mx={mx} align="flex-start" gap={compact ? 2 : 4}>
+                                            <Box w="28px" flexShrink={0} />
+                                            <VStack align="flex-start" flex={1} gap={1}>
+                                                <Markdown content={msg.content} fontSize={compact ? 'sm' : 'md'} />
+                                                {msg.isStreaming && (
+                                                    <Box as="span" display="inline-block" w="2px" h="1em"
+                                                        bg="var(--cursor-blink)" ml={0.5}
+                                                        animation="blink 1s step-start infinite" />
+                                                )}
                                             </VStack>
                                         </HStack>
                                     </Box>
@@ -774,6 +874,13 @@ const ChatPanel = ({
                                                 <Box as="span" display="inline-block" w="2px" h="1em"
                                                     bg="var(--cursor-blink)" ml={0.5}
                                                     animation="blink 1s step-start infinite" />
+                                            )}
+                                            {msg.error && (
+                                                <Box mt={1} p={2} bg="red.900/20" borderLeft="3px solid" borderColor="red.400" borderRadius="md">
+                                                    <Text fontSize="xs" color="red.300" fontWeight="semibold">
+                                                        Failed: {msg.error}
+                                                    </Text>
+                                                </Box>
                                             )}
                                             {showResend && (
                                                 <IconButton
