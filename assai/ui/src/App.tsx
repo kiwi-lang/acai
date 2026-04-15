@@ -13,6 +13,7 @@ import AgentsPage from './components/AgentsPage';
 import TasksPage from './components/TasksPage';
 import StatusPage from './components/StatusPage';
 import UberChat from './components/UberChat';
+import WorkflowEditor from './components/WorkflowEditor';
 import { ColorModeProvider } from './components/ui/color-mode';
 import { Toaster } from './components/ui/toaster';
 import { AgentSocketProvider } from './contexts/WebSocketContext';
@@ -35,6 +36,7 @@ function App() {
               <Route path="/projects/:name" element={<ProjectView />} />
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/tasks" element={<TasksPage />} />
+              <Route path="/workflows" element={<WorkflowEditor />} />
               <Route path="/uber" element={<UberChat />} />
               <Route path="/status" element={<StatusPage />} />
               </Routes>

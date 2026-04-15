@@ -35,7 +35,7 @@ from assai.orchestrator.config import (
 )
 from assai.orchestrator.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
-from assai.tasks import ConverseGraph, ThinkGraph, UberGraph
+from assai.tasks import ConverseGraph, ThinkGraph, UberGraph, DynamicGraph
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
@@ -508,6 +508,184 @@ def create_router(config: AssaiConfig | None = None,
         return StreamingResponse(
             generate(),
             media_type="text/event-stream",
+        )
+
+    # ==================================================================
+    # Workflows — CRUD + execute
+    # ==================================================================
+
+    workflows_dir = os.path.join(config.workspace, "workflows")
+    os.makedirs(workflows_dir, exist_ok=True)
+
+    _builtin_wf_dir = os.path.join(os.path.dirname(__file__), os.pardir, "agents", "dynamic")
+    _builtin_wf_dir = os.path.normpath(_builtin_wf_dir)
+
+    def _scan_wf_dir(directory: str, builtin: bool) -> list[dict]:
+        results = []
+        if not os.path.isdir(directory):
+            return results
+        for fname in sorted(os.listdir(directory)):
+            if not fname.endswith(".json"):
+                continue
+            path = os.path.join(directory, fname)
+            try:
+                with open(path) as f:
+                    spec = json.load(f)
+                results.append({
+                    "id": spec.get("id", fname[:-5]),
+                    "name": spec.get("name", fname[:-5]),
+                    "description": spec.get("description", ""),
+                    "node_count": len(spec.get("nodes", [])),
+                    "edge_count": len(spec.get("edges", [])),
+                    "builtin": builtin,
+                })
+            except (json.JSONDecodeError, OSError):
+                continue
+        return results
+
+    @router.get("/workflows")
+    def list_workflows():
+        user_wfs = _scan_wf_dir(workflows_dir, builtin=False)
+        user_ids = {w["id"] for w in user_wfs}
+        builtin_wfs = [w for w in _scan_wf_dir(_builtin_wf_dir, builtin=True)
+                       if w["id"] not in user_ids]
+        return builtin_wfs + user_wfs
+
+    @router.get("/workflows/{workflow_id}")
+    def get_workflow(workflow_id: str):
+        user_path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        if os.path.isfile(user_path):
+            with open(user_path) as f:
+                spec = json.load(f)
+            spec["builtin"] = False
+            return spec
+        builtin_path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
+        if os.path.isfile(builtin_path):
+            with open(builtin_path) as f:
+                spec = json.load(f)
+            spec["builtin"] = True
+            return spec
+        return JSONResponse({"error": "not found"}, status_code=404)
+
+    @router.post("/workflows", status_code=201)
+    async def save_workflow(request: Request):
+        data = await _json_body(request)
+        wf_id = data.get("id", "").strip()
+        if not wf_id:
+            return JSONResponse({"error": "id is required"}, status_code=400)
+        data.setdefault("name", wf_id)
+        path = os.path.join(workflows_dir, f"{wf_id}.json")
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return data
+
+    @router.put("/workflows/builtin/{workflow_id}")
+    async def save_builtin_workflow(workflow_id: str, request: Request):
+        """Dev-mode: overwrite a builtin workflow JSON in-place."""
+        data = await _json_body(request)
+        data["id"] = workflow_id
+        data.setdefault("name", workflow_id)
+        path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
+        os.makedirs(_builtin_wf_dir, exist_ok=True)
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return data
+
+    @router.put("/workflows/{workflow_id}")
+    async def update_workflow(workflow_id: str, request: Request):
+        data = await _json_body(request)
+        data["id"] = workflow_id
+        data.setdefault("name", workflow_id)
+        path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        with open(path, "w") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        return data
+
+    @router.delete("/workflows/{workflow_id}")
+    def delete_workflow(workflow_id: str):
+        path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        if os.path.isfile(path):
+            os.remove(path)
+        return {"deleted": True}
+
+    @router.post("/workflows/{workflow_id}/run")
+    async def run_workflow(workflow_id: str, request: Request):
+        import traceback as _tb
+
+        path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        if not os.path.isfile(path):
+            path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "workflow not found"}, status_code=404)
+        with open(path) as f:
+            spec = json.load(f)
+
+        data = await _json_body(request)
+        message = data.get("message", "")
+        conversation_raw = data.get("conversation", "")
+
+        conversation_preview = ""
+        conversation_id = ""
+
+        if isinstance(conversation_raw, str) and conversation_raw.strip().startswith("["):
+            conversation_preview = conversation_raw
+        elif isinstance(conversation_raw, list):
+            conversation_preview = json.dumps(conversation_raw, ensure_ascii=False)
+        elif conversation_raw:
+            conversation_id = conversation_raw
+
+        if not conversation_id:
+            meta = chat.create(
+                title=f"Workflow: {spec.get('name', workflow_id)}"[:80],
+                agent="default",
+            )
+            conversation_id = meta.id
+
+        if message:
+            chat.append(conversation_id, {"role": "user", "content": message})
+
+        work = {
+            "message": message,
+            "conversation": conversation_id,
+            "conversation_preview": conversation_preview,
+            "workflow_spec": spec,
+            "stream_id": conversation_id,
+        }
+
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        async def generate():
+            yield _sse("meta", {"conversation": conversation_id})
+            try:
+                async with lb.acquire() as worker:
+                    graph = DynamicGraph.from_work(
+                        worker, work,
+                        agent_store=agent_store,
+                        chat=chat,
+                        config=config,
+                        tracker=tracker,
+                        projects=projects,
+                        tool_registry=tool_registry,
+                    )
+                    async for event in graph.run(work):
+                        yield _sse(
+                            event.get("event_type", "message"),
+                            event.get("data", {}),
+                        )
+            except TimeoutError:
+                yield _sse("error", {"message": "No worker available (timeout)."})
+            except Exception as exc:
+                log.exception("workflow run error")
+                yield _sse("error", {
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "traceback": _tb.format_exc(),
+                })
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"X-Conversation": conversation_id},
         )
 
     # ==================================================================

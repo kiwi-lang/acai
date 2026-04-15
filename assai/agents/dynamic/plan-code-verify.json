@@ -1,0 +1,26 @@
+{
+  "id": "plan-code-verify",
+  "name": "Plan → Code → Verify",
+  "description": "Three-agent pipeline: a planner outlines a solution, a coder writes it, and a verifier reviews the code.",
+  "nodes": [
+    { "id": "start", "type": "start", "position": { "x": 50, "y": 150 }, "data": { "label": "Start", "preview_message": "Build a fizzbuzz in Python" } },
+    { "id": "append", "type": "append", "position": { "x": 280, "y": 150 }, "data": { "label": "Build Context" } },
+    { "id": "planner", "type": "agent", "position": { "x": 510, "y": 100 }, "data": { "agent": "default", "label": "Planner", "prompt_template": "Create a plan for: {{context}}" } },
+    { "id": "coder", "type": "agent", "position": { "x": 740, "y": 100 }, "data": { "agent": "default", "label": "Coder", "prompt_template": "Write code based on this plan: {{context}}" } },
+    { "id": "verifier", "type": "agent", "position": { "x": 970, "y": 100 }, "data": { "agent": "default", "label": "Verifier", "prompt_template": "Review and verify this code: {{context}}" } },
+    { "id": "end", "type": "output", "position": { "x": 1200, "y": 150 }, "data": { "label": "Done" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start",    "target": "append",   "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e2", "source": "append",   "target": "planner",  "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e3", "source": "planner",  "target": "coder",    "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e4", "source": "coder",    "target": "verifier", "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e5", "source": "verifier", "target": "end",      "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "d1", "source": "start",    "target": "append",   "sourceHandle": "data_conversation","targetHandle": "data_a",         "type": "data" },
+    { "id": "d2", "source": "start",    "target": "append",   "sourceHandle": "data_message",     "targetHandle": "data_b",         "type": "data" },
+    { "id": "d3", "source": "append",   "target": "planner",  "sourceHandle": "data_result",      "targetHandle": "data_context",   "type": "data" },
+    { "id": "d4", "source": "planner",  "target": "coder",    "sourceHandle": "data_response",    "targetHandle": "data_context",   "type": "data" },
+    { "id": "d5", "source": "coder",    "target": "verifier", "sourceHandle": "data_response",    "targetHandle": "data_context",   "type": "data" },
+    { "id": "d6", "source": "verifier", "target": "end",      "sourceHandle": "data_response",    "targetHandle": "data_response",  "type": "data" }
+  ]
+}

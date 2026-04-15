@@ -1,0 +1,30 @@
+{
+  "id": "multi-source-merge",
+  "name": "Multi-Source Merge",
+  "description": "Runs two independent agents then appends their results for a final summary agent.",
+  "nodes": [
+    { "id": "start", "type": "start", "position": { "x": 50, "y": 200 }, "data": { "label": "Start", "preview_message": "Tell me about climate change" } },
+    { "id": "append_ctx", "type": "append", "position": { "x": 280, "y": 200 }, "data": { "label": "Build Context" } },
+    { "id": "researcher", "type": "agent", "position": { "x": 530, "y": 100 }, "data": { "agent": "default", "label": "Researcher", "prompt_template": "Research this topic: {{context}}" } },
+    { "id": "critic", "type": "agent", "position": { "x": 530, "y": 300 }, "data": { "agent": "default", "label": "Critic", "prompt_template": "Provide a critical perspective on: {{context}}" } },
+    { "id": "merge", "type": "append", "position": { "x": 780, "y": 200 }, "data": { "label": "Merge Results" } },
+    { "id": "summariser", "type": "agent", "position": { "x": 1030, "y": 200 }, "data": { "agent": "default", "label": "Summariser", "prompt_template": "Summarise these two perspectives:\n{{context}}" } },
+    { "id": "end", "type": "output", "position": { "x": 1280, "y": 200 }, "data": { "label": "Done" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start",      "target": "append_ctx",  "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e2", "source": "append_ctx", "target": "researcher",  "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e3", "source": "researcher", "target": "critic",      "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e4", "source": "critic",     "target": "merge",       "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e5", "source": "merge",      "target": "summariser",  "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e6", "source": "summariser", "target": "end",         "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "d1", "source": "start",      "target": "append_ctx",  "sourceHandle": "data_conversation","targetHandle": "data_a",         "type": "data" },
+    { "id": "d2", "source": "start",      "target": "append_ctx",  "sourceHandle": "data_message",     "targetHandle": "data_b",         "type": "data" },
+    { "id": "d3", "source": "append_ctx", "target": "researcher",  "sourceHandle": "data_result",      "targetHandle": "data_context",   "type": "data" },
+    { "id": "d4", "source": "append_ctx", "target": "critic",      "sourceHandle": "data_result",      "targetHandle": "data_context",   "type": "data" },
+    { "id": "d5", "source": "researcher", "target": "merge",       "sourceHandle": "data_response",    "targetHandle": "data_a",         "type": "data" },
+    { "id": "d6", "source": "critic",     "target": "merge",       "sourceHandle": "data_response",    "targetHandle": "data_b",         "type": "data" },
+    { "id": "d7", "source": "merge",      "target": "summariser",  "sourceHandle": "data_result",      "targetHandle": "data_context",   "type": "data" },
+    { "id": "d8", "source": "summariser", "target": "end",         "sourceHandle": "data_response",    "targetHandle": "data_response",  "type": "data" }
+  ]
+}

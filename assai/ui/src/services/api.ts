@@ -354,6 +354,85 @@ export async function listToolNamespaces(): Promise<ToolNamespace[]> {
     return request<ToolNamespace[]>('/tools/namespaces');
 }
 
+// Workflow types
+
+export interface WorkflowSummary {
+    id: string;
+    name: string;
+    description: string;
+    node_count: number;
+    edge_count: number;
+    builtin?: boolean;
+}
+
+export interface WorkflowSpec {
+    id: string;
+    name: string;
+    description: string;
+    builtin?: boolean;
+    nodes: Array<{
+        id: string;
+        type: string;
+        position: { x: number; y: number };
+        data: Record<string, unknown>;
+    }>;
+    edges: Array<{
+        id: string;
+        source: string;
+        target: string;
+        sourceHandle: string;
+        targetHandle: string;
+        type?: string;
+    }>;
+}
+
+// Workflows CRUD
+export async function listWorkflows(): Promise<WorkflowSummary[]> {
+    return request<WorkflowSummary[]>('/workflows');
+}
+
+export async function getWorkflow(id: string): Promise<WorkflowSpec> {
+    return request<WorkflowSpec>(`/workflows/${id}`);
+}
+
+export async function saveWorkflow(spec: WorkflowSpec): Promise<WorkflowSpec> {
+    return request<WorkflowSpec>('/workflows', {
+        method: 'POST',
+        body: JSON.stringify(spec),
+    });
+}
+
+export async function updateWorkflow(id: string, spec: WorkflowSpec): Promise<WorkflowSpec> {
+    return request<WorkflowSpec>(`/workflows/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(spec),
+    });
+}
+
+export async function deleteWorkflow(id: string): Promise<void> {
+    await request(`/workflows/${id}`, { method: 'DELETE' });
+}
+
+export async function runWorkflow(id: string, message = '', conversation = ''): Promise<Response> {
+    const response = await fetch(`${API_BASE}/workflows/${id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message, conversation }),
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return response;
+}
+
+export async function saveBuiltinWorkflow(id: string, spec: WorkflowSpec): Promise<WorkflowSpec> {
+    return request<WorkflowSpec>(`/workflows/builtin/${id}`, {
+        method: 'PUT',
+        body: JSON.stringify(spec),
+    });
+}
+
 // Uber conversation routing — returns SSE stream with route + done events
 export async function uberConverse(
     message: string,

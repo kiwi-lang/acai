@@ -1,0 +1,29 @@
+{
+  "id": "branch-by-length",
+  "name": "Branch by Length",
+  "description": "Uses a condition node to branch: short messages get a quick reply, long messages get a detailed analysis.",
+  "nodes": [
+    { "id": "start", "type": "start", "position": { "x": 50, "y": 180 }, "data": { "label": "Start", "preview_message": "Hi" } },
+    { "id": "append", "type": "append", "position": { "x": 280, "y": 180 }, "data": { "label": "Build Context" } },
+    { "id": "cond", "type": "condition", "position": { "x": 510, "y": 180 }, "data": { "label": "Is Long?", "expression": "len(input) > 50" } },
+    { "id": "quick", "type": "agent", "position": { "x": 750, "y": 80 }, "data": { "agent": "default", "label": "Quick Reply" } },
+    { "id": "detail", "type": "agent", "position": { "x": 750, "y": 280 }, "data": { "agent": "default", "label": "Detailed Analysis", "prompt_template": "Provide a detailed analysis of: {{context}}" } },
+    { "id": "end_quick", "type": "output", "position": { "x": 1000, "y": 80 }, "data": { "label": "Done (Quick)" } },
+    { "id": "end_detail", "type": "output", "position": { "x": 1000, "y": 280 }, "data": { "label": "Done (Detail)" } }
+  ],
+  "edges": [
+    { "id": "e1", "source": "start",  "target": "append",     "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e2", "source": "append", "target": "cond",       "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e3", "source": "cond",   "target": "detail",     "sourceHandle": "exec_true",        "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e4", "source": "cond",   "target": "quick",      "sourceHandle": "exec_false",       "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e5", "source": "quick",  "target": "end_quick",  "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "e6", "source": "detail", "target": "end_detail", "sourceHandle": "exec_out",         "targetHandle": "exec_in",       "type": "exec" },
+    { "id": "d1", "source": "start",  "target": "append",     "sourceHandle": "data_conversation","targetHandle": "data_a",         "type": "data" },
+    { "id": "d2", "source": "start",  "target": "append",     "sourceHandle": "data_message",     "targetHandle": "data_b",         "type": "data" },
+    { "id": "d3", "source": "append", "target": "cond",       "sourceHandle": "data_result",      "targetHandle": "data_value",     "type": "data" },
+    { "id": "d4", "source": "append", "target": "quick",      "sourceHandle": "data_result",      "targetHandle": "data_context",   "type": "data" },
+    { "id": "d5", "source": "append", "target": "detail",     "sourceHandle": "data_result",      "targetHandle": "data_context",   "type": "data" },
+    { "id": "d6", "source": "quick",  "target": "end_quick",  "sourceHandle": "data_response",    "targetHandle": "data_response",  "type": "data" },
+    { "id": "d7", "source": "detail", "target": "end_detail", "sourceHandle": "data_response",    "targetHandle": "data_response",  "type": "data" }
+  ]
+}
