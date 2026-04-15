@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Box, HStack, Text, Spinner } from '@chakra-ui/react';
-import { uberConverse, listConversations, updateConversation, deleteConversation } from '../services/api';
+import { Box, HStack, Text } from '@chakra-ui/react';
+import { listConversations, updateConversation, deleteConversation } from '../services/api';
 import type { ConversationMeta } from '../services/types';
 import { ConversationSidebar, EditModal } from './ConversationSidebar';
 import ChatPanel from './ChatPanel';
@@ -8,7 +8,6 @@ import ChatPanel from './ChatPanel';
 const UberChat = () => {
     const [conversations, setConversations] = useState<ConversationMeta[]>([]);
     const [activeConv, setActiveConv] = useState<string | null>(null);
-    const [isRouting, setIsRouting] = useState(false);
     const [editingConv, setEditingConv] = useState<ConversationMeta | null>(null);
 
     const refreshConversations = useCallback(() => {
@@ -20,15 +19,8 @@ const UberChat = () => {
         refreshConversations();
     }, [refreshConversations]);
 
-    const customSend = useCallback(async (text: string, convId: string, provider: string, agent: string) => {
-        setIsRouting(true);
-        try {
-            const resp = await uberConverse(text, convId, provider, agent);
-            if (resp.is_new) refreshConversations();
-            return { task_id: resp.task_id, conversation: resp.conversation };
-        } finally {
-            setIsRouting(false);
-        }
+    const handleRoute = useCallback((_data: { conversation: string; is_new: boolean; title: string }) => {
+        refreshConversations();
     }, [refreshConversations]);
 
     const handleEditSave = async (fields: { title?: string; description?: string; tags?: string[] }) => {
@@ -61,17 +53,6 @@ const UberChat = () => {
         </Box>
     );
 
-    const routingBar = isRouting ? (
-        <Box w="100%" bg="rgba(102,126,234,0.08)" py={2} px={4}>
-            <HStack maxW="48rem" mx="auto" gap={2}>
-                <Spinner size="xs" color="purple.400" />
-                <Text fontSize="xs" color="var(--text-secondary)">
-                    Finding the right conversation...
-                </Text>
-            </HStack>
-        </Box>
-    ) : undefined;
-
     return (
         <Box display="flex" h="100vh" w="100%" bg="var(--bg-page)" overflow="hidden">
             <ConversationSidebar
@@ -85,9 +66,8 @@ const UberChat = () => {
             <ChatPanel
                 conversationId={activeConv}
                 onConversationCreated={setActiveConv}
-                customSend={customSend}
-                disabled={isRouting}
-                statusBar={routingBar}
+                mode="uber"
+                onRoute={handleRoute}
                 onResponseComplete={refreshConversations}
                 placeholder="Ask anything — conversations are picked automatically..."
             />

@@ -10,11 +10,13 @@ if TYPE_CHECKING:
 
 from assai.tasks.converse import ConverseGraph
 from assai.tasks.think import ThinkGraph
+from assai.tasks.uber import UberGraph
 
 _GRAPHS: dict[str, type] = {
     "converse": ConverseGraph,
     "llm_complete": ConverseGraph,
     "think": ThinkGraph,
+    "uber": UberGraph,
 }
 
 

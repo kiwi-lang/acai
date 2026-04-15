@@ -186,12 +186,6 @@ export interface SandboxConfig {
     memory_limit: string;
 }
 
-export interface UberRouteResponse {
-    task_id?: string;
-    conversation: string;
-    is_new: boolean;
-}
-
 export interface AgentDef {
     id: string;
     name: string;

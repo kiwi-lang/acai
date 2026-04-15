@@ -47,30 +47,32 @@ Components
     to the ``StreamTracker``, enters a blocking loop on the queue, and
     yields each event as an SSE frame.
 
-**Direct SSE endpoints** (``POST /converse``, ``POST /think/converse``)
-    These return an SSE ``StreamingResponse`` directly.  The response
-    iterates ``TaskGraph.run()`` and formats each event as an SSE frame.
-    The frontend consumes the stream from the POST response body using
-    a custom ``SSEStream`` class (since ``EventSource`` only supports
-    GET).
+**Direct SSE endpoints** (``POST /converse``, ``POST /think/converse``, ``POST /uber/converse``)
+    All three conversation endpoints return an SSE ``StreamingResponse``
+    directly.  The response iterates ``TaskGraph.run()`` and formats
+    each event as an SSE frame.  The frontend consumes the stream from
+    the POST response body using a custom ``SSEStream`` class (since
+    ``EventSource`` only supports GET).
 
 
 Event types
 -----------
 
-============== ====================================================
-Event          Description
-============== ====================================================
-``meta``       First event in a direct SSE stream.  Contains the
-               conversation ID.
-``token``      A chunk of assistant text.
-``reasoning``  A chunk of reasoning/thinking text.
+================== ====================================================
+Event              Description
+================== ====================================================
+``meta``           First event in a direct SSE stream.  Contains the
+                   conversation ID.
+``route``          Routing decision (uber only).  Contains
+                   ``conversation``, ``is_new``, ``title``.
+``token``          A chunk of assistant text.
+``reasoning``      A chunk of reasoning/thinking text.
 ``tool_call_delta``  Incremental tool-call arguments (streaming).
-``tool_start`` A tool execution has begun.
-``tool_end``   A tool execution has finished.
-``done``       The graph completed.  Closes the SSE connection.
-``error``      An error occurred.  Closes the SSE connection.
-============== ====================================================
+``tool_start``     A tool execution has begun.
+``tool_end``       A tool execution has finished.
+``done``           The graph completed.  Closes the SSE connection.
+``error``          An error occurred.  Closes the SSE connection.
+================== ====================================================
 
 
 Normal (single-call) flow
@@ -184,6 +186,64 @@ Key points:
 
 4. The SSE connection is **per-request**, not per-task.  Events from
    both phases flow through the same HTTP response.
+
+
+Uber routing flow
+-----------------
+
+The ``UberGraph`` (``assai/tasks/uber.py``) is a route-only graph.
+It dispatches a lightweight LLM call to pick (or create) the target
+conversation, then yields the decision.  The frontend shows a
+confirmation banner and starts a separate ``POST /converse`` call.
+
+::
+
+  Frontend                 Server / UberGraph        Worker
+     │                       │                          │
+     │  POST /uber/converse  │                          │
+     │ ───────────────────>  │                          │
+     │                       │  lb.acquire() worker     │
+     │                       │  UberGraph.run()         │
+     │                       │                          │
+     │                       │  _route(message, ...)    │
+     │                       │  ↳ POST /llm/complete    │
+     │                       │ ─────────────────────>   │
+     │                       │                          │
+     │                       │  tokens (routing LLM)    │
+     │                       │ <────────────────────────│
+     │                       │  parse routing result    │
+     │                       │                          │
+     │  SSE: route           │                          │
+     │ <───────────────────  │  {conversation, is_new}  │
+     │  SSE: done            │                          │
+     │ <───────────────────  │                          │
+     │                       │  lb.release() worker     │
+     │                       │                          │
+     │  ┌─────────────────────────────────────┐         │
+     │  │ UI: show confirmation banner        │         │
+     │  │ [Continue] [New Chat] (5s timeout)  │         │
+     │  └─────────────────────────────────────┘         │
+     │                       │                          │
+     │  POST /converse       │                          │
+     │ ───────────────────>  │                          │
+     │                       │  (standard ConverseGraph │
+     │                       │   flow from here)        │
+     │  SSE: meta, token*    │                          │
+     │ <───────────────────  │                          │
+     │  SSE: done            │                          │
+     │ <───────────────────  │                          │
+
+Key points:
+
+1. The ``UberGraph`` is **route-only** — it yields ``route`` + ``done``
+   and does not perform any conversation.
+
+2. The frontend shows a confirmation banner with the routing decision.
+   The user can accept (or wait 5 seconds for auto-accept) or choose
+   to create a new conversation instead.
+
+3. The actual conversation is started by the frontend via a standard
+   ``POST /converse`` call with the routed (or new) conversation ID.
 
 
 Native thinking

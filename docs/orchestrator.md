@@ -12,10 +12,10 @@ Design philosophy
 
 1. **TaskGraph owns the agent flow.**  Each conversation endpoint
    instantiates a ``TaskGraph`` subclass (``ConverseGraph``,
-   ``ThinkGraph``) that orchestrates the full agent pipeline:
-   prepare the payload, dispatch to a worker, handle tool follow-ups,
-   and persist the result.  The orchestrator just acquires a worker
-   and iterates the graph.
+   ``ThinkGraph``, ``UberGraph``) that orchestrates the full agent
+   pipeline: prepare the payload, dispatch to a worker, handle tool
+   follow-ups, and persist the result.  The orchestrator just acquires
+   a worker and iterates the graph.
 
 2. **Separation of inference.**  The orchestrator prepares and records.
    Workers generate tokens and execute tools.  No model weights are
@@ -55,11 +55,12 @@ What the orchestrator does
         reasoning injected (tokens streamed normally).  Tool follow-ups
         are handled in the reply phase.  Returns an SSE stream.
 
-    ``POST /uber/converse`` → ``UberRouter`` + ``ConverseGraph``
+    ``POST /uber/converse`` → ``UberGraph``
         Routes the message to the best conversation via a lightweight
-        LLM call (``UberRouter``), then launches a ``ConverseGraph``
-        as a background ``asyncio.Task``.  Returns a JSON response
-        with the conversation ID and stream ID (202).
+        LLM call.  Returns an SSE stream with a ``route`` event
+        containing the target conversation, then ``done``.  The
+        frontend confirms the routing and starts a separate
+        ``POST /converse`` call.
 
 **Conversation store**
     Owns the ``ChatStore``.  Creates conversations, appends user and
@@ -95,8 +96,8 @@ Class                    Description
 ======================== =========================================
 ``ConverseGraph``        Single agent + tool-call follow-up loop.
 ``ThinkGraph``           Thinker → reply + tool loop.
-``UberRouter``           Routes messages to conversations via a
-                         direct LLM call (not a TaskGraph subclass).
+``UberGraph``            Route message to the right conversation
+                         (route-only, no converse).
 ======================== =========================================
 
 The base ``TaskGraph`` (``assai/tasks/graph.py``) provides the building
@@ -127,8 +128,8 @@ Group                             Description
 Conversations                     CRUD, context stats, inflight check.
 Converse                          ``POST /converse`` — SSE stream via
                                   ``ConverseGraph``.
-Uber routing                      ``POST /uber/converse`` — route + converse
-                                  via ``UberRouter`` + ``ConverseGraph``.
+Uber routing                      ``POST /uber/converse`` — SSE stream via
+                                  ``UberGraph`` (route-only).
 Think-then-generate               ``POST /think/converse`` — SSE stream via
                                   ``ThinkGraph``.
 History                           Message history for a conversation.

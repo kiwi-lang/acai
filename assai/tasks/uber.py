@@ -1,7 +1,9 @@
-"""UberRouter — conversation-aware message routing via direct worker dispatch.
+"""UberGraph — conversation routing via a lightweight LLM call.
 
-Replaces the queue-based ``UberScheduler`` with a direct HTTP call to
-the worker, making routing faster and simpler.
+The routing phase dispatches a small LLM call to classify the user
+message into an existing or new conversation.  A ``route`` event is
+yielded with the decision, then ``done``.  The frontend is responsible
+for confirming the routing and starting a regular ``/converse`` call.
 """
 
 from __future__ import annotations
@@ -9,13 +11,13 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import TYPE_CHECKING
+import traceback as _tb
+from typing import AsyncIterator, TYPE_CHECKING
+
+from assai.tasks.graph import TaskGraph
 
 if TYPE_CHECKING:
-    from assai.orchestrator.agent_store import AgentStore
-    from assai.orchestrator.chat import ChatStore
-    from assai.orchestrator.config import AssaiConfig
-    from assai.orchestrator.load_balancer import WorkerInfo
+    pass
 
 log = logging.getLogger(__name__)
 
@@ -40,22 +42,18 @@ def _fallback_title(message: str) -> str:
     return message.strip().split("\n")[0][:60]
 
 
-class UberRouter:
-    """Routes user messages to the right conversation via a direct worker call.
+class UberGraph(TaskGraph):
+    """Route a user message to the right conversation.
 
-    Unlike the old ``UberScheduler`` this does *not* use the work queue;
-    it dispatches a lightweight LLM request directly to an acquired worker.
+    ``run()`` dispatches a lightweight LLM call to pick (or create) the
+    target conversation, yields a ``route`` event with the decision,
+    then yields ``done``.  The actual conversation is started separately
+    by the frontend via ``POST /converse``.
     """
 
-    def __init__(
-        self,
-        chat: ChatStore,
-        agent_store: AgentStore,
-        config: AssaiConfig,
-    ):
-        self.chat = chat
-        self.agent_store = agent_store
-        self.config = config
+    # ------------------------------------------------------------------
+    # Routing helpers
+    # ------------------------------------------------------------------
 
     def _build_catalogue(self) -> list[dict]:
         return [
@@ -68,17 +66,77 @@ class UberRouter:
             for c in self.chat.list()
         ]
 
-    async def route(
-        self,
-        worker: WorkerInfo,
-        message: str,
-        current_conv_id: str = "",
-        agent: str = "default",
-    ) -> dict:
-        """Route a user message to the best conversation (or create one).
+    def _parse_routing_result(self, raw: str, catalogue: list[dict], message: str) -> dict:
+        text = re.sub(r"^```(?:json)?\s*", "", raw.strip())
+        text = re.sub(r"\s*```$", "", text).strip()
 
-        Returns ``{"conversation": "<id>", "is_new": bool}``.
-        """
+        new_fallback = {"id": "new", "title": _fallback_title(message), "tags": []}
+
+        try:
+            decision = json.loads(text)
+        except (json.JSONDecodeError, TypeError):
+            decision = None
+
+        if isinstance(decision, dict) and "id" in decision:
+            conv_id = decision["id"]
+
+            if conv_id == "new":
+                tags = decision.get("tags", [])
+                if isinstance(tags, str):
+                    tags = [t.strip() for t in tags.split(",") if t.strip()]
+                title = decision.get("title") or _fallback_title(message)
+                log.info("routing decision: NEW  title=%r  tags=%s", title, tags)
+                return {"id": "new", "title": title, "tags": tags}
+
+            if conv_id in {c["id"] for c in catalogue}:
+                log.info("routing decision: existing conv %s", conv_id)
+                return {"id": conv_id}
+
+            log.warning("LLM returned unknown conv id %r — creating new", conv_id)
+            return new_fallback
+
+        for c in catalogue:
+            if c["id"] in text:
+                log.info("routing decision (fallback parse): existing conv %s", c["id"])
+                return {"id": c["id"]}
+
+        log.warning("could not parse routing result %r — creating new", text[:200])
+        return new_fallback
+
+    def _apply_decision(self, decision: dict, message: str, agent: str) -> dict:
+        if decision["id"] == "new":
+            return self._create_new(
+                message, agent,
+                title=decision.get("title", ""),
+                tags=decision.get("tags", []),
+            )
+        meta = self.chat.get_meta(decision["id"])
+        title = meta.get("title", "") if meta else ""
+        return {"conversation": decision["id"], "is_new": False, "title": title}
+
+    def _create_new(
+        self,
+        message: str,
+        agent: str,
+        title: str = "",
+        tags: list[str] | None = None,
+    ) -> dict:
+        meta = self.chat.create(
+            title=title or _fallback_title(message),
+            agent=agent,
+        )
+        conv_id = meta.id
+        if tags:
+            self.chat.update_meta(conv_id, tags=tags)
+        log.info("created new conversation %s  title=%r", conv_id, meta.title)
+        return {"conversation": conv_id, "is_new": True, "title": meta.title}
+
+    # ------------------------------------------------------------------
+    # Route phase — lightweight LLM call to pick the conversation
+    # ------------------------------------------------------------------
+
+    async def _route(self, message: str, current_conv_id: str, agent: str) -> dict:
+        """Dispatch a routing LLM call and return the decision dict."""
         from assai.orchestrator.iterator import AsyncSSEIterator
 
         catalogue = self._build_catalogue()
@@ -127,7 +185,7 @@ class UberRouter:
         }
 
         result_text = ""
-        url = f"{worker.url}/llm/complete"
+        url = f"{self.worker.url}/llm/complete"
         try:
             async for event in AsyncSSEIterator(url, json=payload):
                 if event.event == "done":
@@ -151,65 +209,41 @@ class UberRouter:
         decision = self._parse_routing_result(result_text, catalogue, message)
         return self._apply_decision(decision, message, agent)
 
-    def _parse_routing_result(self, raw: str, catalogue: list[dict], message: str) -> dict:
-        text = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        text = re.sub(r"\s*```$", "", text).strip()
+    # ------------------------------------------------------------------
+    # run — route only
+    # ------------------------------------------------------------------
 
-        new_fallback = {"id": "new", "title": _fallback_title(message), "tags": []}
+    async def run(self, work: dict) -> AsyncIterator[dict]:
+        """Route the user message and yield the decision.
+
+        Yields a ``route`` event followed by ``done``.  The frontend
+        confirms the routing and starts a ``/converse`` call separately.
+        """
+        message = work.get("message", "")
+        current_conv_id = work.get("current_conversation", "")
+        agent_name = work.get("agent", "default")
 
         try:
-            decision = json.loads(text)
-        except (json.JSONDecodeError, TypeError):
-            decision = None
-
-        if isinstance(decision, dict) and "id" in decision:
-            conv_id = decision["id"]
-
-            if conv_id == "new":
-                tags = decision.get("tags", [])
-                if isinstance(tags, str):
-                    tags = [t.strip() for t in tags.split(",") if t.strip()]
-                title = decision.get("title") or _fallback_title(message)
-                log.info("routing decision: NEW  title=%r  tags=%s", title, tags)
-                return {"id": "new", "title": title, "tags": tags}
-
-            if conv_id in {c["id"] for c in catalogue}:
-                log.info("routing decision: existing conv %s", conv_id)
-                return {"id": conv_id}
-
-            log.warning("LLM returned unknown conv id %r — creating new", conv_id)
-            return new_fallback
-
-        for c in catalogue:
-            if c["id"] in text:
-                log.info("routing decision (fallback parse): existing conv %s", c["id"])
-                return {"id": c["id"]}
-
-        log.warning("could not parse routing result %r — creating new", text[:200])
-        return new_fallback
-
-    def _apply_decision(self, decision: dict, message: str, agent: str) -> dict:
-        if decision["id"] == "new":
-            return self._create_new(
-                message, agent,
-                title=decision.get("title", ""),
-                tags=decision.get("tags", []),
+            routing = await self._route(message, current_conv_id, agent_name)
+        except Exception as exc:
+            log.exception("uber routing error")
+            yield self._error_event(
+                f"Routing failed: {exc}",
+                _tb.format_exc(),
             )
-        return {"conversation": decision["id"], "is_new": False}
+            return
 
-    def _create_new(
-        self,
-        message: str,
-        agent: str,
-        title: str = "",
-        tags: list[str] | None = None,
-    ) -> dict:
-        meta = self.chat.create(
-            title=title or _fallback_title(message),
-            agent=agent,
-        )
-        conv_id = meta.id
-        if tags:
-            self.chat.update_meta(conv_id, tags=tags)
-        log.info("created new conversation %s  title=%r", conv_id, meta.title)
-        return {"conversation": conv_id, "is_new": True}
+        yield {
+            "event_type": "route",
+            "data": {
+                "conversation": routing["conversation"],
+                "is_new": routing.get("is_new", False),
+                "title": routing.get("title", ""),
+            },
+        }
+
+        yield self._done_event()
+
+
+# Backward-compatible alias
+UberRouter = UberGraph

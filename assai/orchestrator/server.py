@@ -35,8 +35,7 @@ from assai.orchestrator.config import (
 )
 from assai.orchestrator.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
-from assai.tasks import ConverseGraph, ThinkGraph
-from assai.tasks.uber import UberRouter
+from assai.tasks import ConverseGraph, ThinkGraph, UberGraph
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
@@ -236,8 +235,6 @@ def create_router(config: AssaiConfig | None = None,
 
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
-
-    uber_router = UberRouter(chat=chat, agent_store=agent_store, config=config)
 
     from assai.orchestrator.tools import discover_tools
     tool_registry = discover_tools()
@@ -469,66 +466,24 @@ def create_router(config: AssaiConfig | None = None,
         data = await _json_body(request)
         message = data.get("message", "")
         current_conversation = data.get("current_conversation", "")
-        provider_name = data.get("provider", "auto")
         agent_name = data.get("agent", "default")
-        route_only = data.get("route_only", False)
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
-        try:
-            async with lb.acquire() as worker:
-                routing = await uber_router.route(
-                    worker,
-                    message=message,
-                    current_conv_id=current_conversation,
-                    agent=agent_name,
-                )
-        except TimeoutError:
-            return JSONResponse(
-                {"error": "No worker available (timeout waiting for a free worker)."},
-                status_code=503,
-            )
-        except Exception as exc:
-            log.exception("uber route error")
-            return JSONResponse(
-                {"error": f"{type(exc).__name__}: {exc}"},
-                status_code=500,
-            )
-
-        conv_id = routing["conversation"]
-        is_new = routing.get("is_new", False)
-
-        if route_only:
-            return {"conversation": conv_id, "is_new": is_new}
-
-        if provider_name and provider_name != "auto":
-            chat.update_meta(conv_id, provider=provider_name)
-
-        chat.append(conv_id, {"role": "user", "content": message})
-
-        provider_override = None
-        if provider_name and provider_name != "auto":
-            prov = config.get_provider(provider_name)
-            if prov:
-                from dataclasses import asdict as _asdict
-                active = config.active_provider()
-                if prov.name != active.name:
-                    provider_override = _asdict(prov)
-
         work = {
             "message": message,
-            "conversation": conv_id,
+            "current_conversation": current_conversation,
             "agent": agent_name,
-            "spec_path": chat._msg_path(conv_id),
-            "stream_id": conv_id,
-            "provider_override": provider_override,
         }
 
-        async def _run_graph():
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        async def generate():
             try:
-                async with lb.acquire() as w:
-                    graph = ConverseGraph.from_work(
-                        w, work,
+                async with lb.acquire() as worker:
+                    graph = UberGraph.from_work(
+                        worker, work,
                         agent_store=agent_store,
                         chat=chat,
                         config=config,
@@ -536,20 +491,23 @@ def create_router(config: AssaiConfig | None = None,
                         projects=projects,
                         tool_registry=tool_registry,
                     )
-                    async for _ in graph.run(work):
-                        pass
-            except Exception:
-                log.exception("uber converse background error")
-                tracker.push(conv_id, {
-                    "event_type": "error",
-                    "data": {"message": "Background task failed", "traceback": _tb.format_exc()},
+                    async for event in graph.run(work):
+                        yield _sse(
+                            event.get("event_type", "message"),
+                            event.get("data", {}),
+                        )
+            except TimeoutError:
+                yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
+            except Exception as exc:
+                log.exception("uber converse stream error")
+                yield _sse("error", {
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "traceback": _tb.format_exc(),
                 })
 
-        asyncio.create_task(_run_graph())
-
-        return JSONResponse(
-            {"stream_id": conv_id, "conversation": conv_id, "is_new": is_new},
-            status_code=202,
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
         )
 
     # ==================================================================

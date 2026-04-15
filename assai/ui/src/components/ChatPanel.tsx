@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
-import { converse, thinkConverse, getHistory, listProviders, listAgents, checkInflight, getContextStats, type SSEStream } from '../services/api';
+import { converse, uberConverse, thinkConverse, getHistory, listProviders, listAgents, checkInflight, getContextStats, type SSEStream } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentDef, AgentMessage, Provider } from '../services/types';
 import Markdown from './Markdown';
@@ -159,6 +159,8 @@ const ToolCallCard = ({ callMsg, resultMsg }: { callMsg: AgentMessage; resultMsg
 
 /* ─── ChatPanel ──────────────────────────────────────────────────── */
 
+export type ChatMode = 'converse' | 'uber';
+
 export interface ChatPanelProps {
     conversationId: string | null;
     onConversationCreated?: (id: string) => void;
@@ -170,8 +172,10 @@ export interface ChatPanelProps {
     initialAgent?: string;
     onProviderChange?: (v: string) => void;
     onAgentChange?: (v: string) => void;
-    /** Override the default `converse()` call. Receives text + current conv id + provider + agent; must return task_id and target conversation. */
-    customSend?: (text: string, convId: string, provider: string, agent: string) => Promise<{task_id: string; conversation: string}>;
+    /** Chat mode: 'converse' (default) sends to /converse; 'uber' sends to /uber/converse which routes then converses. */
+    mode?: ChatMode;
+    /** Called when an uber `route` event arrives with the routed conversation. */
+    onRoute?: (data: { conversation: string; is_new: boolean; title: string }) => void;
     /** Rendered between the messages area and the input area. */
     statusBar?: ReactNode;
     /** Externally disable the input (e.g. during routing). */
@@ -184,6 +188,8 @@ export interface ChatPanelProps {
     initialThinking?: boolean;
     /** Initial thinking mode string — takes precedence over initialThinking boolean. */
     initialThinkingMode?: ThinkingMode;
+    /** Auto-send this message on mount (used for pending messages from navigation). */
+    autoSendMessage?: string;
 }
 
 const ChatPanel = ({
@@ -196,13 +202,15 @@ const ChatPanel = ({
     initialAgent,
     onProviderChange,
     onAgentChange,
-    customSend,
+    mode = 'converse',
+    onRoute,
     statusBar,
     disabled: externalDisabled,
     onResponseComplete,
     placeholder:     customPlaceholder,
     initialThinking,
     initialThinkingMode,
+    autoSendMessage,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -218,6 +226,17 @@ const ChatPanel = ({
     const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
         initialThinkingMode ?? (initialThinking === false ? 'off' : 'native'),
     );
+
+    interface RoutePending {
+        conversation: string;
+        is_new: boolean;
+        title: string;
+        message: string;
+        countdown: number;
+    }
+    const [routePending, setRoutePending] = useState<RoutePending | null>(null);
+    const routeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+    const pendingMessageRef = useRef<string>('');
 
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -243,9 +262,13 @@ const ChatPanel = ({
     const onProviderChangeRef = useRef(onProviderChange);
     const onAgentChangeRef = useRef(onAgentChange);
     const onResponseCompleteRef = useRef(onResponseComplete);
+    const onRouteRef = useRef(onRoute);
+    const onConversationCreatedRef = useRef(onConversationCreated);
     onProviderChangeRef.current = onProviderChange;
     onAgentChangeRef.current = onAgentChange;
     onResponseCompleteRef.current = onResponseComplete;
+    onRouteRef.current = onRoute;
+    onConversationCreatedRef.current = onConversationCreated;
 
     const { joinConversation, leaveConversation } = useAgentSocket();
 
@@ -261,9 +284,44 @@ const ChatPanel = ({
         }
     }, []);
 
+    const clearRouteTimer = useCallback(() => {
+        if (routeTimerRef.current) {
+            clearInterval(routeTimerRef.current);
+            routeTimerRef.current = null;
+        }
+    }, []);
+
     const attachListeners = useCallback((es: EventSource | SSEStream) => {
         closeEventSource();
         eventSourceRef.current = es;
+
+        const _handleConvSwitch = (newConvId: string) => {
+            if (newConvId && newConvId !== convIdRef.current) {
+                const prevId = convIdRef.current;
+                convIdRef.current = newConvId;
+                joinConversation(newConvId);
+                if (prevId) leaveConversation(prevId);
+                justCreatedRef.current = true;
+                onConversationCreatedRef.current?.(newConvId);
+            }
+        };
+
+        es.addEventListener('meta', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            _handleConvSwitch(data.conversation);
+        });
+
+        es.addEventListener('route', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            onRouteRef.current?.(data);
+            setRoutePending({
+                conversation: data.conversation,
+                is_new: data.is_new,
+                title: data.title || '',
+                message: pendingMessageRef.current,
+                countdown: 5,
+            });
+        });
 
         es.addEventListener('reasoning', (e: MessageEvent) => {
             const data = JSON.parse(e.data);
@@ -364,6 +422,8 @@ const ChatPanel = ({
         return () => closeEventSource();
     }, [closeEventSource]);
 
+    const autoSendRef = useRef(autoSendMessage);
+
     useEffect(() => {
         convIdRef.current = conversationId;
 
@@ -377,6 +437,8 @@ const ChatPanel = ({
         setThinkingMode(initialThinkingMode ?? (initialThinking === false ? 'off' : 'native'));
         setMessages([]);
         setIsLoading(false);
+        setRoutePending(null);
+        clearRouteTimer();
         activeTaskRef.current = null;
         closeEventSource();
 
@@ -393,9 +455,13 @@ const ChatPanel = ({
                     { role: 'assistant', content: resp.streaming!.partial, isStreaming: true, taskId: tid },
                 ]);
                 openEventSource(conversationId);
+            } else if (autoSendRef.current) {
+                const msg = autoSendRef.current;
+                autoSendRef.current = undefined;
+                setTimeout(() => handleSendRef.current(msg), 0);
             }
         }).catch(() => {});
-    }, [conversationId, closeEventSource, openEventSource]);
+    }, [conversationId, closeEventSource, openEventSource, clearRouteTimer]);
 
     useEffect(() => {
         if (conversationId) joinConversation(conversationId);
@@ -444,6 +510,79 @@ const ChatPanel = ({
         onAgentChangeRef.current?.(value);
     }, []);
 
+    const startConverse = useCallback(async (text: string, targetConvId: string) => {
+        setRoutePending(null);
+        clearRouteTimer();
+
+        const prevId = convIdRef.current;
+        convIdRef.current = targetConvId;
+        joinConversation(targetConvId);
+        if (prevId && prevId !== targetConvId) leaveConversation(prevId);
+        justCreatedRef.current = true;
+        onConversationCreatedRef.current?.(targetConvId);
+
+        setIsLoading(true);
+        try {
+            const resp = await converse(text, targetConvId, project || '', '', selectedProvider, selectedAgent,
+                thinkingMode === 'native' ? true : undefined);
+            setMessages(prev => [
+                ...prev,
+                { role: 'assistant', content: '', isStreaming: true },
+            ]);
+            attachListeners(resp.stream);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Request failed';
+            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            setIsLoading(false);
+        }
+    }, [project, selectedProvider, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer]);
+
+    const acceptRoute = useCallback(() => {
+        if (!routePending) return;
+        startConverse(routePending.message, routePending.conversation);
+    }, [routePending, startConverse]);
+
+    const rejectRoute = useCallback(async () => {
+        if (!routePending) return;
+        const text = routePending.message;
+        setRoutePending(null);
+        clearRouteTimer();
+
+        setIsLoading(true);
+        try {
+            const resp = await converse(text, '', project || '', '', selectedProvider, selectedAgent,
+                thinkingMode === 'native' ? true : undefined);
+            setMessages(prev => [
+                ...prev,
+                { role: 'assistant', content: '', isStreaming: true },
+            ]);
+            attachListeners(resp.stream);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : 'Request failed';
+            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
+            setIsLoading(false);
+        }
+    }, [routePending, project, selectedProvider, selectedAgent, thinkingMode, attachListeners, clearRouteTimer]);
+
+    useEffect(() => {
+        if (!routePending) return;
+        clearRouteTimer();
+        routeTimerRef.current = setInterval(() => {
+            setRoutePending(prev => {
+                if (!prev) return null;
+                if (prev.countdown <= 1) return { ...prev, countdown: 0 };
+                return { ...prev, countdown: prev.countdown - 1 };
+            });
+        }, 1000);
+        return clearRouteTimer;
+    }, [routePending?.conversation, clearRouteTimer]);
+
+    useEffect(() => {
+        if (routePending && routePending.countdown <= 0) {
+            acceptRoute();
+        }
+    }, [routePending?.countdown]);
+
     const handleResend = useCallback(async () => {
         const cid = convIdRef.current;
         if (!cid || isLoading) return;
@@ -479,45 +618,28 @@ const ChatPanel = ({
         }
     }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, openEventSource, attachListeners]);
 
-    const handleSend = async () => {
-        const text = input.trim();
+    const handleSend = async (overrideText?: string) => {
+        const text = (overrideText ?? input).trim();
         if (!text || isLoading || externalDisabled) return;
 
-        if (document.activeElement === textareaRef.current) {
-            shouldRestoreFocusRef.current = true;
+        if (!overrideText) {
+            if (document.activeElement === textareaRef.current) {
+                shouldRestoreFocusRef.current = true;
+            }
+            setInput('');
+            if (textareaRef.current) textareaRef.current.style.height = 'auto';
         }
 
-        setInput('');
-        if (textareaRef.current) textareaRef.current.style.height = 'auto';
+        setMessages(prev => [...prev, { role: 'user', content: text }]);
+        setIsLoading(true);
 
         const prevConvId = convIdRef.current;
 
-        if (!customSend) {
-            setMessages(prev => [...prev, { role: 'user', content: text }]);
-        }
-        setIsLoading(true);
-
         try {
-            if (customSend) {
-                const resp = await customSend(text, prevConvId || '', selectedProvider, selectedAgent);
-                activeTaskRef.current = resp.task_id;
-                convIdRef.current = resp.conversation;
-                joinConversation(resp.conversation);
-                const convChanged = resp.conversation !== (prevConvId || '');
-                if (convChanged) {
-                    if (prevConvId) leaveConversation(prevConvId);
-                    justCreatedRef.current = true;
-                    onConversationCreated?.(resp.conversation);
-                    const historyResp = await getHistory(resp.conversation);
-                    setMessages(historyResp.messages);
-                } else {
-                    setMessages(prev => [...prev, { role: 'user', content: text }]);
-                }
-                setMessages(prev => [
-                    ...prev,
-                    { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
-                ]);
-                openEventSource(resp.conversation);
+            if (mode === 'uber') {
+                pendingMessageRef.current = text;
+                const resp = await uberConverse(text, prevConvId || '', selectedAgent);
+                attachListeners(resp.stream);
             } else if (thinkingMode === 'emulated') {
                 const resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
                 activeTaskRef.current = resp.task_id;
@@ -537,14 +659,6 @@ const ChatPanel = ({
             } else {
                 const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
                     thinkingMode === 'native' ? true : undefined);
-                convIdRef.current = resp.conversation;
-                joinConversation(resp.conversation);
-                const convChanged = resp.conversation !== (prevConvId || '');
-                if (convChanged) {
-                    if (prevConvId) leaveConversation(prevConvId);
-                    justCreatedRef.current = true;
-                    onConversationCreated?.(resp.conversation);
-                }
                 setMessages(prev => [
                     ...prev,
                     { role: 'assistant', content: '', isStreaming: true },
@@ -553,18 +667,13 @@ const ChatPanel = ({
             }
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
-            if (customSend) {
-                setMessages(prev => [
-                    ...prev,
-                    { role: 'user', content: text },
-                    { role: 'assistant', content: `Error: ${msg}` },
-                ]);
-            } else {
-                setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
-            }
+            setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
             setIsLoading(false);
         }
     };
+
+    const handleSendRef = useRef(handleSend);
+    handleSendRef.current = handleSend;
 
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -695,6 +804,47 @@ const ChatPanel = ({
             </Box>
 
             {statusBar}
+
+            {routePending && (
+                <Box w="100%" bg="rgba(102,126,234,0.08)" py={2} px={4}
+                    borderTop="1px solid" borderColor="var(--border-secondary)">
+                    <HStack maxW={maxW} mx={mx} gap={3} justify="space-between" flexWrap="wrap">
+                        <HStack gap={2} flex={1} minW={0}>
+                            <Box w="8px" h="8px" borderRadius="full"
+                                bg="linear-gradient(135deg, #667eea, #764ba2)" flexShrink={0} />
+                            <Text fontSize="xs" color="var(--text-secondary)" isTruncated>
+                                {routePending.is_new
+                                    ? `New conversation: "${routePending.title || 'Untitled'}"`
+                                    : `Continue in "${routePending.title || 'Untitled'}"`}
+                            </Text>
+                        </HStack>
+                        <HStack gap={2} flexShrink={0}>
+                            <Box as="button" onClick={acceptRoute}
+                                position="relative" overflow="hidden"
+                                px={3} py={1} borderRadius="md" fontSize="xs" fontWeight="semibold"
+                                color="white" cursor="pointer" _hover={{ opacity: 0.9 }}>
+                                <Box position="absolute" inset={0} bg="var(--accent)" opacity={0.3} borderRadius="md" />
+                                <Box position="absolute" top={0} left={0} bottom={0} borderRadius="md"
+                                    bg="var(--accent)"
+                                    style={{
+                                        width: `${(routePending.countdown / 5) * 100}%`,
+                                        transition: 'width 1s linear',
+                                    }} />
+                                <Text as="span" position="relative" zIndex={1}>
+                                    Continue
+                                </Text>
+                            </Box>
+                            <Box as="button" onClick={rejectRoute}
+                                px={3} py={1} borderRadius="md" fontSize="xs" fontWeight="semibold"
+                                bg="var(--bg-card)" color="var(--text-secondary)" cursor="pointer"
+                                border="1px solid" borderColor="var(--border-secondary)"
+                                _hover={{ bg: 'var(--bg-hover)' }}>
+                                New Chat
+                            </Box>
+                        </HStack>
+                    </HStack>
+                </Box>
+            )}
 
             {/* Input */}
             <Box w="100%" bg="var(--bg-page)" borderTop="1px solid" borderColor="var(--border-primary)"

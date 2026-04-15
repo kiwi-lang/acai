@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Box, HStack, Text, IconButton } from '@chakra-ui/react';
 import {
-    listConversations, updateConversation, deleteConversation, converse, thinkConverse,
+    listConversations, updateConversation, deleteConversation,
 } from '../services/api';
 import type { ConversationMeta } from '../services/types';
 import { ConversationSidebar, EditModal } from './ConversationSidebar';
@@ -22,45 +22,25 @@ const ConversationsPage = () => {
     const [conversations, setConversations] = useState<ConversationMeta[]>([]);
     const [editingConv, setEditingConv] = useState<ConversationMeta | null>(null);
 
-    // Pending message from navigation state (sent by Home uber routing).
-    // sendingRef guards against React StrictMode double-firing the effect.
-    const sendingRef = useRef(false);
-    const hasPendingInit = !!(location.state as Record<string, unknown> | null)?.pendingMessage;
-    const [readyConvId, setReadyConvId] = useState<string | null>(hasPendingInit ? null : (convId || null));
+    const [pending] = useState(() => {
+        const s = location.state as Record<string, string> | null;
+        if (!s?.pendingMessage) return null;
+        return {
+            message: s.pendingMessage,
+            provider: s.provider,
+            agent: s.agent,
+            thinkingMode: s.thinkingMode as 'off' | 'native' | 'emulated' | undefined,
+        };
+    });
 
     useEffect(() => {
-        if (!convId) { setReadyConvId(null); return; }
+        if (pending) navigate(location.pathname, { replace: true, state: {} });
+    }, []);
 
-        const state = location.state as Record<string, string> | null;
+    const [readyConvId, setReadyConvId] = useState<string | null>(convId || null);
 
-        if (state?.pendingMessage && !sendingRef.current) {
-            sendingRef.current = true;
-            navigate(location.pathname, { replace: true, state: {} });
-
-            const mode = (state.thinkingMode as string) || 'native';
-            const converseCall = mode === 'emulated'
-                ? thinkConverse(state.pendingMessage, convId, '', '',
-                    state.provider || 'auto', state.agent || 'default')
-                : converse(state.pendingMessage, convId, '', '',
-                    state.provider || 'auto', state.agent || 'default',
-                    mode === 'native' ? true : undefined);
-            converseCall
-                .then(() => {
-                    sendingRef.current = false;
-                    setReadyConvId(convId);
-                    refreshList();
-                })
-                .catch(() => {
-                    sendingRef.current = false;
-                    setReadyConvId(convId);
-                });
-            return;
-        }
-
-        if (!sendingRef.current) {
-            setReadyConvId(convId);
-        }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
+    useEffect(() => {
+        setReadyConvId(convId || null);
     }, [convId]);
 
     const refreshList = useCallback(() => {
@@ -127,9 +107,11 @@ const ConversationsPage = () => {
                     refreshList();
                 }}
                 onResponseComplete={refreshList}
-                initialProvider={conv?.provider || 'auto'}
-                initialAgent={conv?.agent || (conv?.project ? (conv?.refiner || 'refiner') : 'default')}
+                initialProvider={pending?.provider || conv?.provider || 'auto'}
+                initialAgent={pending?.agent || conv?.agent || (conv?.project ? (conv?.refiner || 'refiner') : 'default')}
                 initialThinking={conv?.enable_thinking}
+                initialThinkingMode={pending?.thinkingMode}
+                autoSendMessage={pending?.message}
                 onProviderChange={(v) => {
                     if (convId) updateConversation(convId, { provider: v }).catch(() => {});
                 }}

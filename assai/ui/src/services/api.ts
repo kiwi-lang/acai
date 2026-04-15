@@ -1,4 +1,4 @@
-import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, Task, UberRouteResponse, Worktree } from './types';
+import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, Task, Worktree } from './types';
 
 const API_BASE = '/api/agent';
 
@@ -346,23 +346,28 @@ export async function listToolNamespaces(): Promise<ToolNamespace[]> {
     return request<ToolNamespace[]>('/tools/namespaces');
 }
 
-// Uber conversation routing
+// Uber conversation routing — returns SSE stream with route + done events
 export async function uberConverse(
     message: string,
     currentConversation = '',
-    provider = '',
     agent = '',
-    routeOnly = false,
-): Promise<UberRouteResponse> {
-    return request<UberRouteResponse>('/uber/converse', {
+): Promise<{ stream: SSEStream }> {
+    const response = await fetch(`${API_BASE}/uber/converse`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             message,
             current_conversation: currentConversation,
-            provider, agent,
-            route_only: routeOnly,
+            agent,
         }),
     });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || err.message || `HTTP ${response.status}`);
+    }
+
+    return { stream: new SSEStream(response) };
 }
 
 // Conversation inflight check

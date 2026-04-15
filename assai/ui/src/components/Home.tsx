@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type KeyboardEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
 import { uberConverse, listProviders, listAgents } from '../services/api';
@@ -12,16 +12,26 @@ const SendIcon = ({ size = 20 }: { size?: number }) => (
 
 type ThinkingMode = 'off' | 'native' | 'emulated';
 
+interface RoutePending {
+    conversation: string;
+    is_new: boolean;
+    title: string;
+    message: string;
+    countdown: number;
+}
+
 const Home = () => {
     const navigate = useNavigate();
     const [input, setInput] = useState('');
     const [isRouting, setIsRouting] = useState(false);
+    const [routePending, setRoutePending] = useState<RoutePending | null>(null);
     const [providers, setProviders] = useState<Provider[]>([]);
     const [agents, setAgents] = useState<AgentDef[]>([]);
     const [selectedProvider, setSelectedProvider] = useState('auto');
     const [selectedAgent, setSelectedAgent] = useState('default');
     const [thinkingMode, setThinkingMode] = useState<ThinkingMode>('native');
     const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const routeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     useEffect(() => {
         document.title = 'ASSAI';
@@ -29,16 +39,82 @@ const Home = () => {
         listAgents().then(setAgents).catch(() => {});
     }, []);
 
+    const clearRouteTimer = useCallback(() => {
+        if (routeTimerRef.current) {
+            clearInterval(routeTimerRef.current);
+            routeTimerRef.current = null;
+        }
+    }, []);
+
+    const goToConversation = useCallback((convId: string, text: string) => {
+        clearRouteTimer();
+        setRoutePending(null);
+        navigate(`/conversations/${convId}`, {
+            state: { pendingMessage: text, provider: selectedProvider, agent: selectedAgent, thinkingMode },
+        });
+    }, [navigate, selectedProvider, selectedAgent, thinkingMode, clearRouteTimer]);
+
+    const acceptRoute = useCallback(() => {
+        if (!routePending) return;
+        goToConversation(routePending.conversation, routePending.message);
+    }, [routePending, goToConversation]);
+
+    const rejectRoute = useCallback(() => {
+        if (!routePending) return;
+        clearRouteTimer();
+        setRoutePending(null);
+        setIsRouting(false);
+        navigate('/conversations', {
+            state: { pendingMessage: routePending.message, provider: selectedProvider, agent: selectedAgent, thinkingMode },
+        });
+    }, [routePending, navigate, selectedProvider, selectedAgent, thinkingMode, clearRouteTimer]);
+
+    useEffect(() => {
+        if (!routePending) return;
+        clearRouteTimer();
+        routeTimerRef.current = setInterval(() => {
+            setRoutePending(prev => {
+                if (!prev) return null;
+                if (prev.countdown <= 1) return { ...prev, countdown: 0 };
+                return { ...prev, countdown: prev.countdown - 1 };
+            });
+        }, 1000);
+        return clearRouteTimer;
+    }, [routePending?.conversation, clearRouteTimer]);
+
+    useEffect(() => {
+        if (routePending && routePending.countdown <= 0) {
+            acceptRoute();
+        }
+    }, [routePending?.countdown]);
+
     const handleSend = async () => {
         const text = input.trim();
         if (!text || isRouting) return;
 
         setIsRouting(true);
         try {
-            const resp = await uberConverse(text, '', selectedProvider, selectedAgent, true);
-            navigate(`/conversations/${resp.conversation}`, {
-                state: { pendingMessage: text, provider: selectedProvider, agent: selectedAgent, thinkingMode },
+            const resp = await uberConverse(text, '', selectedAgent);
+            const stream = resp.stream;
+
+            stream.addEventListener('route', (e: MessageEvent) => {
+                const data = JSON.parse(e.data);
+                stream.close();
+                setRoutePending({
+                    conversation: data.conversation,
+                    is_new: data.is_new,
+                    title: data.title || '',
+                    message: text,
+                    countdown: 5,
+                });
             });
+            stream.addEventListener('error', (e: MessageEvent) => {
+                stream.close();
+                setIsRouting(false);
+            });
+            stream.onerror = () => {
+                setIsRouting(false);
+            };
         } catch {
             setIsRouting(false);
         }
@@ -157,13 +233,54 @@ const Home = () => {
                     </HStack>
                 </Box>
 
-                {isRouting && (
+                {isRouting && !routePending && (
                     <HStack gap={2}>
                         <Spinner size="xs" color="var(--accent)" />
                         <Text fontSize="xs" color="var(--text-secondary)">
                             Finding the right conversation...
                         </Text>
                     </HStack>
+                )}
+
+                {routePending && (
+                    <Box w="100%" bg="rgba(102,126,234,0.08)" py={3} px={4}
+                        borderRadius="xl" border="1px solid" borderColor="var(--border-secondary)">
+                        <HStack gap={3} justify="space-between" flexWrap="wrap">
+                            <HStack gap={2} flex={1} minW={0}>
+                                <Box w="8px" h="8px" borderRadius="full"
+                                    bg="linear-gradient(135deg, #667eea, #764ba2)" flexShrink={0} />
+                                <Text fontSize="sm" color="var(--text-secondary)" isTruncated>
+                                    {routePending.is_new
+                                        ? `New conversation: "${routePending.title || 'Untitled'}"`
+                                        : `Continue in "${routePending.title || 'Untitled'}"`}
+                                </Text>
+                            </HStack>
+                            <HStack gap={2} flexShrink={0}>
+                                <Box as="button" onClick={acceptRoute}
+                                    position="relative" overflow="hidden"
+                                    px={4} py={1.5} borderRadius="md" fontSize="sm" fontWeight="semibold"
+                                    color="white" cursor="pointer" _hover={{ opacity: 0.9 }}>
+                                    <Box position="absolute" inset={0} bg="var(--accent)" opacity={0.3} borderRadius="md" />
+                                    <Box position="absolute" top={0} left={0} bottom={0} borderRadius="md"
+                                        bg="var(--accent)"
+                                        style={{
+                                            width: `${(routePending.countdown / 5) * 100}%`,
+                                            transition: 'width 1s linear',
+                                        }} />
+                                    <Text as="span" position="relative" zIndex={1}>
+                                        Continue
+                                    </Text>
+                                </Box>
+                                <Box as="button" onClick={rejectRoute}
+                                    px={4} py={1.5} borderRadius="md" fontSize="sm" fontWeight="semibold"
+                                    bg="var(--bg-card)" color="var(--text-secondary)" cursor="pointer"
+                                    border="1px solid" borderColor="var(--border-secondary)"
+                                    _hover={{ bg: 'var(--bg-hover)' }}>
+                                    New Chat
+                                </Box>
+                            </HStack>
+                        </HStack>
+                    </Box>
                 )}
             </VStack>
         </Box>
