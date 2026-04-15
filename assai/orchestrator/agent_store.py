@@ -422,6 +422,7 @@ def hydrate_task(
     resolved: dict,
     *,
     tools_description: str = "",
+    extra_context: dict | None = None,
 ) -> list[dict]:
     """Render the agent's template with the resolved task.
 
@@ -430,6 +431,9 @@ def hydrate_task(
     If ``agent.output_format`` is ``"messages"`` the template must
     produce a JSON array.  If ``"text"`` it produces a system-prompt
     string that is automatically wrapped into a messages list.
+
+    ``extra_context``, when provided, is passed as additional top-level
+    variables to the Jinja2 template render call.
     """
     template_src = store.read_template(agent.name)
 
@@ -439,15 +443,19 @@ def hydrate_task(
     )
     tpl = env.from_string(template_src)
 
-    rendered = tpl.render(
-        agent=agent,
-        task=resolved,
-        messages=resolved.get("messages", []),
-        project=resolved.get("project_obj"),
-        spec=resolved.get("project_spec", ""),
-        tools_description=tools_description,
-        datetime=datetime.now(timezone.utc).isoformat(),
-    ).strip()
+    ctx: dict = {
+        "agent": agent,
+        "task": resolved,
+        "messages": resolved.get("messages", []),
+        "project": resolved.get("project_obj"),
+        "spec": resolved.get("project_spec", ""),
+        "tools_description": tools_description,
+        "datetime": datetime.now(timezone.utc).isoformat(),
+    }
+    if extra_context:
+        ctx.update(extra_context)
+
+    rendered = tpl.render(**ctx).strip()
 
     if agent.output_format == "text":
         return [{"role": "system", "content": rendered}] + resolved.get("messages", [])

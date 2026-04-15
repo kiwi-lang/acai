@@ -333,6 +333,8 @@ const ChatPanel = ({
                         ...last,
                         reasoning: (last.reasoning || '') + (data.token || ''),
                     };
+                } else {
+                    copy.push({ role: 'assistant', content: '', reasoning: data.token || '', isStreaming: true });
                 }
                 return copy;
             });
@@ -345,6 +347,8 @@ const ChatPanel = ({
                 const last = copy[copy.length - 1];
                 if (last && last.isStreaming) {
                     copy[copy.length - 1] = { ...last, content: last.content + (data.token || '') };
+                } else {
+                    copy.push({ role: 'assistant', content: data.token || '', isStreaming: true });
                 }
                 return copy;
             });

@@ -39,8 +39,11 @@ from typing import (
     get_type_hints,
 )
 
+import json
+
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
+from starlette.responses import StreamingResponse
 
 log = logging.getLogger(__name__)
 
@@ -350,11 +353,19 @@ class ToolRegistry:
                     if token is not None:
                         reset_context(token)
 
-            try:
-                result = await asyncio.to_thread(_run_tool)
-                return {"result": result}
-            except Exception as exc:
-                return JSONResponse({"error": str(exc)}, status_code=500)
+            def _sse(event: str, data: dict) -> str:
+                return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            async def _generate():
+                try:
+                    result = await asyncio.to_thread(_run_tool)
+                    yield _sse("result", {"tool": tool_name, "result": result})
+                except Exception as exc:
+                    yield _sse("error", {"tool": tool_name, "error": str(exc)})
+                    return
+                yield _sse("done", {})
+
+            return StreamingResponse(_generate(), media_type="text/event-stream")
 
         return rt
 

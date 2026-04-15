@@ -107,9 +107,15 @@ async def llm_complete(request: Request):
 async def tool_call(request: Request):
     body = await request.json()
     tool = body.get("tool", "")
-    if tool == "fail":
-        return JSONResponse({"error": "tool not found"}, status_code=404)
-    return {"result": f"result of {tool}"}
+
+    async def generate():
+        if tool == "fail":
+            yield _sse_event("error", {"tool": tool, "error": "tool not found"})
+            return
+        yield _sse_event("result", {"tool": tool, "result": f"result of {tool}"})
+        yield _sse_event("done", {})
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
 
 
 # ======================================================================

@@ -152,9 +152,10 @@ async def dispatch_tool(
     context: dict | None = None,
     timeout: float = 300,
 ) -> StepResult:
-    """POST a tool call to a worker and return the result.
+    """POST a tool call to a worker and consume the SSE stream.
 
-    This is a plain JSON request/response (not SSE).
+    The worker returns an SSE stream with ``result`` and ``done``
+    events (or an ``error`` event on failure).
 
     Parameters
     ----------
@@ -171,21 +172,27 @@ async def dispatch_tool(
     payload: dict = {"tool": tool_name, "args": args}
     if context:
         payload["context"] = context
+
+    text = ""
     try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(
-                url,
-                json=payload,
-                timeout=aiohttp.ClientTimeout(total=timeout),
-            ) as resp:
-                body = await resp.json()
-                if resp.status >= 400:
-                    error = body.get("error", f"HTTP {resp.status}")
-                    log.error("tool %s failed: %s", tool_name, error)
-                    return StepResult(error=error)
-                result = body.get("result", "")
-                log.info("tool %s done  chars=%d", tool_name, len(result))
-                return StepResult(text=result)
+        async for event in AsyncSSEIterator(url, json=payload, timeout=timeout):
+            etype = event.event
+            try:
+                edata = event.json()
+            except (json.JSONDecodeError, ValueError):
+                edata = {}
+
+            if etype == "result":
+                text += edata.get("result", "")
+            elif etype == "error":
+                error_msg = edata.get("error", "unknown tool error")
+                log.error("tool %s failed: %s", tool_name, error_msg)
+                return StepResult(error=error_msg)
+            elif etype == "done":
+                break
+
+        log.info("tool %s done  chars=%d", tool_name, len(text))
+        return StepResult(text=text)
     except aiohttp.ClientError as exc:
         error_msg = f"Tool dispatch error: {exc}"
         log.error("%s", error_msg)

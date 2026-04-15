@@ -1,0 +1,8 @@
+{
+  "name": "router",
+  "description": "Routes user messages to the correct conversation",
+  "role": "worker",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": []
+}

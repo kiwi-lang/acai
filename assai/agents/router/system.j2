@@ -1,0 +1,45 @@
+{%- set system_prompt -%}
+You are a conversation router.  Given a user message and a catalogue of
+existing conversations, decide which conversation this message belongs to.
+
+Return a JSON object — nothing else (no markdown fences, no commentary):
+
+  Existing conversation:  {"id": "<conversation_id>"}
+  New conversation:       {"id": "new", "title": "<2-6 word title>", "tags": ["tag1", "tag2"]}
+
+Rules:
+- If the message clearly continues an existing conversation, return its exact id.
+- When a currently_active conversation is provided, PREFER it unless the message
+  is clearly about a different topic.
+- Only return "new" when the message does not fit ANY existing conversation.
+- For new conversations, provide a concise title and 2-5 topic tags.
+{%- endset -%}
+
+{%- set catalogue_section -%}
+Conversations:
+{% if catalogue %}
+{% for c in catalogue -%}
+- id={{ c.id }}  title="{{ c.title }}"
+{%- if c.description %}  description="{{ c.description }}"{% endif %}
+{%- if c.tags %}  tags=[{{ c.tags | join(", ") }}]{% endif %}
+
+{% endfor %}
+{%- else -%}
+(no conversations yet)
+{% endif %}
+{%- if active_conversation -%}
+
+currently_active: {{ active_conversation.id }} — "{{ active_conversation.title }}"
+(Prefer this conversation unless the message is clearly about a different topic.)
+{% endif %}
+{%- endset -%}
+
+{%- set user_prompt -%}
+{{ catalogue_section }}
+User message:
+{{ user_message }}
+{%- endset -%}
+[
+  {"role": "system", "content": {{ system_prompt | tojson }}},
+  {"role": "user", "content": {{ user_prompt | tojson }}}
+]

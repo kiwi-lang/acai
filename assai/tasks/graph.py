@@ -215,6 +215,12 @@ class TaskGraph:
         """Prepare work using an agent — render its Jinja2 template.
 
         Returns a hydrated payload dict ready for ``dispatch()``.
+
+        Extra keyword arguments:
+
+        * ``reasoning`` — injected as a prior-reasoning system message.
+        * ``extra_context`` — dict of additional variables passed to the
+          Jinja2 template via :func:`hydrate_task`.
         """
         from assai.orchestrator.agent_store import hydrate_task, resolve_task
 
@@ -233,9 +239,13 @@ class TaskGraph:
         )
         resolved = resolve_task(task_proxy, self.config, self.chat, self.projects)
 
+        extra_context = kwargs.get("extra_context")
         messages = hydrate_task(
-            agent_def, self.agent_store, resolved,
+            agent_def, 
+            self.agent_store, 
+            resolved,
             tools_description=tools_desc,
+            extra_context=extra_context,
         )
 
         reasoning = kwargs.get("reasoning", "")

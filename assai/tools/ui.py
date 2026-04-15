@@ -22,8 +22,7 @@ def toast(
     duration: int = 5000,
 ) -> str:
     """Display a toast notification in the user's browser.
-    Only use it when the user need to grab the user's attention.
-    Use Sparingly.
+    Call this ONLY when the user explicitly requests a notification, or a destructive/irreversible action completes.
 
     Args:
         message: The notification body text.

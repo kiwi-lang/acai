@@ -12,30 +12,11 @@ import json
 import logging
 import re
 import traceback as _tb
-from typing import AsyncIterator, TYPE_CHECKING
+from typing import AsyncIterator
 
-from assai.tasks.graph import TaskGraph
-
-if TYPE_CHECKING:
-    pass
+from assai.tasks.graph import Acc, TaskGraph
 
 log = logging.getLogger(__name__)
-
-_ROUTER_SYSTEM_PROMPT = """\
-You are a conversation router.  Given a user message and a catalogue of
-existing conversations, decide which conversation this message belongs to.
-
-Return a JSON object — nothing else (no markdown fences, no commentary):
-
-  Existing conversation:  {"id": "<conversation_id>"}
-  New conversation:       {"id": "new", "title": "<2-6 word title>", "tags": ["tag1", "tag2"]}
-
-Rules:
-- If the message clearly continues an existing conversation, return its exact id.
-- When a currently_active conversation is provided, PREFER it unless the message
-  is clearly about a different topic.
-- Only return "new" when the message does not fit ANY existing conversation.
-- For new conversations, provide a concise title and 2-5 topic tags."""
 
 
 def _fallback_title(message: str) -> str:
@@ -137,68 +118,39 @@ class UberGraph(TaskGraph):
 
     async def _route(self, message: str, current_conv_id: str, agent: str) -> dict:
         """Dispatch a routing LLM call and return the decision dict."""
-        from assai.orchestrator.iterator import AsyncSSEIterator
-
         catalogue = self._build_catalogue()
         log.info(
             "routing message  catalogue_size=%d  current_conv=%s  message=%r",
             len(catalogue), current_conv_id or "(none)", message[:80],
         )
 
-        if catalogue:
-            lines = []
-            for c in catalogue:
-                parts = [f'id={c["id"]}', f'title="{c["title"]}"']
-                if c["description"]:
-                    parts.append(f'description="{c["description"]}"')
-                if c["tags"]:
-                    parts.append(f'tags=[{", ".join(c["tags"])}]')
-                lines.append("- " + "  ".join(parts))
-            catalogue_text = "\n".join(lines)
-        else:
-            catalogue_text = "(no conversations yet)"
-
-        active_hint = ""
+        active_conversation = None
         if current_conv_id:
-            current = next((c for c in catalogue if c["id"] == current_conv_id), None)
-            if current:
-                active_hint = (
-                    f'\ncurrently_active: {current_conv_id} — "{current["title"]}"'
-                    f"\n(Prefer this conversation unless the message is clearly about a different topic.)\n"
-                )
+            active_conversation = next(
+                (c for c in catalogue if c["id"] == current_conv_id), None,
+            )
 
-        user_prompt = (
-            f"Conversations:\n{catalogue_text}\n"
-            f"{active_hint}\n"
-            f"User message:\n{message}"
-        )
-
-        messages = [
-            {"role": "system", "content": _ROUTER_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ]
-
-        payload = {
+        route_work = {
             "task_id": "uber-route",
-            "kind": "llm_complete",
-            "messages": messages,
+            "kind": "route",
+            "message": message,
         }
 
+        payload = self.prepare(
+            "router", route_work,
+            extra_context={
+                "catalogue": catalogue,
+                "active_conversation": active_conversation,
+                "user_message": message,
+            },
+        )
+
         result_text = ""
-        url = f"{self.worker.url}/llm/complete"
+        acc = Acc(self.dispatch(payload))
         try:
-            async for event in AsyncSSEIterator(url, json=payload):
-                if event.event == "done":
-                    break
-                if event.event == "token":
-                    try:
-                        data = event.json()
-                        result_text += data.get("token", "")
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                if event.event == "error":
-                    log.error("routing LLM error: %s", event.data)
-                    break
+            async for _event in acc:
+                pass
+            result_text = acc.text
         except Exception:
             log.exception("routing dispatch failed")
 
