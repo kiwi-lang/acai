@@ -1,11 +1,13 @@
-"""Orchestrator HTTP server — owns the work queue and project state.
+"""Orchestrator HTTP server — owns project state and agent execution.
 
 The orchestrator is a FastAPI + SocketIO app that:
 
-* Accepts user conversation messages (async — queues work, returns task_id).
-* Serves ``GET /work/pop`` so workers can pull prepared work.
-* Accepts ``POST /work/result/<task_id>`` to receive completed results.
-* Relays streaming chunks from the worker to UI clients via WebSocket.
+* Accepts user conversation messages and streams LLM responses via SSE.
+* Acquires workers from the ``LoadBalancer`` and dispatches work via
+  ``TaskGraph`` subclasses (``ConverseGraph``, ``ThinkGraph``).
+* Manages the ``LoadBalancer`` — workers register on startup and send
+  periodic health telemetry over WebSocket.
+* Relays SSE streams from workers to UI clients via ``StreamTracker``.
 * Manages projects, specs, git worktrees, and the task CRUD API.
 """
 
@@ -25,6 +27,7 @@ from starlette.responses import Response, StreamingResponse
 from assai.core.compat import SocketIO, join_room, leave_room
 
 from assai.core.agent_store import AgentDef, AgentStore, hydrate_task, resolve_task
+from assai.core.load_balancer import LoadBalancer
 from assai.core.stream import StreamTracker
 from assai.core.chat import ChatStore
 from assai.core.config import (
@@ -32,9 +35,8 @@ from assai.core.config import (
 )
 from assai.core.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
-from assai.scheduler.uber import UberScheduler
-from assai.scheduler.types import StepResult, WorkStep
-from assai.scheduler.registry import get_scheduler as _get_scheduler
+from assai.tasks import ConverseGraph, ThinkGraph
+from assai.tasks.uber import UberRouter
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
@@ -54,171 +56,28 @@ async def _json_body(request: Request) -> dict:
 
 
 # ------------------------------------------------------------------
-# Orchestrator — watches completed items and chains tool calls
+# Orchestrator — reaps stuck tasks
 # ------------------------------------------------------------------
 
 class Orchestrator:
-    """Background thread that chains work items.
+    """Background thread that reaps stuck tasks.
 
-    Watches for completed ``llm_complete`` items whose results contain
-    tool calls, creates ``tool_call`` items for each, and schedules a
-    follow-up ``llm_complete`` once all tool results are in.
-
-    Also reaps stuck tasks (``in_progress`` longer than the configured
-    timeout) and retries them when ``retries < max_retries``.
+    Tasks stuck in ``in_progress`` longer than the configured timeout
+    are retried or marked failed.
     """
 
     def __init__(self, config: AssaiConfig, queue: WorkQueue,
-                 tasks_dir: str | None = None,
                  socketio_ref: list | None = None,
                  chat: ChatStore | None = None):
         self.config = config
         self.queue = queue
-        self.tasks_dir = tasks_dir or config.worker.tasks_dir
         self._sio_ref = socketio_ref or [None]
         self._chat = chat
 
     def run(self):
         while True:
-            self._poll()
             self._reap_stuck()
             time.sleep(self.config.queue.poll_interval)
-
-    def _poll(self):
-        completed = self.queue.list(status=TaskStatus.COMPLETED)
-        for task in completed:
-            if task.kind != "llm_complete":
-                continue
-            if not task.result_path:
-                continue
-            self._maybe_chain(task)
-
-    def _conv_id_from_task(self, task) -> str:
-        """Extract conversation id from a task's spec_path."""
-        if task.spec_path and task.spec_path.endswith("conversation.json"):
-            return os.path.basename(os.path.dirname(task.spec_path))
-        return ""
-
-    def _maybe_chain(self, task):
-        try:
-            with open(task.result_path) as f:
-                raw = f.read()
-        except OSError:
-            return
-
-        try:
-            result = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            return
-
-        if not isinstance(result, dict):
-            return
-        tool_calls = result.get("tool_calls")
-        if not tool_calls or not isinstance(tool_calls, list):
-            return
-
-        existing = self.queue.list()
-        chained_ids = {
-            t.id for t in existing
-            if t.depends_on and task.id in t.depends_on
-        }
-        if chained_ids:
-            return
-
-        task_project = task.project or ""
-        task_root = task.root_task or task.id
-        conv_id = self._conv_id_from_task(task)
-
-        tool_task_ids = []
-        for call in tool_calls:
-            fn = call.get("function", {})
-            tool_name = fn.get("name", "unknown")
-            try:
-                tool_args = json.loads(fn.get("arguments", "{}"))
-            except (json.JSONDecodeError, TypeError):
-                tool_args = {}
-
-            if self._chat and conv_id:
-                self._chat.append(conv_id, {
-                    "role": "tool_call",
-                    "content": json.dumps({"tool": tool_name, "args": tool_args}, ensure_ascii=False),
-                    "name": tool_name,
-                })
-
-            sio = self._sio_ref[0]
-            if sio is not None:
-                sio.emit("tool_start", {
-                    "conversation": conv_id,
-                    "tool_name": tool_name,
-                    "args": tool_args,
-                }, to=f"conv:{conv_id}" if conv_id else None)
-
-            payload = {
-                "tool": tool_name,
-                "args": tool_args,
-                "call_id": call.get("id", ""),
-                "conversation": conv_id,
-                "project": task_project,
-                "agent": task.agent or "",
-            }
-            payload_path = self._write_payload(task.id, call.get("id", ""), payload)
-
-            tool_task = self.queue.push(
-                title=f"tool: {tool_name}",
-                kind="tool_call",
-                gpu=0,
-                priority=task.priority,
-                spec_path=payload_path,
-                depends_on=None,
-                project=task_project,
-                parent_task=task.id,
-                root_task=task_root,
-            )
-            self.queue.update(tool_task.id, status=TaskStatus.READY)
-            tool_task_ids.append(tool_task.id)
-
-        if tool_task_ids:
-            try:
-                with open(task.spec_path) as f:
-                    original_messages = json.load(f)
-            except (OSError, json.JSONDecodeError):
-                original_messages = []
-
-            followup_messages = list(original_messages)
-            followup_messages.append(result)
-            for call, tid in zip(tool_calls, tool_task_ids):
-                followup_messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.get("id", ""),
-                    "content": f"{{{{result:{tid}}}}}",
-                })
-
-            followup_path = self._write_payload(task.id, "followup", followup_messages)
-            followup = self.queue.push(
-                title=f"followup: {task.title}",
-                kind="llm_complete",
-                priority=task.priority,
-                spec_path=followup_path,
-                depends_on=tool_task_ids,
-                project=task_project,
-                agent=task.agent or "",
-                parent_task=task.id,
-                root_task=task_root,
-                enable_thinking=task.enable_thinking,
-                conversation=task.conversation or conv_id,
-            )
-            self.queue.update(followup.id, status=TaskStatus.READY)
-            self.queue.update(task.id, status="chained")
-
-    def _write_payload(self, parent_id: str, suffix: str, payload) -> str:
-        task_dir = os.path.join(self.tasks_dir, parent_id)
-        os.makedirs(task_dir, exist_ok=True)
-        path = os.path.join(task_dir, f"payload_{suffix}.json")
-        with open(path, "w") as f:
-            json.dump(payload, f)
-        return path
-
-    # -- Stuck-task reaper / retry ------------------------------------
 
     def _reap_stuck(self):
         """Find tasks stuck in ``in_progress`` beyond the timeout and
@@ -232,10 +91,8 @@ class Orchestrator:
         now = datetime.now(timezone.utc)
         in_progress = self.queue.list(status=TaskStatus.IN_PROGRESS)
 
-        _DRIVER_KINDS = {"converse", "think"}
-
         for task in in_progress:
-            if task.kind in _DRIVER_KINDS:
+            if task.kind in ("converse", "think"):
                 continue
             if task.started_at is None:
                 continue
@@ -350,17 +207,20 @@ def _dump_request(workspace: str, task_id: str,
 
 def create_router(config: AssaiConfig | None = None,
                   prefix: str = "/agent",
-                  stream_tracker: StreamTracker | None = None):
+                  stream_tracker: StreamTracker | None = None,
+                  load_balancer: LoadBalancer | None = None):
     """Build the orchestrator APIRouter.
 
     Returns ``(router, queue, events, chat, config, stream_tracker,
-    socketio_ref, pop_fn)`` so the caller can compose with SocketIO
-    and worker routers.
+    socketio_ref, load_balancer)`` so the caller can compose with
+    SocketIO and worker routers.
     """
     if config is None:
         config = AssaiConfig()
 
     tracker = stream_tracker or StreamTracker()
+    lb = load_balancer or LoadBalancer()
+    lb.start()
 
     router = APIRouter(prefix=prefix, tags=["agent"])
     _socketio_ref: list[SocketIO | None] = [None]
@@ -374,10 +234,10 @@ def create_router(config: AssaiConfig | None = None,
     chat = ChatStore(config.workspace)
     scheduler = ProviderScheduler(config.providers)
 
-    uber_scheduler = UberScheduler(config, chat, queue, tracker)
-
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
+
+    uber_router = UberRouter(chat=chat, agent_store=agent_store, config=config)
 
     from assai.core.tools import discover_tools
     tool_registry = discover_tools()
@@ -389,198 +249,41 @@ def create_router(config: AssaiConfig | None = None,
     threading.Thread(target=orc.run, daemon=True, name="orchestrator").start()
 
     # ==================================================================
-    # Scheduler driver — bridges async generators with the work queue
+    # Worker registry endpoints
     # ==================================================================
 
-    _pending_steps: dict[str, dict] = {}
-    _pending_steps_lock = threading.Lock()
+    @router.post("/workers/register", status_code=201)
+    async def register_worker(request: Request):
+        data = await _json_body(request)
+        url = data.get("url", "")
+        if not url:
+            return JSONResponse({"error": "url is required"}, status_code=400)
+        capabilities = data.get("capabilities", {})
+        worker_id = lb.register(url, capabilities)
+        return {"worker_id": worker_id}
 
-    def _resolve_step(task_id: str, event_type: str, event_data: dict) -> bool:
-        with _pending_steps_lock:
-            entry = _pending_steps.get(task_id)
-            if entry is None:
-                return False
+    @router.delete("/workers/{worker_id}")
+    def unregister_worker(worker_id: str):
+        removed = lb.unregister(worker_id)
+        if not removed:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"deleted": True}
 
-        step: WorkStep = entry["step"]
+    @router.get("/workers")
+    def list_workers():
+        return [w.to_dict() for w in lb.list_workers()]
 
-        if event_type == "token":
-            token = event_data.get("token", "")
-            entry["text"] += token
-
-            if step.stream_mode == "token":
-                tracker.push(entry["conv_id"], {"event_type": "token", "data": event_data})
-            elif step.stream_mode == "reasoning":
-                tracker.push(entry["conv_id"], {"event_type": "reasoning", "data": event_data})
-
-        elif event_type == "reasoning":
-            entry["reasoning"] += event_data.get("token", "")
-            if step.stream_mode != "silent":
-                tracker.push(entry["conv_id"], {"event_type": "reasoning", "data": event_data})
-
-        elif event_type == "tool_call_delta":
-            idx = event_data.get("index", 0)
-            tc_id = event_data.get("id")
-            tc_name = event_data.get("name")
-            tc_args = event_data.get("arguments")
-
-            tcs = entry["tool_calls"]
-            if idx not in tcs:
-                tcs[idx] = {
-                    "id": tc_id or "",
-                    "type": "function",
-                    "function": {"name": "", "arguments": ""},
-                }
-            tc_entry = tcs[idx]
-            if tc_id:
-                tc_entry["id"] = tc_id
-            if tc_name:
-                tc_entry["function"]["name"] = tc_name
-            if tc_args:
-                tc_entry["function"]["arguments"] += tc_args
-
-        elif event_type == "done":
-            tool_calls_list = [
-                entry["tool_calls"][i] for i in sorted(entry["tool_calls"])
-            ]
-            result = StepResult(
-                text=entry["text"],
-                reasoning=entry["reasoning"],
-                tool_calls=tool_calls_list,
-            )
-
-            with _pending_steps_lock:
-                _pending_steps.pop(task_id, None)
-
-            loop = entry.get("loop")
-            future = entry["future"]
-            if loop is not None and not future.done():
-                loop.call_soon_threadsafe(future.set_result, result)
-
-            return True
-
-        elif event_type == "error":
-            error_msg = event_data.get("message", "unknown error")
-            result = StepResult(error=error_msg)
-
-            with _pending_steps_lock:
-                _pending_steps.pop(task_id, None)
-
-            loop = entry.get("loop")
-            future = entry["future"]
-            if loop is not None and not future.done():
-                loop.call_soon_threadsafe(future.set_result, result)
-
-            if step.stream_mode != "silent":
-                tracker.push(entry["conv_id"], {"event_type": "error", "data": event_data})
-            return True
-
-        else:
-            if step.stream_mode != "silent":
-                tracker.push(entry["conv_id"], {"event_type": event_type, "data": event_data})
-
-        return True
-
-    async def _await_step(sub_task_id: str, step: WorkStep, conv_id: str) -> StepResult:
-        loop = asyncio.get_running_loop()
-        future: asyncio.Future[StepResult] = loop.create_future()
-
-        entry = {
-            "step": step,
-            "conv_id": conv_id,
-            "future": future,
-            "loop": loop,
-            "text": "",
-            "reasoning": "",
-            "tool_calls": {},
-        }
-
-        with _pending_steps_lock:
-            _pending_steps[sub_task_id] = entry
-
-        return await future
-
-    def _push_step(step: WorkStep, root_task_id: str, conv_id: str) -> str:
-        sub = queue.push(
-            title=f"scheduler: {step.kind}",
-            kind=step.kind,
-            spec_path="",
-            project=step.payload.get("project_name", ""),
-            agent=step.payload.get("agent", ""),
-            parent_task=root_task_id,
-            root_task=root_task_id,
-            conversation=conv_id,
-            enable_thinking=step.payload.get("enable_thinking"),
-        )
-
-        final_payload = dict(step.payload)
-
-        if step.kind == "llm_complete" and "provider" not in final_payload and conv_id:
-            prov_info = _resolve_provider_for_task(sub, conv_id)
-            if prov_info:
-                final_payload["provider"] = prov_info
-
-        task_dir = os.path.join(config.worker.tasks_dir, sub.id)
-        os.makedirs(task_dir, exist_ok=True)
-
-        payload_path = os.path.join(task_dir, "scheduler_payload.json")
-        with open(payload_path, "w", encoding="utf-8") as f:
-            json.dump(final_payload, f, ensure_ascii=False)
-
-        queue.update(sub.id, spec_path=payload_path, ext={"scheduler_driven": True})
-        queue.update(sub.id, status=TaskStatus.READY)
-        tracker.register(sub.id, conv_id)
-
-        log.info(
-            "push_step  sub_task=%s  kind=%s  root=%s  conv=%s",
-            sub.id, step.kind, root_task_id, conv_id,
-        )
-        return sub.id
-
-    async def drive_scheduler(scheduler_instance, task, conv_id: str) -> None:
-        gen = scheduler_instance.run(task, conv_id)
-        try:
-            step: WorkStep = await gen.__anext__()
-
-            result: StepResult | None = None
-            while True:
-                sub_task_id = _push_step(step, task.id, conv_id)
-
-                result = await _await_step(sub_task_id, step, conv_id)
-
-                if result.error:
-                    log.error(
-                        "scheduler step failed  task=%s  sub=%s: %s",
-                        task.id, sub_task_id, result.error,
-                    )
-                    queue.update(task.id, status=TaskStatus.FAILED, error_log=result.error)
-                    tracker.push(conv_id, {"event_type": "error", "data": {"message": result.error}})
-                    break
-
-                try:
-                    step = await gen.asend(result)
-                except StopAsyncIteration:
-                    break
-
-            if result and not result.error:
-                if result.text:
-                    chat.append(conv_id, {
-                        "role": "assistant",
-                        "content": result.text,
-                        **({"reasoning": result.reasoning} if result.reasoning else {}),
-                    })
-                queue.update(task.id, status=TaskStatus.COMPLETED)
-                tracker.push(conv_id, {"event_type": "done", "data": {}})
-                log.info("driver completed  task=%s  conv=%s  chars=%d",
-                         task.id, conv_id, len(result.text) if result.text else 0)
-
-        except StopAsyncIteration:
-            queue.update(task.id, status=TaskStatus.COMPLETED)
-            tracker.push(conv_id, {"event_type": "done", "data": {}})
-            log.info("driver completed (empty)  task=%s  conv=%s", task.id, conv_id)
-        except Exception:
-            log.exception("scheduler driver crashed  task=%s", task.id)
-            queue.update(task.id, status=TaskStatus.FAILED, error_log="scheduler driver crash")
-            tracker.push(conv_id, {"event_type": "error", "data": {"message": "scheduler error"}})
+    @router.post("/workers/heartbeat")
+    async def worker_heartbeat_http(request: Request):
+        data = await _json_body(request)
+        worker_id = data.get("worker_id", "")
+        telemetry = data.get("telemetry", {})
+        if not worker_id:
+            return JSONResponse({"error": "worker_id required"}, status_code=400)
+        found = lb.heartbeat(worker_id, telemetry)
+        if not found:
+            return JSONResponse({"error": "unknown worker"}, status_code=404)
+        return {"ok": True}
 
     # ==================================================================
     # Conversations CRUD
@@ -649,81 +352,85 @@ def create_router(config: AssaiConfig | None = None,
         return {"deleted": True}
 
     # ==================================================================
-    # Converse (async — queues work, returns task_id)
+    # Converse (SSE streaming via TaskGraph)
     # ==================================================================
 
     @router.post("/converse")
     async def agent_converse(request: Request):
+        import traceback as _tb
+
         data = await _json_body(request)
         message = data.get("message", "")
         conversation = data.get("conversation", "")
         project = data.get("project", "")
-        parent_task = data.get("parent_task", "")
-        provider_name = data.get("provider", "")
-        agent_name = data.get("agent", "")
-        enable_thinking = data.get("enable_thinking")
+        provider_name = data.get("provider", "auto")
+        agent_name = data.get("agent", "") or _default_agent_for_project(project)
+
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
         if not conversation:
-            default_agent = _default_agent_for_project(project)
-            meta = chat.create(title=message[:80], project=project,
-                               provider=provider_name or "auto",
-                               agent=agent_name or default_agent)
+            meta = chat.create(
+                title=message[:80], project=project,
+                provider=provider_name, agent=agent_name,
+            )
             conversation = meta.id
-        else:
-            updates: dict = {}
-            if provider_name:
-                updates["provider"] = provider_name
-            if agent_name:
-                updates["agent"] = agent_name
-            if updates:
-                chat.update_meta(conversation, **updates)
-
-        if enable_thinking is not None:
-            chat.update_meta(conversation, enable_thinking=enable_thinking)
 
         chat.append(conversation, {"role": "user", "content": message})
 
-        conv_meta = chat.get_meta(conversation) or {}
-        proj = (project or conv_meta.get("project") or "").strip()
-        default_agent = _default_agent_for_project(proj)
-        meta_agent = (conv_meta.get("agent") or "").strip()
-        effective_agent = agent_name or meta_agent or default_agent
+        provider_override = None
+        if provider_name and provider_name != "auto":
+            prov = config.get_provider(provider_name)
+            if prov:
+                from dataclasses import asdict as _asdict
+                active = config.active_provider()
+                if prov.name != active.name:
+                    provider_override = _asdict(prov)
 
-        root = queue.resolve_root(parent_task) if parent_task else ""
-        conv_path = chat._msg_path(conversation)
-        task = queue.push(
-            title=f"converse: {message[:60]}",
-            kind="converse",
-            spec_path=conv_path,
-            project=project or proj,
-            agent=effective_agent,
-            parent_task=parent_task,
-            root_task=root,
-            enable_thinking=enable_thinking,
-            conversation=conversation,
-        )
-        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
-        tracker.register(task.id, conversation)
+        work = {
+            "message": message,
+            "conversation": conversation,
+            "agent": agent_name,
+            "project": project,
+            "spec_path": chat._msg_path(conversation),
+            "stream_id": conversation,
+            "provider_override": provider_override,
+        }
 
-        sched = _get_scheduler(
-            "converse",
-            config=config,
-            chat=chat,
-            queue=queue,
-            tracker=tracker,
-            agent_store=agent_store,
-            projects=projects,
-            tool_registry=tool_registry,
-        )
-        asyncio.create_task(
-            drive_scheduler(sched, task, conversation),
-        )
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
-        return JSONResponse(
-            {"task_id": task.id, "conversation": conversation},
-            status_code=202,
+        async def generate():
+            yield _sse("meta", {"conversation": conversation})
+            try:
+                async with lb.acquire() as worker:
+                    graph = ConverseGraph.from_work(
+                        worker, work,
+                        agent_store=agent_store,
+                        chat=chat,
+                        config=config,
+                        tracker=tracker,
+                        projects=projects,
+                        tool_registry=tool_registry,
+                    )
+                    async for event in graph.run(work):
+                        yield _sse(
+                            event.get("event_type", "message"),
+                            event.get("data", {}),
+                        )
+            except TimeoutError:
+                yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
+            except Exception as exc:
+                log.exception("converse stream error")
+                yield _sse("error", {
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "traceback": _tb.format_exc(),
+                })
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"X-Conversation": conversation},
         )
 
     @router.get("/conversations/{conv_id}/context-stats")
@@ -757,6 +464,8 @@ def create_router(config: AssaiConfig | None = None,
 
     @router.post("/uber/converse")
     async def uber_converse(request: Request):
+        import traceback as _tb
+
         data = await _json_body(request)
         message = data.get("message", "")
         current_conversation = data.get("current_conversation", "")
@@ -766,11 +475,26 @@ def create_router(config: AssaiConfig | None = None,
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
-        routing = await uber_scheduler.route(
-            message=message,
-            current_conv_id=current_conversation,
-            agent=agent_name,
-        )
+        try:
+            async with lb.acquire() as worker:
+                routing = await uber_router.route(
+                    worker,
+                    message=message,
+                    current_conv_id=current_conversation,
+                    agent=agent_name,
+                )
+        except TimeoutError:
+            return JSONResponse(
+                {"error": "No worker available (timeout waiting for a free worker)."},
+                status_code=503,
+            )
+        except Exception as exc:
+            log.exception("uber route error")
+            return JSONResponse(
+                {"error": f"{type(exc).__name__}: {exc}"},
+                status_code=500,
+            )
+
         conv_id = routing["conversation"]
         is_new = routing.get("is_new", False)
 
@@ -782,33 +506,49 @@ def create_router(config: AssaiConfig | None = None,
 
         chat.append(conv_id, {"role": "user", "content": message})
 
-        conv_path = chat._msg_path(conv_id)
-        task = queue.push(
-            title=f"converse: {message[:60]}",
-            kind="converse",
-            spec_path=conv_path,
-            agent=agent_name,
-            conversation=conv_id,
-        )
-        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
-        tracker.register(task.id, conv_id)
+        provider_override = None
+        if provider_name and provider_name != "auto":
+            prov = config.get_provider(provider_name)
+            if prov:
+                from dataclasses import asdict as _asdict
+                active = config.active_provider()
+                if prov.name != active.name:
+                    provider_override = _asdict(prov)
 
-        sched = _get_scheduler(
-            "converse",
-            config=config,
-            chat=chat,
-            queue=queue,
-            tracker=tracker,
-            agent_store=agent_store,
-            projects=projects,
-            tool_registry=tool_registry,
-        )
-        asyncio.create_task(
-            drive_scheduler(sched, task, conv_id),
-        )
+        work = {
+            "message": message,
+            "conversation": conv_id,
+            "agent": agent_name,
+            "spec_path": chat._msg_path(conv_id),
+            "stream_id": conv_id,
+            "provider_override": provider_override,
+        }
+
+        async def _run_graph():
+            try:
+                async with lb.acquire() as w:
+                    graph = ConverseGraph.from_work(
+                        w, work,
+                        agent_store=agent_store,
+                        chat=chat,
+                        config=config,
+                        tracker=tracker,
+                        projects=projects,
+                        tool_registry=tool_registry,
+                    )
+                    async for _ in graph.run(work):
+                        pass
+            except Exception:
+                log.exception("uber converse background error")
+                tracker.push(conv_id, {
+                    "event_type": "error",
+                    "data": {"message": "Background task failed", "traceback": _tb.format_exc()},
+                })
+
+        asyncio.create_task(_run_graph())
 
         return JSONResponse(
-            {"task_id": task.id, "conversation": conv_id, "is_new": is_new},
+            {"stream_id": conv_id, "conversation": conv_id, "is_new": is_new},
             status_code=202,
         )
 
@@ -818,11 +558,12 @@ def create_router(config: AssaiConfig | None = None,
 
     @router.post("/think/converse")
     async def think_converse(request: Request):
+        import traceback as _tb
+
         data = await _json_body(request)
         message = data.get("message", "")
         conversation = data.get("conversation", "")
         project = data.get("project", "")
-        parent_task = data.get("parent_task", "")
         provider_name = data.get("provider", "")
         agent_name = data.get("agent", "")
         if not message:
@@ -853,38 +594,59 @@ def create_router(config: AssaiConfig | None = None,
         meta_agent = (conv_meta.get("agent") or "").strip()
         effective_agent = agent_name or meta_agent or default_agent
 
-        root = queue.resolve_root(parent_task) if parent_task else ""
-        conv_path = chat._msg_path(conversation)
-        task = queue.push(
-            title=f"think: {message[:60]}",
-            kind="think",
-            spec_path=conv_path,
-            project=project or proj,
-            agent=effective_agent,
-            parent_task=parent_task,
-            root_task=root,
-            conversation=conversation,
-        )
-        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
-        tracker.register(task.id, conversation)
+        provider_override = None
+        if provider_name and provider_name != "auto":
+            prov = config.get_provider(provider_name)
+            if prov:
+                from dataclasses import asdict as _asdict
+                active = config.active_provider()
+                if prov.name != active.name:
+                    provider_override = _asdict(prov)
 
-        sched = _get_scheduler(
-            "think",
-            config=config,
-            chat=chat,
-            queue=queue,
-            tracker=tracker,
-            agent_store=agent_store,
-            projects=projects,
-            tool_registry=tool_registry,
-        )
-        asyncio.create_task(
-            drive_scheduler(sched, task, conversation),
-        )
+        work = {
+            "message": message,
+            "conversation": conversation,
+            "agent": effective_agent,
+            "project": project or proj,
+            "spec_path": chat._msg_path(conversation),
+            "stream_id": conversation,
+            "provider_override": provider_override,
+        }
 
-        return JSONResponse(
-            {"task_id": task.id, "conversation": conversation},
-            status_code=202,
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        async def generate():
+            yield _sse("meta", {"conversation": conversation})
+            try:
+                async with lb.acquire() as worker:
+                    graph = ThinkGraph.from_work(
+                        worker, work,
+                        agent_store=agent_store,
+                        chat=chat,
+                        config=config,
+                        tracker=tracker,
+                        projects=projects,
+                        tool_registry=tool_registry,
+                    )
+                    async for event in graph.run(work):
+                        yield _sse(
+                            event.get("event_type", "message"),
+                            event.get("data", {}),
+                        )
+            except TimeoutError:
+                yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
+            except Exception as exc:
+                log.exception("think/converse stream error")
+                yield _sse("error", {
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "traceback": _tb.format_exc(),
+                })
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"X-Conversation": conversation},
         )
 
     # ==================================================================
@@ -917,134 +679,8 @@ def create_router(config: AssaiConfig | None = None,
         return {"cleared": True}
 
     # ==================================================================
-    # Work endpoints (worker pulls work / pushes results)
+    # Work endpoints
     # ==================================================================
-
-    def _resolve_provider_for_task(task, conv_id: str = "") -> dict | None:
-        provider_name = ""
-        if conv_id:
-            meta = chat.get_meta(conv_id)
-            if meta:
-                provider_name = meta.get("provider", "auto")
-
-        if not provider_name or provider_name == "auto":
-            prov = scheduler.select("worker")
-        else:
-            prov = config.get_provider(provider_name)
-            if prov is None:
-                prov = scheduler.select("worker")
-
-        if prov is None:
-            return None
-
-        active = config.active_provider()
-        if prov.name == active.name:
-            return None
-
-        from dataclasses import asdict as _asdict
-        return _asdict(prov)
-
-    def _do_pop() -> dict | None:
-        """Pop and hydrate the next ready work item.
-
-        Scheduler-driven root tasks (``kind="converse"`` / ``"think"``)
-        are set to ``IN_PROGRESS`` immediately and never appear here.
-        Sub-tasks pushed by the scheduler driver are tagged with
-        ``ext.scheduler_driven`` and their pre-hydrated payload is
-        returned directly.
-        """
-        task = queue.pop(status=TaskStatus.READY)
-        if task is None:
-            return None
-
-        queue.update(task.id, status=TaskStatus.IN_PROGRESS)
-
-        ext = task.ext or {}
-        if ext.get("scheduler_driven"):
-            payload: dict = {}
-            if task.spec_path and os.path.isfile(task.spec_path):
-                with open(task.spec_path) as f:
-                    try:
-                        payload = json.load(f)
-                    except (json.JSONDecodeError, ValueError):
-                        payload = {}
-            payload["task_id"] = task.id
-            payload["kind"] = task.kind
-            return payload
-
-        if task.kind == "tool_call":
-            payload = {}
-            if task.spec_path and os.path.isfile(task.spec_path):
-                with open(task.spec_path) as f:
-                    try:
-                        payload = json.load(f)
-                    except (json.JSONDecodeError, ValueError):
-                        payload = {}
-            return {"task_id": task.id, "kind": task.kind, **payload}
-
-        resolved = resolve_task(task, config, chat, projects)
-        agent_name = resolved["agent"] or "default"
-        agent_def = agent_store.get(agent_name) or agent_store.get("default")
-
-        tool_defs = None
-        tools_desc = ""
-        if agent_def.tools:
-            tool_defs = tool_registry.mcp_definitions(namespaces=agent_def.tools)
-            if tool_defs:
-                lines = []
-                for td in tool_defs:
-                    fn = td.get("function", {})
-                    params = fn.get("parameters", {}).get("properties", {})
-                    param_strs = [
-                        f"  - {k}: {v.get('description', v.get('type', ''))}"
-                        for k, v in params.items()
-                    ]
-                    lines.append(f"- **{fn.get('name', '')}**: {fn.get('description', '')}")
-                    lines.extend(param_strs)
-                tools_desc = "\n".join(lines)
-
-        messages = hydrate_task(
-            agent_def, agent_store, resolved,
-            tools_description=tools_desc,
-        )
-
-        if config.dump_rendered_request:
-            _dump_request(config.workspace, task.id, messages, agent_name,
-                          tools=tool_defs)
-
-        result: dict = {
-            "task_id": task.id,
-            "kind": task.kind,
-            "messages": messages,
-            "conversation": resolved["conversation"],
-            "agent": agent_name,
-            "compressor": agent_def.compressor,
-        }
-        if tool_defs:
-            result["tools"] = tool_defs
-
-        project_obj = resolved.get("project_obj")
-        if project_obj and project_obj.path:
-            result["project_path"] = project_obj.path
-            result["project_name"] = resolved.get("project", "")
-
-        conv_id = resolved["conversation"]
-        if conv_id:
-            prov_info = _resolve_provider_for_task(task, conv_id)
-            if prov_info:
-                result["provider"] = prov_info
-
-        if task.enable_thinking is not None:
-            result["enable_thinking"] = task.enable_thinking
-
-        return result
-
-    @router.get("/work/pop")
-    def work_pop():
-        result = _do_pop()
-        if result is None:
-            return Response(status_code=204)
-        return result
 
     @router.post("/work/result/{task_id}")
     async def work_result(task_id: str, request: Request):
@@ -1114,297 +750,19 @@ def create_router(config: AssaiConfig | None = None,
                         "content": result_preview,
                         "name": tool_name,
                     })
-                    tracker.push(conversation, {
-                        "event_type": "tool_end",
-                        "data": {
-                            "conversation": conversation,
-                            "tool_name": tool_name,
-                            "result_preview": result_preview[:200],
-                        },
-                    })
 
         return {"ok": True}
 
     # ==================================================================
-    # Streaming: push (poller -> orchestrator) and SSE (orchestrator -> UI)
+    # Streaming: SSE endpoint (orchestrator -> UI)
     # ==================================================================
 
-    _active_streams: dict[str, dict] = {}
-    _active_streams_lock = threading.Lock()
+    @router.get("/stream/{stream_id}")
+    def stream_sse(stream_id: str):
+        """SSE endpoint — UI subscribes by root task id."""
+        q = tracker.subscribe(stream_id)
 
-    def _dispatch_tool_call(task_id: str, conv_id: str, call: dict) -> str:
-        fn = call.get("function", {})
-        tool_name = fn.get("name", "unknown")
-        try:
-            tool_args = json.loads(fn.get("arguments", "{}"))
-        except (json.JSONDecodeError, TypeError):
-            tool_args = {}
-
-        task = queue.get(task_id)
-        task_project = (task.project or "") if task else ""
-        task_root = (task.root_task or task_id) if task else task_id
-        task_priority = task.priority if task else 0
-        task_agent = (task.agent or "") if task else ""
-
-        if chat and conv_id:
-            chat.append(conv_id, {
-                "role": "tool_call",
-                "content": json.dumps({"tool": tool_name, "args": tool_args}, ensure_ascii=False),
-                "name": tool_name,
-            })
-
-        tracker.push(conv_id, {
-            "event_type": "tool_start",
-            "data": {
-                "conversation": conv_id,
-                "tool_name": tool_name,
-                "args": tool_args,
-            },
-        })
-
-        payload = {
-            "tool": tool_name,
-            "args": tool_args,
-            "call_id": call.get("id", ""),
-            "conversation": conv_id,
-            "project": task_project,
-            "agent": task_agent,
-        }
-        payload_path = orc._write_payload(task_id, call.get("id", ""), payload)
-
-        tool_task = queue.push(
-            title=f"tool: {tool_name}",
-            kind="tool_call",
-            gpu=0,
-            priority=task_priority,
-            spec_path=payload_path,
-            depends_on=None,
-            project=task_project,
-            parent_task=task_id,
-            root_task=task_root,
-        )
-        queue.update(tool_task.id, status=TaskStatus.READY)
-        log.info("[%s] dispatched tool_call %s -> %s", task_id, tool_name, tool_task.id)
-        return tool_task.id
-
-    def _flush_tool_call(task_id: str, conv_id: str, stream_state: dict, index: int) -> None:
-        tc = stream_state["tool_calls"].pop(index, None)
-        if tc is None:
-            return
-        tid = _dispatch_tool_call(task_id, conv_id, tc)
-        stream_state["tool_task_ids"].append(tid)
-        stream_state["dispatched_calls"].append(tc)
-
-    def _handle_stream_event(task_id: str, conv_id: str,
-                             event_type: str, event_data: dict):
-        if _resolve_step(task_id, event_type, event_data):
-            return
-
-        if event_type == "reasoning":
-            with _active_streams_lock:
-                if task_id not in _active_streams:
-                    _active_streams[task_id] = {
-                        "conversation": conv_id,
-                        "tool_calls": {},
-                        "tool_task_ids": [],
-                        "dispatched_calls": [],
-                        "text": "",
-                        "reasoning": "",
-                    }
-                _active_streams[task_id].setdefault("reasoning", "")
-                _active_streams[task_id]["reasoning"] += event_data.get("token", "")
-
-            tracker.push(conv_id, {"event_type": "reasoning", "data": event_data})
-
-        elif event_type == "token":
-            with _active_streams_lock:
-                if task_id not in _active_streams:
-                    _active_streams[task_id] = {
-                        "conversation": conv_id,
-                        "tool_calls": {},
-                        "tool_task_ids": [],
-                        "dispatched_calls": [],
-                        "text": "",
-                        "reasoning": "",
-                    }
-                _active_streams[task_id]["text"] += event_data.get("token", "")
-
-            tracker.push(conv_id, {"event_type": "token", "data": event_data})
-
-        elif event_type == "tool_call_delta":
-            with _active_streams_lock:
-                if task_id not in _active_streams:
-                    _active_streams[task_id] = {
-                        "conversation": conv_id,
-                        "tool_calls": {},
-                        "tool_task_ids": [],
-                        "dispatched_calls": [],
-                        "text": "",
-                    }
-                ss = _active_streams[task_id]
-
-            idx = event_data.get("index", 0)
-            tc_id = event_data.get("id")
-            tc_name = event_data.get("name")
-            tc_args = event_data.get("arguments")
-
-            with _active_streams_lock:
-                prev_indices = [i for i in ss["tool_calls"] if i < idx]
-                for pi in prev_indices:
-                    _flush_tool_call(task_id, conv_id, ss, pi)
-
-                if idx not in ss["tool_calls"]:
-                    ss["tool_calls"][idx] = {
-                        "id": tc_id or "",
-                        "type": "function",
-                        "function": {"name": "", "arguments": ""},
-                    }
-                entry = ss["tool_calls"][idx]
-                if tc_id:
-                    entry["id"] = tc_id
-                if tc_name:
-                    entry["function"]["name"] = tc_name
-                if tc_args:
-                    entry["function"]["arguments"] += tc_args
-
-        elif event_type == "done":
-            with _active_streams_lock:
-                ss = _active_streams.pop(task_id, None)
-
-            if ss:
-                for idx in sorted(ss["tool_calls"]):
-                    _flush_tool_call(task_id, conv_id, ss, idx)
-
-                if ss["tool_task_ids"]:
-                    task = queue.get(task_id)
-                    task_project = (task.project or "") if task else ""
-                    task_root = (task.root_task or task_id) if task else task_id
-                    task_priority = task.priority if task else 0
-
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": ss["text"] or None,
-                        "tool_calls": ss["dispatched_calls"],
-                    }
-                    if ss.get("reasoning"):
-                        assistant_msg["reasoning"] = ss["reasoning"]
-
-                    try:
-                        spec_path = task.spec_path if task else ""
-                        with open(spec_path) as f:
-                            original_messages = json.load(f)
-                    except (OSError, json.JSONDecodeError, TypeError):
-                        original_messages = []
-
-                    followup_messages = list(original_messages)
-                    followup_messages.append(assistant_msg)
-                    for call, tid in zip(ss["dispatched_calls"], ss["tool_task_ids"]):
-                        followup_messages.append({
-                            "role": "tool",
-                            "tool_call_id": call.get("id", ""),
-                            "content": f"{{{{result:{tid}}}}}",
-                        })
-
-                    followup_path = orc._write_payload(task_id, "followup", followup_messages)
-                    task_thinking = task.enable_thinking if task else None
-                    task_conv = (task.conversation or "") if task else conv_id
-                    task_agent = (task.agent or "") if task else ""
-                    followup = queue.push(
-                        title=f"followup: tool results",
-                        kind="llm_complete",
-                        priority=task_priority,
-                        spec_path=followup_path,
-                        depends_on=ss["tool_task_ids"],
-                        project=task_project,
-                        agent=task_agent,
-                        parent_task=task_id,
-                        root_task=task_root,
-                        enable_thinking=task_thinking,
-                        conversation=task_conv or conv_id,
-                    )
-                    queue.update(followup.id, status=TaskStatus.READY)
-                    tracker.register(followup.id, task_conv or conv_id)
-                    queue.update(task_id, status="chained")
-                    log.info("[%s] created followup %s  depends_on=%s",
-                             task_id, followup.id, ss["tool_task_ids"])
-
-            tracker.push(conv_id, {"event_type": "done", "data": event_data})
-
-        elif event_type == "error":
-            with _active_streams_lock:
-                _active_streams.pop(task_id, None)
-            tracker.push(conv_id, {"event_type": "error", "data": event_data})
-
-        else:
-            tracker.push(conv_id, {"event_type": event_type, "data": event_data})
-
-    @router.post("/stream/push")
-    async def stream_push(request: Request):
-        """Poller relays the worker's SSE stream as a streaming POST
-        with an NDJSON body (one JSON object per line).
-
-        Uses ``request.stream()`` so chunks are processed incrementally
-        — tokens reach the UI in real-time instead of buffering the
-        entire body first.
-        """
-        content_type = request.headers.get("content-type", "")
-
-        if "ndjson" in content_type or "octet-stream" in content_type:
-            buf = b""
-            async for chunk in request.stream():
-                buf += chunk
-                while b"\n" in buf:
-                    raw_line, buf = buf.split(b"\n", 1)
-                    raw_line = raw_line.strip()
-                    if not raw_line:
-                        continue
-                    try:
-                        data = json.loads(raw_line)
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-
-                    task_id = data.get("task_id", "")
-                    event_type = data.get("event_type", "")
-                    event_data = data.get("data", {})
-                    conv_id = data.get("conversation", "") or tracker.conv_for(task_id)
-
-                    if task_id and event_type:
-                        _handle_stream_event(task_id, conv_id, event_type, event_data)
-
-            if buf.strip():
-                try:
-                    data = json.loads(buf)
-                    task_id = data.get("task_id", "")
-                    event_type = data.get("event_type", "")
-                    event_data = data.get("data", {})
-                    conv_id = data.get("conversation", "") or tracker.conv_for(task_id)
-                    if task_id and event_type:
-                        _handle_stream_event(task_id, conv_id, event_type, event_data)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-
-            return {"ok": True}
-
-        data = await _json_body(request)
-        task_id = data.get("task_id", "")
-        event_type = data.get("event_type", "")
-        event_data = data.get("data", {})
-        conv_id = data.get("conversation", "") or tracker.conv_for(task_id)
-
-        if not task_id or not event_type:
-            return JSONResponse(
-                {"error": "task_id and event_type required"}, status_code=400,
-            )
-
-        _handle_stream_event(task_id, conv_id, event_type, event_data)
-        return {"ok": True}
-
-    @router.get("/stream/{conv_id}")
-    def stream_sse(conv_id: str):
-        """SSE endpoint — UI subscribes here to receive live events."""
-        q = tracker.subscribe(conv_id)
-
-        active_task, partial = tracker.get_partial(conv_id)
+        active_task, partial = tracker.get_partial(stream_id)
         replay = ""
         if active_task is not None and partial:
             replay = (
@@ -1430,7 +788,7 @@ def create_router(config: AssaiConfig | None = None,
                     if etype in ("done", "error"):
                         break
             finally:
-                tracker.unsubscribe(conv_id, q)
+                tracker.unsubscribe(stream_id, q)
 
         return StreamingResponse(generate(), media_type="text/event-stream")
 
@@ -1635,6 +993,7 @@ def create_router(config: AssaiConfig | None = None,
             counts[s] = len(queue.list(status=s))
 
         active = config.active_provider()
+        workers = lb.list_workers()
         return {
             "queue": counts,
             "events": len(events.history),
@@ -1642,6 +1001,8 @@ def create_router(config: AssaiConfig | None = None,
             "llm_endpoint": active.endpoint,
             "active_provider": active.name,
             "providers_count": len(config.providers),
+            "workers": len(workers),
+            "workers_idle": sum(1 for w in workers if w.status.value == "idle"),
         }
 
     # ==================================================================
@@ -1849,7 +1210,7 @@ def create_router(config: AssaiConfig | None = None,
         return result
 
     # ==================================================================
-    # Toast (worker → orchestrator → frontend via WebSocket)
+    # Toast (worker -> orchestrator -> frontend via WebSocket)
     # ==================================================================
 
     @router.post("/toast")
@@ -1868,7 +1229,7 @@ def create_router(config: AssaiConfig | None = None,
         })
         return {"ok": True}
 
-    return router, queue, events, chat, config, tracker, _socketio_ref, _do_pop
+    return router, queue, events, chat, config, tracker, _socketio_ref, lb
 
 
 # ------------------------------------------------------------------
@@ -1884,13 +1245,9 @@ _STATUS_KINDS = (
 
 def setup_socketio(socketio: SocketIO, config: AssaiConfig,
                    queue: WorkQueue, events: EventBus,
-                   pop_fn=None, app=None):
-    """Wire SocketIO event handlers.
-
-    If *app* is given the broadcast emitter is started as a native
-    ``asyncio.Task`` on the FastAPI event loop (via a startup handler)
-    instead of a daemon thread.
-    """
+                   load_balancer: LoadBalancer | None = None,
+                   app=None):
+    """Wire SocketIO event handlers."""
 
     @socketio.on("connect")
     def handle_connect():
@@ -1915,11 +1272,15 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
             leave_room(f"conv:{conv_id}")
             log.debug("client left room conv:%s", conv_id)
 
-    if pop_fn is not None:
-        @socketio.on("work_pop")
-        def handle_work_pop():
-            result = pop_fn()
-            return result or {}
+    if load_balancer is not None:
+        @socketio.on("worker_heartbeat")
+        def handle_worker_heartbeat(data):
+            if not isinstance(data, dict):
+                return
+            worker_id = data.get("worker_id", "")
+            telemetry = data.get("telemetry", {})
+            if worker_id:
+                load_balancer.heartbeat(worker_id, telemetry)
 
     async def _async_emit_loop():
         sio = socketio.server
@@ -1931,14 +1292,21 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
 
                 counts = {s: len(queue.list(status=s)) for s in _STATUS_KINDS}
                 active = config.active_provider()
-                await sio.emit("status", {
+                status_data: dict = {
                     "queue": counts,
                     "events": len(events.history),
                     "llm_backend": active.backend,
                     "llm_endpoint": active.endpoint,
                     "active_provider": active.name,
                     "providers_count": len(config.providers),
-                })
+                }
+                if load_balancer is not None:
+                    workers = load_balancer.list_workers()
+                    status_data["workers"] = len(workers)
+                    status_data["workers_idle"] = sum(
+                        1 for w in workers if w.status.value == "idle"
+                    )
+                await sio.emit("status", status_data)
 
                 recent = events.history[-100:]
                 await sio.emit("events", [
@@ -1993,26 +1361,29 @@ def setup_socketio(socketio: SocketIO, config: AssaiConfig,
 # Convenience wrapper
 # ------------------------------------------------------------------
 
-def routes(app, config: AssaiConfig | None = None, prefix: str = "/agent"):
+def routes(app, config: AssaiConfig | None = None, prefix: str = "/agent",
+           load_balancer: LoadBalancer | None = None):
     """Register orchestrator routes and SocketIO on an existing app.
 
-    Returns ``(app, socketio, queue, events, chat, config, stream_tracker)``
+    Returns ``(app, socketio, queue, events, chat, config, stream_tracker, load_balancer)``
     so callers can compose with worker routers (uber mode).
     """
     tracker = StreamTracker()
+    lb = load_balancer or LoadBalancer()
 
-    router, queue, events, chat, resolved_config, tracker, sio_ref, pop_fn = create_router(
-        config, prefix, stream_tracker=tracker,
+    router, queue, events, chat, resolved_config, tracker, sio_ref, lb = create_router(
+        config, prefix, stream_tracker=tracker, load_balancer=lb,
     )
     app.include_router(router)
 
     socketio = SocketIO(app, cors_allowed_origins="*")
     sio_ref[0] = socketio
-    setup_socketio(socketio, resolved_config, queue, events, pop_fn=pop_fn, app=app)
+    setup_socketio(socketio, resolved_config, queue, events,
+                   load_balancer=lb, app=app)
 
     @app.on_event("startup")
     async def _capture_loop():
         from assai.core.compat import _main_loop_ref
         _main_loop_ref[0] = asyncio.get_running_loop()
 
-    return app, socketio, queue, events, chat, resolved_config, tracker
+    return app, socketio, queue, events, chat, resolved_config, tracker, lb

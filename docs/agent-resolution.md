@@ -87,63 +87,65 @@ AgentStore
     collision.
 
 
-Resolution pipeline
--------------------
+Resolution in TaskGraph
+-----------------------
 
-When the orchestrator pops a task from the queue, it goes through four
-stages to build the work dict that the worker receives.
+When a conversation endpoint receives a request, the ``TaskGraph``
+handles agent resolution through its ``prepare()`` method.
 
 ::
 
-    ┌──────────┐     ┌──────────────┐     ┌──────────────┐     ┌─────────┐
-    │  Task    │ --> │ resolve_task │ --> │ hydrate_task │ --> │ _do_pop │
-    │  (DB)    │     │              │     │              │     │  (work) │
-    └──────────┘     └──────────────┘     └──────────────┘     └─────────┘
+    ┌──────────────┐     ┌──────────────┐     ┌───────────────┐
+    │ TaskGraph     │ --> │  prepare()   │ --> │ Dispatch-ready │
+    │ (agent name) │     │              │     │   payload      │
+    └──────────────┘     └──────────────┘     └───────────────┘
 
 
-Stage 1: resolve_task
-^^^^^^^^^^^^^^^^^^^^^
+prepare()
+^^^^^^^^^
 
-``resolve_task(task, config, chat, projects) -> dict``
+``TaskGraph.prepare(agent_name, work, reasoning=None) -> dict``
 
-Builds a ``resolved`` dict from the task's DB fields and file contents:
+Builds a dispatch-ready payload in a single step:
 
-=================== =====================================================
-Field               Source
-=================== =====================================================
-``id``              Task primary key.
-``kind``            ``"llm_complete"`` or ``"tool_call"``.
-``title``           Task title.
-``agent``           Agent name string from the task.
-``project``         Project name.
-``spec_content``    Contents of ``task.spec_path`` (loaded from disk).
-``messages``        If ``spec_path`` ends with ``conversation.json``,
-                    parsed as a JSON message array.  Messages with role
-                    ``tool_call`` or ``tool_result`` are filtered out.
-``conversation``    Conversation ID (dirname of ``conversation.json``).
-``project_obj``     Project config object.
-``project_spec``    Contents of the project's ``spec.md`` if it exists.
-=================== =====================================================
+1. ``agent_store.get(agent_name)`` — load the ``AgentDef``.  Falls
+   back to ``"default"`` if not found.
+2. Resolve tools via ``tool_registry.mcp_definitions(namespaces=...)``.
+3. Build a human-readable ``tools_description`` string.
+4. Render the Jinja2 template with these variables:
+
+   =================== =====================================================
+   Variable            Value
+   =================== =====================================================
+   ``agent``           The ``AgentDef`` instance.
+   ``task``            The ``work`` dict (contains messages, project, etc.).
+   ``messages``        Conversation history from ``work["messages"]``.
+   ``project``         Project config object (or ``None``).
+   ``spec``            Project spec string.
+   ``tools_description`` Human-readable tool listing.
+   ``datetime``        Current UTC timestamp.
+   =================== =====================================================
+
+5. If ``reasoning`` is provided (from a prior think phase), inject a
+   system message with the reasoning after the agent's system prompt.
+6. Resolve provider: check conversation metadata for a ``provider``
+   field.  If non-default, include the provider config in the payload.
+7. Return the final payload dict::
+
+       {
+           "messages": [...],             # hydrated messages
+           "conversation": "...",
+           "agent": "default",
+           "compressor": "compressor",
+           "tools": [...],                # OpenAI tool definitions (if any)
+           "provider": {...},             # provider override (if non-default)
+           "enable_thinking": true,       # (if set on the work)
+           "project_path": "...",         # (if project has a path)
+       }
 
 
-Stage 2: hydrate_task
-^^^^^^^^^^^^^^^^^^^^^
-
-``hydrate_task(agent, store, resolved, tools_description="") -> list[dict]``
-
-Renders the agent's Jinja2 template with these variables:
-
-=================== =====================================================
-Variable            Value
-=================== =====================================================
-``agent``           The ``AgentDef`` instance.
-``task``            The ``resolved`` dict from stage 1.
-``messages``        ``resolved["messages"]`` (conversation history).
-``project``         Project config object (or ``None``).
-``spec``            Project spec string.
-``tools_description`` Human-readable tool listing.
-``datetime``        Current UTC timestamp.
-=================== =====================================================
+Output formats
+--------------
 
 The ``output_format`` field controls how the rendered template is
 interpreted:
@@ -160,10 +162,10 @@ interpreted:
         [{"role": "system", "content": rendered}] + messages
 
 
-Stage 3: tool resolution
-^^^^^^^^^^^^^^^^^^^^^^^^^
+Tool resolution
+---------------
 
-If ``agent_def.tools`` is non-empty, the orchestrator resolves tools:
+If ``agent_def.tools`` is non-empty:
 
 1. ``tool_registry.mcp_definitions(namespaces=agent_def.tools)``
    filters registered ``ToolDef`` objects by namespace and returns
@@ -174,48 +176,14 @@ If ``agent_def.tools`` is non-empty, the orchestrator resolves tools:
    Jinja2 template so agents can reference available tools in their
    system prompt.
 
-3. The raw ``tool_defs`` list is included in the work dict so the
-   worker can pass them to the LLM's tool-calling API.
-
-
-Stage 4: _do_pop
-^^^^^^^^^^^^^^^^^
-
-``_do_pop()`` in ``assai/core/server.py`` ties everything together:
-
-1. ``queue.pop(status=READY)`` — grab the next task.
-2. Set status to ``IN_PROGRESS``.
-3. If ``kind == "tool_call"``: load spec JSON and return early (no agent
-   hydration needed).
-4. ``resolve_task(task, ...)`` — build the resolved dict.
-5. ``agent_store.get(agent_name)`` — load the ``AgentDef``.
-6. Resolve tools via ``tool_registry.mcp_definitions()``.
-7. ``hydrate_task(agent_def, ...)`` — render the template into messages.
-8. Build the work dict::
-
-       {
-           "task_id": "...",
-           "kind": "llm_complete",
-           "messages": [...],         # hydrated messages
-           "conversation": "...",
-           "agent": "default",
-           "compressor": "compressor",
-           "tools": [...],            # OpenAI tool definitions (if any)
-           "provider": {...},         # provider override (if non-default)
-           "enable_thinking": true,   # (if set on the task)
-           "project_path": "...",     # (if project has a path)
-       }
-
-9. If ``ext.injected_reasoning`` is present (emulated thinking flow),
-   insert a system message with the prior reasoning right after the
-   agent's system prompt.
+3. The raw ``tool_defs`` list is included in the payload so the worker
+   can pass them to the LLM's tool-calling API.
 
 
 Provider resolution
 -------------------
 
-``_resolve_provider_for_task(task, conv_id)`` determines which LLM
-provider the worker should use:
+``TaskGraph.prepare()`` determines the LLM provider:
 
 1. Check the conversation metadata for a ``provider`` field.
 2. If ``"auto"`` or missing: use ``ProviderScheduler.select("worker")``

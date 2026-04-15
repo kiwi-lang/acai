@@ -1,9 +1,8 @@
-"""Scheduler package — provider selection and async multi-agent building blocks.
+"""Scheduler package — provider selection by role and priority.
 
 Usage::
 
     from assai.scheduler import ProviderScheduler
-    from assai.scheduler import BaseScheduler, AsyncTask, AgentContext, Scheduler
 
     sched = ProviderScheduler(config.providers)
     prov = sched.select("worker")     # best provider for the worker role
@@ -14,25 +13,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from assai.scheduler.base import AgentContext, AsyncTask, BaseScheduler, Scheduler
-from assai.scheduler.types import StepResult, WorkStep
-from assai.scheduler.conversation import ConversationScheduler
-from assai.scheduler.thinking import ThinkScheduler
-
 if TYPE_CHECKING:
     from assai.core.config import ProviderConfig
 
-__all__ = [
-    "AgentContext",
-    "AsyncTask",
-    "BaseScheduler",
-    "ConversationScheduler",
-    "ProviderScheduler",
-    "Scheduler",
-    "StepResult",
-    "ThinkScheduler",
-    "WorkStep",
-]
+__all__ = ["ProviderScheduler"]
 
 
 class ProviderScheduler:

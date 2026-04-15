@@ -332,21 +332,29 @@ class ToolRegistry:
             if namespaces is not None and td.namespace not in namespaces:
                 return JSONResponse({"error": f"tool not exposed: {tool_name}"}, status_code=403)
 
-            token = None
+            ctx = None
             if ctx_data and isinstance(ctx_data, dict):
                 orch_url = ctx_data.pop("orchestrator_url", "")
                 client = OrchestratorClient(orch_url) if orch_url else None
                 ctx = WorkerContext(client=client, **ctx_data)
-                token = set_context(ctx)
+
+            import asyncio
+
+            def _run_tool():
+                token = None
+                if ctx is not None:
+                    token = set_context(ctx)
+                try:
+                    return td.fn(**args)
+                finally:
+                    if token is not None:
+                        reset_context(token)
 
             try:
-                result = td.fn(**args)
+                result = await asyncio.to_thread(_run_tool)
                 return {"result": result}
             except Exception as exc:
                 return JSONResponse({"error": str(exc)}, status_code=500)
-            finally:
-                if token is not None:
-                    reset_context(token)
 
         return rt
 

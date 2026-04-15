@@ -8,15 +8,15 @@ The worker exposes:
 * ``GET /worker/status`` — capabilities + LLM server status.
 * Telemetry via SocketIO (``request_telemetry`` → ``telemetry``).
 
-A background thread polls the orchestrator for work, dispatches to
-its own HTTP endpoints, and pushes results back.
+On startup the worker registers itself with the orchestrator and
+maintains a WebSocket connection for periodic health telemetry.
+The orchestrator pushes work to the worker via HTTP — no polling.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -28,7 +28,6 @@ from starlette.responses import Response, StreamingResponse
 
 from assai.core.compat import SocketIO, emit
 
-from assai.core.agent_store import compress_messages
 from assai.core.llm import (
     ContentToken, LLMServer, LLMServerError, ReasoningToken, StreamDone,
     ToolCallDelta, create_llm,
@@ -259,406 +258,140 @@ create_worker_blueprint = create_worker_router
 
 
 # ------------------------------------------------------------------
-# Background poller
+# Orchestrator registration + health
 # ------------------------------------------------------------------
 
-class WorkerPoller:
-    """Polls the orchestrator for work via WebSocket.
+def register_with_orchestrator(
+    orchestrator_url: str,
+    worker_url: str,
+    *,
+    capabilities: dict | None = None,
+    retry_interval: float = 5.0,
+    max_retries: int = 12,
+) -> str:
+    """POST to ``/workers/register`` on the orchestrator.
 
-    Connects to the orchestrator's SocketIO and emits ``work_pop``
-    events.  Falls back to HTTP ``GET /work/pop`` if the WebSocket
-    connection is unavailable.
+    Retries on connection errors so the worker can start before the
+    orchestrator is fully up.  Returns the ``worker_id`` assigned by
+    the orchestrator.
+    """
+    url = f"{orchestrator_url.rstrip('/')}/workers/register"
+    payload = {
+        "url": worker_url,
+        "capabilities": capabilities or {},
+    }
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            resp = http.post(url, json=payload, timeout=10)
+            if resp.status_code < 300:
+                data = resp.json()
+                worker_id = data.get("worker_id", "")
+                log.info(
+                    "registered with orchestrator  id=%s  url=%s",
+                    worker_id, orchestrator_url,
+                )
+                return worker_id
+            log.warning(
+                "registration returned %d (attempt %d/%d)",
+                resp.status_code, attempt, max_retries,
+            )
+        except http.ConnectionError:
+            log.debug(
+                "orchestrator not reachable (attempt %d/%d), retrying in %.0fs",
+                attempt, max_retries, retry_interval,
+            )
+        except Exception:
+            log.exception("registration error (attempt %d/%d)", attempt, max_retries)
+
+        time.sleep(retry_interval)
+
+    log.error("failed to register with orchestrator after %d attempts", max_retries)
+    return ""
+
+
+class HealthReporter:
+    """Background thread that sends periodic telemetry to the orchestrator.
+
+    Connects via WebSocket (SocketIO) and emits ``worker_heartbeat``
+    events containing system metrics.
     """
 
     def __init__(
         self,
-        config: AssaiConfig,
         orchestrator_url: str,
-        worker_url: str,
-        llm_server: LLMServer,
-        registry: ToolRegistry,
+        worker_id: str,
+        interval: float = 10.0,
     ):
-        self.config = config
         self.orchestrator_url = orchestrator_url.rstrip("/")
-        self.worker_url = worker_url.rstrip("/")
-        self.base_url = self.worker_url.rsplit("/worker", 1)[0]
-        self.llm_server = llm_server
-        self.registry = registry
+        self.worker_id = worker_id
+        self.interval = interval
         self._stop = threading.Event()
         self._sio = None
+        self._observer = None
 
-        if config.worker.sandbox == "container":
-            from assai.core.sandbox import SandboxManager
-            self._sandbox = SandboxManager(
-                image=config.worker.sandbox_image,
-                container_port=config.worker.sandbox_port,
-            )
-        else:
-            self._sandbox = None
+    def run(self) -> None:
+        self._init_observer()
+        self._connect()
 
-        log.info(
-            "poller created  orchestrator=%s  worker=%s  poll=%ds  sandbox=%s",
-            self.orchestrator_url, self.worker_url,
-            self.config.queue.poll_interval,
-            config.worker.sandbox,
-        )
-
-    def _connect_ws(self):
-        if self._sio is not None and self._sio.connected:
-            return True
-        try:
-            import socketio as sio_pkg
-            self._sio = sio_pkg.Client(reconnection=True, logger=False, engineio_logger=False)
-            ws_url = self.orchestrator_url.rsplit("/", 1)[0]
-            self._sio.connect(ws_url, transports=["websocket"])
-            log.info("poller connected to orchestrator via WebSocket")
-            return True
-        except Exception:
-            log.debug("WebSocket connection to orchestrator failed, will use HTTP fallback")
-            self._sio = None
-            return False
-
-    def run(self):
-        log.info("poller started")
-        self._connect_ws()
         while not self._stop.is_set():
-            try:
-                self._poll_once()
-            except Exception:
-                log.exception("poller error")
-            time.sleep(self.config.queue.poll_interval)
+            self._send_heartbeat()
+            self._stop.wait(self.interval)
 
-    def stop(self):
-        log.info("poller stopping")
-        self._stop.set()
-        if self._sandbox is not None:
-            try:
-                self._sandbox.stop()
-            except Exception:
-                log.exception("failed to stop sandbox")
         if self._sio is not None:
             try:
                 self._sio.disconnect()
             except Exception:
                 pass
 
-    def _poll_once(self):
-        work = None
+    def stop(self) -> None:
+        self._stop.set()
+
+    def _init_observer(self) -> None:
+        try:
+            from assai.core.system_monitor import throttled_monitor
+            self._observer = throttled_monitor()
+        except Exception:
+            log.debug("system_monitor not available for health reporter")
+
+    def _connect(self) -> None:
+        try:
+            import socketio as sio_pkg
+            self._sio = sio_pkg.Client(
+                reconnection=True, logger=False, engineio_logger=False,
+            )
+            ws_url = self.orchestrator_url.rsplit("/", 1)[0]
+            self._sio.connect(ws_url, transports=["websocket"])
+            log.info("health reporter connected via WebSocket")
+        except Exception:
+            log.debug("WebSocket connection failed, heartbeat via HTTP")
+            self._sio = None
+
+    def _send_heartbeat(self) -> None:
+        telemetry = {}
+        if self._observer is not None:
+            try:
+                telemetry = self._observer()
+            except Exception:
+                pass
+
+        payload = {"worker_id": self.worker_id, "telemetry": telemetry}
 
         if self._sio is not None and self._sio.connected:
             try:
-                work = self._sio.call("work_pop", timeout=10)
-            except Exception:
-                log.debug("WebSocket work_pop failed, reconnecting")
-                self._connect_ws()
+                self._sio.emit("worker_heartbeat", payload)
                 return
-        else:
-            self._connect_ws()
-            if self._sio is None or not self._sio.connected:
-                try:
-                    resp = http.get(f"{self.orchestrator_url}/work/pop", timeout=10)
-                except http.ConnectionError:
-                    return
-                if resp.status_code == 204:
-                    return
-                if resp.status_code != 200:
-                    log.warning("work/pop returned %d", resp.status_code)
-                    return
-                work = resp.json()
-
-        if not work or not work.get("task_id"):
-            return
-
-        task_id = work["task_id"]
-        kind = work.get("kind", "")
-        log.info("[%s] popped work  kind=%s", task_id, kind)
-
-        if kind == "llm_complete":
-            self._prepare_llm_work(work)
-            result, error = self._dispatch_llm(work)
-        elif kind == "tool_call":
-            result, error = self._dispatch_tool(work)
-        else:
-            log.warning("[%s] unknown work kind: %s", task_id, kind)
-            return
-
-        self._push_result(task_id, kind, result, work, error=error)
-
-    def _prepare_llm_work(self, work: dict) -> None:
-        task_id = work.get("task_id", "")
-        agent = work.get("agent", "")
-
-        if agent in ("coder",) and work.get("project_path"):
-            wt_path = self._setup_worktree(work)
-            if wt_path:
-                msgs = work.get("messages", [])
-                if msgs and msgs[0].get("role") == "system":
-                    addendum = (
-                        f"\n\n## Working Directory\n"
-                        f"Your worktree is at: ``{wt_path}``\n"
-                        f"Use this as ``cwd`` for all code and git tool calls."
-                    )
-                    msgs[0]["content"] += addendum
-
-        # FIXME: Not sure if this is where this shoudl be
-        compressor = work.get("compressor", "")
-        messages = work.get("messages", [])
-        if compressor and messages:
-            provider_info = work.get("provider", {})
-            ctx_window = provider_info.get("context_window", 0) if isinstance(provider_info, dict) else 0
-            if not ctx_window:
-                active = self.config.active_provider()
-                ctx_window = active.context_window
-            try:
-                from assai.core.config import ProviderConfig
-                if isinstance(provider_info, dict) and provider_info.get("endpoint"):
-                    prov = ProviderConfig.from_dict(provider_info)
-                else:
-                    prov = self.config.local_provider() or self.config.active_provider()
-                llm = create_llm(prov)
-                compressed = compress_messages(
-                    messages, ctx_window, llm,
-                    model=prov.slug or prov.model,
-                )
-                if len(compressed) < len(messages):
-                    work["messages"] = compressed
-                    log.info("[%s] compressed context: %d -> %d messages",
-                             task_id, len(messages), len(compressed))
             except Exception:
-                log.exception("[%s] context compression failed, using full context", task_id)
-
-    def _setup_worktree(self, work: dict) -> str | None:
-        # FIXME: Maybe this need to be somewhere else
-        project_path = work.get("project_path", "")
-        project_name = work.get("project_name", "")
-        task_id = work.get("task_id", "")
-
-        if not project_path or not os.path.isdir(project_path):
-            return None
-
-        if not os.path.isdir(os.path.join(project_path, ".git")):
-            return project_path
-
-        from assai.tracker.git import GitTracker
-
-        project_git = GitTracker(project_path)
-        slug = task_id[:12]
-        wt_name = f"{project_name}-{slug}" if project_name else f"work-{slug}"
-
-        for wt in project_git.list_worktrees():
-            if wt.path.endswith(wt_name):
-                log.info("[%s] reusing worktree %s", task_id, wt.path)
-                return wt.path
+                log.debug("WebSocket heartbeat failed, falling back to HTTP")
 
         try:
-            wt_path = project_git.create_worktree(wt_name, base_branch="HEAD")
-            log.info("[%s] created worktree %s", task_id, wt_path)
-            return wt_path
-        except Exception as exc:
-            log.warning("[%s] worktree creation failed: %s", task_id, exc)
-            return project_path
-
-    def _dispatch_llm(self, work: dict) -> tuple[str | dict, str | None]:
-        task_id = work.get("task_id", "")
-        conversation = work.get("conversation", "")
-        n_msgs = len(work.get("messages", []))
-        log.info("[%s] dispatching llm_complete  messages=%d", task_id, n_msgs)
-
-        try:
-            payload: dict = {
-                "messages": work.get("messages", []),
-                "tools": work.get("tools"),
-                "task_id": task_id,
-            }
-            if work.get("provider"):
-                payload["provider"] = work["provider"]
-            if work.get("enable_thinking") is not None:
-                payload["enable_thinking"] = work["enable_thinking"]
-
-            resp = http.post(
-                f"{self.worker_url}/llm/complete",
+            http.post(
+                f"{self.orchestrator_url}/workers/heartbeat",
                 json=payload,
-                stream=True,
-                timeout=600,
+                timeout=5,
             )
-            if resp.status_code >= 400:
-                text = resp.text[:500] if hasattr(resp, "text") else ""
-                log.error("[%s] llm_complete returned %d: %s", task_id, resp.status_code, text)
-                return "", f"LLM returned HTTP {resp.status_code}: {text[:200]}"
-
-            accumulated_text = ""
-            accumulated_reasoning = ""
-            error_msg = None
-
-            def _event_generator():
-                nonlocal accumulated_text, accumulated_reasoning, error_msg
-                event_type = ""
-
-                for line in resp.iter_lines(decode_unicode=True):
-                    if not line:
-                        continue
-                    if line.startswith("event: "):
-                        event_type = line[7:].strip()
-                        continue
-                    if not line.startswith("data: "):
-                        continue
-
-                    try:
-                        event_data = json.loads(line[6:])
-                    except (json.JSONDecodeError, ValueError):
-                        continue
-
-                    if event_type == "token":
-                        accumulated_text += event_data.get("token", "")
-                    elif event_type == "reasoning":
-                        accumulated_reasoning += event_data.get("token", "")
-                    elif event_type == "error":
-                        error_msg = event_data.get("error", "unknown error")
-
-                    ndjson_line = json.dumps({
-                        "task_id": task_id,
-                        "conversation": conversation,
-                        "event_type": event_type,
-                        "data": event_data,
-                    }) + "\n"
-                    yield ndjson_line.encode("utf-8")
-
-            relay_resp = http.post(
-                f"{self.orchestrator_url}/stream/push",
-                data=_event_generator(),
-                headers={"Content-Type": "application/x-ndjson"},
-                timeout=600,
-            )
-            if relay_resp.status_code >= 400:
-                log.warning("[%s] orchestrator stream/push returned %d",
-                            task_id, relay_resp.status_code)
-
-            log.info("[%s] llm_complete finished  chars=%d", task_id, len(accumulated_text))
-
-            if error_msg:
-                return "", error_msg
-            result_val = accumulated_text
-            if accumulated_reasoning:
-                result_val = {"text": accumulated_text, "reasoning": accumulated_reasoning}
-            return result_val, None
-
-        except Exception as exc:
-            log.exception("[%s] LLM dispatch failed", task_id)
-            return "", f"LLM dispatch error: {exc}"
-
-    def _dispatch_tool(self, work: dict) -> tuple[str, str | None]:
-        task_id = work.get("task_id", "")
-        tool_name = work.get("tool", "")
-        args = work.get("args", {})
-        log.info("[%s] dispatching tool_call  tool=%s  args=%s", task_id, tool_name, list(args.keys()))
-
-        td = self.registry.get(tool_name)
-        if td is not None and td.gpu and self.llm_server.is_running():
-            log.info("[%s] stopping LLM server for GPU tool %s", task_id, tool_name)
-            self.llm_server.stop()
-
-        from assai.core.sandbox import is_sandboxed
-        if self._sandbox is not None and is_sandboxed(tool_name):
-            return self._dispatch_tool_sandbox(work, tool_name, args)
-
-        return self._dispatch_tool_local(work, tool_name, args)
-
-    def _dispatch_tool_sandbox(self, work: dict, tool_name: str, args: dict) -> tuple[str, str | None]:
-        task_id = work.get("task_id", "")
-
-        if not self._sandbox.running:
-            project_path = args.get("cwd") or self.config.workspace
-            self._sandbox.start(project_path, session_id=task_id[:12])
-
-        tools_url = f"{self._sandbox.endpoint}/tools/call"
-        log.info("[%s] routing %s to sandbox %s", task_id, tool_name, tools_url)
-
-        try:
-            resp = http.post(
-                tools_url,
-                json={"tool": tool_name, "args": args},
-                timeout=self.config.worker.timeout,
-            )
-            try:
-                body = resp.json()
-            except Exception:
-                log.error(
-                    "[%s] tool_call %s returned non-JSON (status=%d): %s",
-                    task_id, tool_name, resp.status_code, resp.text[:500],
-                )
-                return json.dumps({"error": f"tool returned non-JSON (HTTP {resp.status_code})"}), \
-                       f"tool {tool_name} returned non-JSON response (HTTP {resp.status_code}): {resp.text[:200]}"
-            if resp.status_code >= 400:
-                error = body.get("error", f"HTTP {resp.status_code}")
-                log.error("[%s] tool_call %s failed: %s", task_id, tool_name, error)
-                return json.dumps({"error": error}), error
-            result = body.get("result", "")
-            log.info("[%s] tool_call finished  tool=%s  chars=%d", task_id, tool_name, len(result))
-            return result, None
-        except Exception as exc:
-            log.exception("[%s] tool dispatch failed  tool=%s", task_id, tool_name)
-            return json.dumps({"error": str(exc)}), str(exc)
-
-    def _dispatch_tool_local(self, work: dict, tool_name: str, args: dict) -> tuple[str, str | None]:
-        task_id = work.get("task_id", "")
-
-        from assai.core.context import WorkerContext, OrchestratorClient, set_context, reset_context
-
-        client = OrchestratorClient(self.orchestrator_url)
-        ctx = WorkerContext(
-            task_id=task_id,
-            kind=work.get("kind", ""),
-            project=work.get("project", ""),
-            conversation=work.get("conversation", ""),
-            agent=work.get("agent", ""),
-            client=client,
-        )
-        token = set_context(ctx)
-        try:
-            result = self.registry.call(tool_name, args)
-            log.info("[%s] tool_call finished  tool=%s  chars=%d", task_id, tool_name, len(result))
-            return result, None
-        except KeyError:
-            error = f"unknown tool: {tool_name}"
-            log.error("[%s] %s", task_id, error)
-            return json.dumps({"error": error}), error
-        except Exception as exc:
-            log.exception("[%s] tool dispatch failed  tool=%s", task_id, tool_name)
-            return json.dumps({"error": str(exc)}), str(exc)
-        finally:
-            reset_context(token)
-
-    def _push_result(self, task_id: str, kind: str, result: str | dict, work: dict,
-                     error: str | None = None):
-        if isinstance(result, dict) and "text" in result and "reasoning" in result:
-            result_text = result["text"]
-            reasoning_text = result["reasoning"]
-        else:
-            result_text = result if isinstance(result, str) else ""
-            reasoning_text = ""
-        log.info("[%s] pushing result  kind=%s  chars=%d  has_tool_calls=%s  error=%s",
-                 task_id, kind, len(result_text), isinstance(result, dict), bool(error))
-        try:
-            payload: dict = {
-                "result": result_text,
-                "kind": kind,
-                "conversation": work.get("conversation", ""),
-                "tool": work.get("tool", ""),
-                "raw": result,
-            }
-            if reasoning_text:
-                payload["reasoning"] = reasoning_text
-            if error:
-                payload["error"] = error
-
-            resp = http.post(
-                f"{self.orchestrator_url}/work/result/{task_id}",
-                json=payload,
-                timeout=30,
-            )
-            log.info("[%s] result pushed  status=%d", task_id, resp.status_code)
         except Exception:
-            log.exception("[%s] failed to push result", task_id)
+            log.debug("HTTP heartbeat failed")
 
 
 # ------------------------------------------------------------------
@@ -669,7 +402,10 @@ def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None,
                       extern_llm: bool = False):
     """Create a standalone worker app.
 
-    Returns ``(app, socketio, poller, llm_server)``.
+    Returns ``(app, socketio, llm_server)``.
+
+    On startup the worker registers itself with the orchestrator and
+    launches a health-reporter background thread.
     """
     app = FastAPI()
 
@@ -688,16 +424,32 @@ def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None,
     _setup_telemetry(socketio)
 
     worker_url = f"http://127.0.0.1:{config.worker.port}/worker"
-    poller = WorkerPoller(
-        config=config,
-        orchestrator_url=config.worker.orchestrator_url,
-        worker_url=worker_url,
-        llm_server=llm_server,
-        registry=registry,
-    )
+    orchestrator_url = config.worker.orchestrator_url
+
+    active = config.active_provider()
+    capabilities = {
+        "tools": [td.qualified_name for td in registry.all_tools()],
+        "namespaces": registry.namespaces(),
+        "model": active.model,
+        "backend": active.backend,
+    }
+
+    def _register_and_report():
+        worker_id = register_with_orchestrator(
+            orchestrator_url, worker_url,
+            capabilities=capabilities,
+        )
+        if not worker_id:
+            return
+        reporter = HealthReporter(orchestrator_url, worker_id)
+        reporter.run()
+
+    threading.Thread(
+        target=_register_and_report, daemon=True, name="worker-health",
+    ).start()
 
     log.info("worker app created  port=%d  extern_llm=%s", config.worker.port, extern_llm)
-    return app, socketio, poller, llm_server
+    return app, socketio, llm_server
 
 
 # ------------------------------------------------------------------

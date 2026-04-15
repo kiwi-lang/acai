@@ -24,6 +24,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    case,
     create_engine,
     desc,
     JSON,
@@ -181,16 +182,31 @@ class WorkQueue:
         return task
 
     def pop(self, status: str = TaskStatus.PENDING) -> Task | None:
-        """Atomically grab the next eligible task (highest priority, deps met)."""
+        """Atomically grab the next eligible task and mark it IN_PROGRESS.
+
+        Ordering: sub-tasks (``root_task IS NOT NULL``) come first, then
+        root tasks, each group sorted by priority descending then
+        ``created_at`` ascending.  The status update happens in the same
+        transaction to avoid race conditions with concurrent pollers.
+        """
+        is_sub = case(
+            (Task.root_task.isnot(None), 0),
+            else_=1,
+        )
         with self.session() as s:
             candidates = (
                 s.query(Task)
                 .filter(Task.status == status)
-                .order_by(desc(Task.priority), Task.created_at)
+                .order_by(is_sub, desc(Task.priority), Task.created_at)
                 .all()
             )
             for task in candidates:
                 if self._deps_resolved(s, task):
+                    task.status = TaskStatus.IN_PROGRESS
+                    if task.started_at is None:
+                        task.started_at = _now()
+                    s.commit()
+                    s.expunge(task)
                     return task
         return None
 

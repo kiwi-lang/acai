@@ -37,7 +37,70 @@ export async function deleteConversation(id: string): Promise<void> {
     await request(`/conversations/${id}`, { method: 'DELETE' });
 }
 
-// Converse (async — returns task_id + conversation, response streamed via WS)
+// SSE stream from a POST response (EventSource only supports GET)
+export class SSEStream {
+    private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
+    private decoder = new TextDecoder();
+    private listeners: Record<string, Array<(e: MessageEvent) => void>> = {};
+    private _closed = false;
+
+    onerror: (() => void) | null = null;
+
+    constructor(response: Response) {
+        if (!response.body) throw new Error('Response has no body');
+        this.reader = response.body.getReader();
+        this._pump();
+    }
+
+    addEventListener(event: string, cb: (e: MessageEvent) => void) {
+        (this.listeners[event] ||= []).push(cb);
+    }
+
+    close() {
+        this._closed = true;
+        this.reader?.cancel();
+        this.reader = null;
+    }
+
+    private async _pump() {
+        let buffer = '';
+        try {
+            while (!this._closed && this.reader) {
+                const { done, value } = await this.reader.read();
+                if (done) break;
+
+                buffer += this.decoder.decode(value, { stream: true });
+                const frames = buffer.split('\n\n');
+                buffer = frames.pop()!;
+
+                for (const frame of frames) {
+                    if (!frame.trim()) continue;
+                    this._dispatch(frame);
+                }
+            }
+        } catch {
+            // stream closed or network error
+        }
+        if (!this._closed && this.onerror) this.onerror();
+    }
+
+    private _dispatch(frame: string) {
+        let eventType = 'message';
+        const dataLines: string[] = [];
+
+        for (const line of frame.split('\n')) {
+            if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+            else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
+            else if (line.startsWith('data:')) dataLines.push(line.slice(5));
+        }
+
+        const data = dataLines.join('\n');
+        const me = new MessageEvent(eventType, { data });
+        for (const cb of this.listeners[eventType] || []) cb(me);
+    }
+}
+
+// Converse — returns an SSE stream; conversation id arrives as the first "meta" event
 export async function converse(
     message: string,
     conversation = '',
@@ -46,13 +109,23 @@ export async function converse(
     provider = '',
     agent = '',
     enable_thinking?: boolean,
-): Promise<{ task_id: string; conversation: string }> {
+): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
     if (enable_thinking !== undefined) body.enable_thinking = enable_thinking;
-    return request<{ task_id: string; conversation: string }>('/converse', {
+
+    const response = await fetch(`${API_BASE}/converse`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || err.message || `HTTP ${response.status}`);
+    }
+
+    const convId = response.headers.get('X-Conversation') || conversation;
+    return { conversation: convId, stream: new SSEStream(response) };
 }
 
 // Think-then-converse (emulated reasoning for models without native thinking)

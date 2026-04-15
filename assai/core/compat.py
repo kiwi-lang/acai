@@ -139,42 +139,53 @@ class SocketIO:
 
     # -- run (replaces socketio.run) ------------------------------------
 
-    def run(
-        self,
-        app,
-        host: str = "127.0.0.1",
-        port: int = 5000,
-        debug: bool = False,
-        **kwargs,
-    ):
-        """Start the server with ``uvicorn``.
-
-        *debug* sets the uvicorn log level to ``"info"`` (not ``"debug"``
-        to avoid flooding from websocket frames).  For auto-reload on
-        file changes use ``uvicorn --reload`` with an import-path string
-        instead.
-        """
-        import uvicorn
-
-        # Silence engineio/socketio wire-level logs regardless of the
-        # root log level — these flood the console with every WS frame.
-        for _name in ("engineio", "engineio.server", "engineio.client",
-                       "socketio", "socketio.server", "socketio.client"):
-            logging.getLogger(_name).setLevel(logging.WARNING)
-
+    def make_asgi(self, app) -> _sio_module.ASGIApp:
+        """Build the combined SocketIO + FastAPI ASGI application."""
         asgi_app = app if isinstance(app, _FastAPI) else getattr(app, "app", app)
 
         @asgi_app.on_event("startup")
         async def _capture_loop():
             _main_loop_ref[0] = asyncio.get_running_loop()
 
-        combined = _sio_module.ASGIApp(self.server, asgi_app)
-        uvicorn.run(
-            combined,
+        return _sio_module.ASGIApp(self.server, asgi_app)
+
+    def run(
+        self,
+        app,
+        host: str = "127.0.0.1",
+        port: int = 5000,
+        debug: bool = False,
+        reload: bool = False,
+        reload_dirs: list[str] | None = None,
+        **kwargs,
+    ):
+        """Start the server with ``uvicorn``.
+
+        When *reload* is ``True`` uvicorn watches the source tree and
+        restarts on file changes.  This requires the app to be passed as
+        an import-path string (e.g. ``"assai.cli.uber:create_app"``
+        combined with ``factory=True``).  When the app is an object,
+        reload is silently disabled because uvicorn cannot re-import it.
+        """
+        import uvicorn
+
+        for _name in ("engineio", "engineio.server", "engineio.client",
+                       "socketio", "socketio.server", "socketio.client"):
+            logging.getLogger(_name).setLevel(logging.WARNING)
+
+        combined = self.make_asgi(app)
+
+        uv_kwargs: dict[str, Any] = dict(
             host=host,
             port=port,
             log_level="info",
         )
+        if reload:
+            uv_kwargs["reload"] = True
+            if reload_dirs:
+                uv_kwargs["reload_dirs"] = reload_dirs
+
+        uvicorn.run(combined, **uv_kwargs)
 
 
 # ======================================================================

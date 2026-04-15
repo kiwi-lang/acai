@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
-import { converse, thinkConverse, getHistory, listProviders, listAgents, checkInflight, getContextStats } from '../services/api';
+import { converse, thinkConverse, getHistory, listProviders, listAgents, checkInflight, getContextStats, type SSEStream } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentDef, AgentMessage, Provider } from '../services/types';
 import Markdown from './Markdown';
@@ -223,7 +223,7 @@ const ChatPanel = ({
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const shouldRestoreFocusRef = useRef(false);
     const activeTaskRef = useRef<string | null>(null);
-    const eventSourceRef = useRef<EventSource | null>(null);
+    const eventSourceRef = useRef<EventSource | SSEStream | null>(null);
     const convIdRef = useRef<string | null>(conversationId);
     const justCreatedRef = useRef(false);
 
@@ -261,9 +261,8 @@ const ChatPanel = ({
         }
     }, []);
 
-    const openEventSource = useCallback((convId: string) => {
+    const attachListeners = useCallback((es: EventSource | SSEStream) => {
         closeEventSource();
-        const es = new EventSource(`/api/agent/stream/${convId}`);
         eventSourceRef.current = es;
 
         es.addEventListener('reasoning', (e: MessageEvent) => {
@@ -328,15 +327,20 @@ const ChatPanel = ({
 
         es.addEventListener('error', (e: MessageEvent) => {
             let errorMsg = 'Stream error';
+            let tracebackStr = '';
             try {
                 const data = JSON.parse(e.data);
-                errorMsg = data.error || errorMsg;
+                errorMsg = data.message || data.error || errorMsg;
+                tracebackStr = data.traceback || '';
             } catch { /* raw error event from EventSource */ }
+            const fullError = tracebackStr
+                ? `Error: ${errorMsg}\n\n\`\`\`\n${tracebackStr}\`\`\``
+                : `Error: ${errorMsg}`;
             setMessages(prev => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
                 if (last && last.isStreaming) {
-                    copy[copy.length - 1] = { ...last, content: `Error: ${errorMsg}`, isStreaming: false };
+                    copy[copy.length - 1] = { ...last, content: fullError, isStreaming: false };
                 }
                 return copy;
             });
@@ -351,6 +355,10 @@ const ChatPanel = ({
             closeEventSource();
         };
     }, [closeEventSource]);
+
+    const openEventSource = useCallback((convId: string) => {
+        attachListeners(new EventSource(`/api/agent/stream/${convId}`));
+    }, [attachListeners]);
 
     useEffect(() => {
         return () => closeEventSource();
@@ -447,22 +455,29 @@ const ChatPanel = ({
 
         setIsLoading(true);
         try {
-            const resp = thinkingMode === 'emulated'
-                ? await thinkConverse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent)
-                : await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
+            if (thinkingMode === 'emulated') {
+                const resp = await thinkConverse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent);
+                activeTaskRef.current = resp.task_id;
+                setMessages(prev => [
+                    ...prev,
+                    { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
+                ]);
+                openEventSource(cid);
+            } else {
+                const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
                     thinkingMode === 'native' ? true : undefined);
-            activeTaskRef.current = resp.task_id;
-            setMessages(prev => [
-                ...prev,
-                { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
-            ]);
-            openEventSource(cid);
+                setMessages(prev => [
+                    ...prev,
+                    { role: 'assistant', content: '', isStreaming: true },
+                ]);
+                attachListeners(resp.stream);
+            }
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
             setMessages(prev => [...prev, { role: 'assistant', content: `Error: ${msg}` }]);
             setIsLoading(false);
         }
-    }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, openEventSource]);
+    }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, openEventSource, attachListeners]);
 
     const handleSend = async () => {
         const text = input.trim();
@@ -483,40 +498,59 @@ const ChatPanel = ({
         setIsLoading(true);
 
         try {
-            let resp;
             if (customSend) {
-                resp = await customSend(text, prevConvId || '', selectedProvider, selectedAgent);
-            } else if (thinkingMode === 'emulated') {
-                resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
-            } else {
-                resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
-                    thinkingMode === 'native' ? true : undefined);
-            }
-
-            activeTaskRef.current = resp.task_id;
-            convIdRef.current = resp.conversation;
-            joinConversation(resp.conversation);
-
-            const convChanged = resp.conversation !== (prevConvId || '');
-
-            if (convChanged) {
-                if (prevConvId) leaveConversation(prevConvId);
-                justCreatedRef.current = true;
-                onConversationCreated?.(resp.conversation);
-                if (customSend) {
+                const resp = await customSend(text, prevConvId || '', selectedProvider, selectedAgent);
+                activeTaskRef.current = resp.task_id;
+                convIdRef.current = resp.conversation;
+                joinConversation(resp.conversation);
+                const convChanged = resp.conversation !== (prevConvId || '');
+                if (convChanged) {
+                    if (prevConvId) leaveConversation(prevConvId);
+                    justCreatedRef.current = true;
+                    onConversationCreated?.(resp.conversation);
                     const historyResp = await getHistory(resp.conversation);
                     setMessages(historyResp.messages);
+                } else {
+                    setMessages(prev => [...prev, { role: 'user', content: text }]);
                 }
-            } else if (customSend) {
-                setMessages(prev => [...prev, { role: 'user', content: text }]);
+                setMessages(prev => [
+                    ...prev,
+                    { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
+                ]);
+                openEventSource(resp.conversation);
+            } else if (thinkingMode === 'emulated') {
+                const resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
+                activeTaskRef.current = resp.task_id;
+                convIdRef.current = resp.conversation;
+                joinConversation(resp.conversation);
+                const convChanged = resp.conversation !== (prevConvId || '');
+                if (convChanged) {
+                    if (prevConvId) leaveConversation(prevConvId);
+                    justCreatedRef.current = true;
+                    onConversationCreated?.(resp.conversation);
+                }
+                setMessages(prev => [
+                    ...prev,
+                    { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
+                ]);
+                openEventSource(resp.conversation);
+            } else {
+                const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
+                    thinkingMode === 'native' ? true : undefined);
+                convIdRef.current = resp.conversation;
+                joinConversation(resp.conversation);
+                const convChanged = resp.conversation !== (prevConvId || '');
+                if (convChanged) {
+                    if (prevConvId) leaveConversation(prevConvId);
+                    justCreatedRef.current = true;
+                    onConversationCreated?.(resp.conversation);
+                }
+                setMessages(prev => [
+                    ...prev,
+                    { role: 'assistant', content: '', isStreaming: true },
+                ]);
+                attachListeners(resp.stream);
             }
-
-            setMessages(prev => [
-                ...prev,
-                { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
-            ]);
-
-            openEventSource(resp.conversation);
         } catch (err) {
             const msg = err instanceof Error ? err.message : 'Request failed';
             if (customSend) {

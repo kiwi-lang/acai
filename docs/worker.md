@@ -2,8 +2,8 @@ Worker
 ======
 
 The worker (``assai/core/worker.py`` + ``assai/core/llm.py``) is the
-execution engine.  It pops tasks, calls the LLM, runs tools, and
-pushes results back.  It is intentionally simple.
+execution engine.  It hosts the LLM, runs tools, and streams results
+back to the orchestrator.
 
 
 Design philosophy
@@ -14,65 +14,69 @@ Design philosophy
    receives a fully hydrated payload, executes it, and returns the
    result.
 
-2. **One task, one call.**  Each popped task results in exactly one LLM
-   call or one tool execution.  Chaining multiple calls is the
-   orchestrator's job.
+2. **One call at a time.**  The ``LoadBalancer`` ensures each worker
+   handles one request at a time.  The orchestrator acquires a worker
+   via ``lb.acquire()`` and releases it when the graph completes.
 
-3. **Stateless pump.**  The poller loop is: pop → prepare → dispatch →
-   push result.  No task history, no conversation memory, no
-   inter-task state.
-
-4. **GPU resource owner.**  The worker process owns the GPU.  When a
+3. **GPU resource owner.**  The worker process owns the GPU.  When a
    tool needs the GPU (e.g. vision), the worker stops the LLM server
    to free VRAM, runs the tool, then restarts.
 
-5. **Streaming relay.**  Token streams from the LLM are relayed as
-   NDJSON to the orchestrator in real time.  The worker does not
-   interpret stream events — it just forwards them.
+4. **Streaming relay.**  Token streams from the LLM are returned as
+   SSE responses.  The orchestrator consumes them via
+   ``AsyncSSEIterator``.
 
 
 Process architecture
 --------------------
 
-The worker runs as a single OS process with two concurrent roles:
+The worker runs as a FastAPI app with these endpoints:
 
-**Flask app** (main thread)
-    Serves HTTP endpoints:
+``POST /worker/llm/complete``
+    Accepts a message list, optional tools, and provider config.
+    Streams the LLM response as SSE events (``token``,
+    ``reasoning``, ``tool_call_delta``, ``done``, ``error``).
 
-    ``POST /worker/llm/complete``
-        Accepts a message list, optional tools, and provider config.
-        Streams the LLM response as SSE events (``token``,
-        ``reasoning``, ``tool_call_delta``, ``done``, ``error``).
+``POST /worker/switch-model``
+    Hot-swap the running model.
 
-    ``POST /worker/switch-model``
-        Hot-swap the running model.
+``GET /worker/status``
+    Health check and model info.
 
-    ``GET /worker/status``
-        Health check and model info.
+``POST /tools/call``
+    Execute a registered tool function.  Tool functions run in a
+    thread pool (``asyncio.to_thread``) to avoid blocking the event
+    loop.  A ``WorkerContext`` is set in the thread so tools can
+    access the orchestrator client (for callbacks like ``ui.toast``).
 
-    ``POST /tools/call``
-        Execute a registered tool function.
+``GET /worker/logs``
+    Read latest vLLM server log.
 
-**WorkerPoller** (background thread)
-    Polls the orchestrator for work and drives execution:
 
-    1. ``_poll_once()`` — pop a task via SocketIO RPC (preferred) or
-       HTTP ``GET /work/pop`` (fallback).
-    2. Route by ``kind``:
+Worker registration
+-------------------
 
-       - ``llm_complete`` → ``_prepare_llm_work`` → ``_dispatch_llm``
-       - ``tool_call`` → ``_dispatch_tool``
+On startup the worker:
 
-    3. ``_push_result()`` — POST result to
-       ``/work/result/<task_id>``.
+1. Registers with the orchestrator via
+   ``POST /agent/workers/register``, providing its URL and
+   capabilities.
+2. Starts a ``HealthReporter`` that sends periodic heartbeats
+   (telemetry: GPU utilization, VRAM, system load) via WebSocket
+   or HTTP fallback.
+
+The orchestrator's ``LoadBalancer`` tracks worker status (idle, busy,
+offline) and provides ``lb.acquire()`` as an async context manager
+for exclusive worker access.
 
 
 LLM dispatch
 ------------
 
-``_dispatch_llm`` is the core streaming relay::
+The orchestrator's ``TaskGraph.dispatch()`` sends a payload to the
+worker's ``/llm/complete`` endpoint and consumes the SSE response::
 
-    Worker Poller                    Worker Flask App
+    Orchestrator (TaskGraph)         Worker
          │                                │
          │  POST /worker/llm/complete     │
          │  {messages, tools, provider}   │
@@ -87,38 +91,36 @@ LLM dispatch
          │  SSE: event: done              │
          │ <────────────────────────────  │
 
-Each SSE event is repackaged as an NDJSON line and yielded into a
-chunked ``POST /stream/push`` to the orchestrator.  The accumulated
-text (and optional reasoning) is returned as the task result.
-
-The worker calls its own HTTP endpoint (localhost) rather than the LLM
-library directly.  This keeps the LLM abstraction
-(``OpenAICompatibleLLM``) behind a clean HTTP boundary and allows the
-same endpoint to serve direct requests.
+The ``AsyncSSEIterator`` handles the HTTP connection and yields parsed
+``ServerSentEvent`` objects.
 
 
 Preparation
 -----------
 
-``_prepare_llm_work`` runs before dispatch and may mutate the work
-dict:
+``TaskGraph.prepare()`` runs in the orchestrator before dispatch and
+builds the LLM payload:
 
-**Compressor**
-    If the agent specifies a ``compressor`` and the message list
-    exceeds a token threshold, older messages are summarized by a
-    compressor LLM call and replaced with a condensed system message.
-    This keeps context within the model's window.
+**Agent resolution**
+    Loads the ``AgentDef``, renders the Jinja2 template with the
+    conversation history and task metadata to produce the message list.
+    See ``docs/agent-resolution.md``.
 
-**Worktree setup**
-    For coding agents with a project path, the worker may create or
-    reuse a git worktree and append a working-directory system message
-    so file-system tools operate in the right location.
+**Tool resolution**
+    If the agent has tools configured, resolves tool schemas via the
+    ``ToolRegistry`` and includes them in the payload.
+
+**Provider override**
+    If the conversation specifies a non-default provider, the provider
+    config is included so the worker connects to the right LLM
+    endpoint.
 
 
 Tool dispatch
 -------------
 
-``_dispatch_tool`` handles ``tool_call`` tasks:
+``TaskGraph.dispatch_tool()`` sends tool calls to the worker via
+``POST /tools/call``.  The worker then:
 
 1. If the tool requires the GPU and the LLM is running, stop the LLM
    server to free VRAM.
@@ -126,6 +128,10 @@ Tool dispatch
    (``code``, ``git``, ``shell``, ``filesystem``), proxy the call to a
    Podman container running ``assai mcp``.
 3. Otherwise execute locally via ``registry.call(tool_name, args)``.
+
+A ``WorkerContext`` is set in the tool's thread providing an
+``OrchestratorClient`` so tools like ``ui.toast`` can call back to
+the orchestrator.
 
 Tools are discovered at startup from ``assai.tools`` and
 ``assai.plugins`` packages.  Each tool has a namespace, a qualified
@@ -137,12 +143,10 @@ What the worker does NOT do
 
 - Decide what to run next.  No agent graphs, no composition, no
   thinking chains.
-- Own conversation state.  It passes the ``conversation`` ID through
-  to the result payload but never reads or writes the conversation
+- Own conversation state.  It does not read or write the conversation
   store.
-- Interpret tool-call deltas.  It forwards ``tool_call_delta`` events
-  to the orchestrator, which handles tool dispatch.
-- Manage the task queue.  It only pops and pushes results.
+- Interpret tool-call deltas.  It forwards ``tool_call_delta`` events;
+  the orchestrator's ``TaskGraph`` handles tool dispatch.
 
 
 SocketIO
@@ -155,7 +159,6 @@ The worker uses SocketIO in two directions:
     ``request_telemetry``, and the worker responds with ``telemetry``
     events.
 
-**Client** (poller → orchestrator)
-    Faster work distribution: the poller connects to the orchestrator's
-    SocketIO and calls ``work_pop`` as an RPC.  Falls back to HTTP
-    ``GET /work/pop`` if the WebSocket connection fails.
+**Client** (worker → orchestrator)
+    The worker sends heartbeats and telemetry over WebSocket for
+    low-latency health monitoring.

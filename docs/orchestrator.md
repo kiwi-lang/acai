@@ -2,33 +2,34 @@ Orchestrator
 ============
 
 The orchestrator (``assai/core/server.py``) is the central coordinator
-of the system.  It never calls the LLM itself — it manages the queue,
-relays streams, and keeps the books.
+of the system.  It acquires workers, dispatches LLM calls via
+``TaskGraph`` subclasses, streams results to the frontend, and keeps
+the books.
 
 
 Design philosophy
 -----------------
 
-1. **The queue is the integration bus.**  Everything — conversations,
-   tool calls, thinking, multi-agent routing — goes through the same
-   SQLite work queue.  Workers pop tasks; the orchestrator pushes them.
+1. **TaskGraph owns the agent flow.**  Each conversation endpoint
+   instantiates a ``TaskGraph`` subclass (``ConverseGraph``,
+   ``ThinkGraph``) that orchestrates the full agent pipeline:
+   prepare the payload, dispatch to a worker, handle tool follow-ups,
+   and persist the result.  The orchestrator just acquires a worker
+   and iterates the graph.
 
 2. **Separation of inference.**  The orchestrator prepares and records.
    Workers generate tokens and execute tools.  No model weights are
    loaded in the orchestrator process.
 
-3. **Schedulers own the task graph.**  Each task ``kind`` maps to a
-   ``Scheduler`` subclass (an async generator) that yields ``WorkStep``
-   objects and receives ``StepResult`` objects.  The scheduler decides
-   what to hydrate, how to stream, when to follow up with tool calls,
-   and how to compose multi-step workflows — the orchestrator just
-   drives the generator loop.
+3. **SSE streaming end-to-end.**  Conversation endpoints return an SSE
+   ``StreamingResponse`` directly.  Each ``TaskGraph.run()`` is an async
+   generator that yields event dicts; the endpoint formats them as SSE
+   frames.  No intermediate queues or futures.
 
-4. **Streaming as a first-class relay.**  Token streams flow from
-   workers through the orchestrator to the UI.  The scheduler driver
-   bridges ``asyncio.Future`` objects with synchronous stream events
-   so each ``yield`` in the scheduler blocks until the worker finishes
-   that step.
+4. **Load-balanced worker acquisition.**  The ``LoadBalancer`` manages
+   registered workers.  ``lb.acquire()`` is an async context manager
+   that waits for a free worker and auto-releases it when the graph
+   completes.
 
 5. **Files over blobs.**  Task specs and results are stored as JSON
    files on disk (``spec_path``, ``result_path``).  The queue holds
@@ -38,54 +39,42 @@ Design philosophy
 What the orchestrator does
 --------------------------
 
-**Queue management**
-    Owns the ``WorkQueue`` (SQLite).  Pushes tasks, pops and hydrates
-    them for workers, tracks status transitions, handles retries, and
-    reaps stuck tasks.
+**Agent execution**
+    For each incoming conversation (``/converse``, ``/think/converse``,
+    ``/uber/converse``), the endpoint acquires a worker from the
+    ``LoadBalancer`` and runs the appropriate ``TaskGraph``:
+
+    ``POST /converse`` → ``ConverseGraph``
+        Prepares the agent payload, dispatches to the worker, handles
+        tool-call follow-ups, persists the assistant message.  Returns
+        an SSE stream directly.
+
+    ``POST /think/converse`` → ``ThinkGraph``
+        Two-phase flow: dispatches the *thinker* agent (tokens streamed
+        as ``reasoning`` events), then dispatches the main agent with
+        reasoning injected (tokens streamed normally).  Tool follow-ups
+        are handled in the reply phase.  Returns an SSE stream.
+
+    ``POST /uber/converse`` → ``UberRouter`` + ``ConverseGraph``
+        Routes the message to the best conversation via a lightweight
+        LLM call (``UberRouter``), then launches a ``ConverseGraph``
+        as a background ``asyncio.Task``.  Returns a JSON response
+        with the conversation ID and stream ID (202).
 
 **Conversation store**
     Owns the ``ChatStore``.  Creates conversations, appends user and
     assistant messages, manages metadata (provider, agent, project).
 
-**Scheduler driver**
-    The ``drive_scheduler()`` async function is the core execution loop.
-    For each incoming conversation (``/converse``, ``/think/converse``,
-    ``/uber/converse``), the endpoint creates a root task, instantiates
-    the appropriate ``Scheduler`` via the registry, and spawns the
-    driver as an ``asyncio.Task``.
-
-    The driver:
-
-    1. Calls ``scheduler.run(task, conversation)`` to get the async
-       generator.
-    2. Receives each ``WorkStep`` yielded by the scheduler.
-    3. Writes the pre-hydrated payload to disk and pushes a sub-task
-       tagged with ``ext.scheduler_driven=True``.
-    4. Registers an ``asyncio.Future`` keyed by sub-task ID.
-    5. When stream events arrive at ``/stream/push``, the
-       ``_resolve_step()`` function fills the future with a
-       ``StepResult``.
-    6. The driver ``asend()``s the result back to the generator.
-    7. When the generator exhausts, the driver appends the final
-       assistant message to chat and marks the root task completed.
-
-**Task hydration**
-    Scheduler-driven sub-tasks carry a pre-hydrated payload (written by
-    the scheduler), so ``_do_pop()`` returns it directly.  Legacy
-    ``llm_complete`` tasks (e.g. internal routing calls from
-    ``UberScheduler``) still go through ``resolve_task`` →
-    ``hydrate_task`` at pop time.  See ``docs/agent-resolution.md``.
-
 **Stream relay**
-    Receives NDJSON from workers at ``POST /stream/push``, fans out
-    events to UI subscribers via ``StreamTracker`` → SSE.
-    See ``docs/streaming.md``.
+    ``TaskGraph`` pushes events to the ``StreamTracker`` during
+    execution.  UI clients can subscribe via ``GET /stream/<stream_id>``
+    for real-time updates or reconnection.
 
-**Background chaining**
-    The ``Orchestrator`` class runs a background thread that polls for
-    completed tasks and chains tool-call pipelines when the streaming
-    path didn't handle them (fallback for non-streaming or race
-    conditions).
+**Background task reaping**
+    The ``Orchestrator`` class runs a background thread that detects
+    tasks stuck in ``IN_PROGRESS`` beyond a timeout and retries or
+    fails them.  Conversation and think tasks (which use ``TaskGraph``
+    and don't go through the queue) are skipped.
 
 **Project and agent management**
     CRUD endpoints for projects, agents, providers, specs, worktrees.
@@ -96,26 +85,26 @@ What the orchestrator does
     every ~2 seconds.  Rooms per conversation for targeted tool events.
 
 
-Scheduler registry
-------------------
+TaskGraph subclasses
+--------------------
 
-``assai/scheduler/registry.py`` maps ``Task.kind`` to concrete
-``Scheduler`` subclasses:
+``assai/tasks/`` contains the concrete graph implementations:
 
 ======================== =========================================
-Kind                     Scheduler
+Class                    Description
 ======================== =========================================
-``converse``             ``ConversationScheduler``
-``llm_complete``         ``ConversationScheduler``
-``think``                ``ThinkScheduler``
+``ConverseGraph``        Single agent + tool-call follow-up loop.
+``ThinkGraph``           Thinker → reply + tool loop.
+``UberRouter``           Routes messages to conversations via a
+                         direct LLM call (not a TaskGraph subclass).
 ======================== =========================================
 
-The ``ConversationScheduler`` handles hydration, tool-call follow-ups,
-and streaming for standard conversations.  The ``ThinkScheduler``
-composes two ``ConversationScheduler`` steps (think then reply) to
-emulate reasoning for models that lack native thinking.
+The base ``TaskGraph`` (``assai/core/graph.py``) provides the building
+blocks: ``prepare()``, ``dispatch()``, ``_run_with_tools()``, and
+shared helpers for error events, done events, and chat persistence.
 
-New task kinds can be added by calling ``registry.register(kind, cls)``.
+New graph types can be added by subclassing ``TaskGraph`` and
+registering in ``assai/tasks/registry.py``.
 
 
 What the orchestrator does NOT do
@@ -136,18 +125,17 @@ Endpoint groups
 Group                             Description
 ================================= =========================================
 Conversations                     CRUD, context stats, inflight check.
-Converse                          ``POST /converse`` — queue a conversation
-                                  via ``ConversationScheduler``.
-Uber routing                      ``POST /uber/converse`` — route to the
-                                  best conversation, then converse via
-                                  ``ConversationScheduler``.
-Think-then-generate               ``POST /think/converse`` — two-step
-                                  reasoning via ``ThinkScheduler``.
+Converse                          ``POST /converse`` — SSE stream via
+                                  ``ConverseGraph``.
+Uber routing                      ``POST /uber/converse`` — route + converse
+                                  via ``UberRouter`` + ``ConverseGraph``.
+Think-then-generate               ``POST /think/converse`` — SSE stream via
+                                  ``ThinkGraph``.
 History                           Message history for a conversation.
-Worker contract                   ``GET /work/pop``,
-                                  ``POST /work/result/<id>``.
-Streaming                         ``POST /stream/push`` (worker → orch),
-                                  ``GET /stream/<conv>`` (orch → UI SSE).
+Work results                      ``POST /work/result/<id>`` — legacy task
+                                  result handler for standalone tasks.
+Streaming                         ``GET /stream/<stream_id>`` (orch → UI
+                                  SSE).
 Tasks                             CRUD, tree view.
 Providers                         CRUD, activate.
 Projects                          CRUD, git integration.
@@ -162,12 +150,11 @@ SocketIO
 
 The orchestrator runs a SocketIO server for real-time updates:
 
-``work_pop``
-    Workers can pop tasks over WebSocket instead of HTTP polling.
-    Same ``_do_pop()`` logic, lower latency.
-
 ``join_conversation`` / ``leave_conversation``
     Room-based subscription for tool start/end events.
+
+``worker_heartbeat``
+    Workers send periodic telemetry over WebSocket.
 
 Background emit loop
     Every ~2 seconds broadcasts the full task list, queue status

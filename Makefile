@@ -32,7 +32,10 @@ vllm:
 front-dev:
 	(cd assai/ui && npm i && npm run dev)
 
+.PHONY: tests
+tests:
+	$(eval _MOD := assai.$(subst /,.,$(basename $(FILE))))
+	(. .venv/bin/activate && python -m pytest tests/$(dir $(FILE))test_$(notdir $(FILE)) --cov=$(_MOD) --cov-report=term-missing -v)
+
 hello:
 	@echo "hello world"
-
-

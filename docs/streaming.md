@@ -11,44 +11,48 @@ Overview
 
 ::
 
-  ┌──────────┐   SSE    ┌─────────────┐  NDJSON   ┌──────────┐  SSE   ┌──────────┐
-  │  LLM     │ -------> │   Worker    │ --------> │  Server  │ -----> │ Frontend │
-  │ (vLLM)   │          │  (poller)   │           │  (orch)  │        │  (React) │
-  └──────────┘          └─────────────┘           └──────────┘        └──────────┘
-       /llm/complete          /stream/push            /stream/<conv>
-       (SSE response)         (chunked POST)          (SSE response)
+  ┌──────────┐   SSE    ┌──────────┐  SSE/aiohttp   ┌──────────┐  SSE   ┌──────────┐
+  │  LLM     │ -------> │  Worker  │ -------------> │  Server  │ -----> │ Frontend │
+  │ (vLLM)   │          │          │                │  (orch)  │        │  (React) │
+  └──────────┘          └──────────┘                └──────────┘        └──────────┘
+       /llm/complete       TaskGraph.dispatch()        /converse (SSE)
+       (SSE response)      (AsyncSSEIterator)          or /stream/<id>
 
 
 Components
 ----------
 
 **Worker** (``assai/core/worker.py``)
-    Pops a task from the orchestrator, POSTs it to the local LLM endpoint
-    (``/llm/complete``), and consumes the SSE response line-by-line.  Each
-    event is re-packaged as an NDJSON line and relayed to the orchestrator
-    via a single chunked ``POST /stream/push``.  The worker is stateless
-    and knows nothing about thinking, agents, or composition.
+    Hosts the ``POST /worker/llm/complete`` endpoint that calls the
+    local LLM and streams SSE events.  Also hosts ``POST /tools/call``
+    for tool execution.  Workers register with the ``LoadBalancer`` and
+    are acquired by the orchestrator on demand.
+
+**TaskGraph** (``assai/core/graph.py``)
+    The orchestrator-side execution engine.  ``dispatch()`` opens an
+    ``AsyncSSEIterator`` to the worker's ``/llm/complete`` endpoint,
+    consumes SSE events, pushes them to the ``StreamTracker``, and
+    yields them as dicts.  ``_run_with_tools()`` wraps dispatch with
+    a tool-call follow-up loop.
 
 **StreamTracker** (``assai/core/stream.py``)
     A thread-safe pub-sub hub living in the orchestrator process.  Each
-    conversation has a list of subscriber ``Queue`` objects.
-    ``push(conversation, event)`` fans out to all subscribers.
-    ``subscribe(conversation)`` returns a new queue.
+    stream (keyed by conversation ID) has a list of subscriber
+    ``Queue`` objects.  ``push(stream_id, event)`` fans out to all
+    subscribers.  ``subscribe(stream_id)`` returns a new queue.
 
-**SSE endpoint** (``GET /stream/<conv_id>`` in ``assai/core/server.py``)
-    The frontend opens an ``EventSource`` to this URL.  The endpoint
-    subscribes to the ``StreamTracker``, enters a blocking loop on the
-    queue, and yields each event as an SSE frame.  The loop breaks on
-    ``done`` or ``error``, then unsubscribes.
+**SSE endpoint** (``GET /stream/<stream_id>`` in ``assai/core/server.py``)
+    UI clients can subscribe to ongoing streams via this endpoint for
+    reconnection or background-task monitoring.  The endpoint subscribes
+    to the ``StreamTracker``, enters a blocking loop on the queue, and
+    yields each event as an SSE frame.
 
-**Scheduler driver** (``drive_scheduler`` in ``assai/core/server.py``)
-    Bridges async scheduler generators with the synchronous stream
-    push endpoint.  Each ``WorkStep`` yielded by a scheduler creates
-    a sub-task and an ``asyncio.Future``.  When stream events arrive
-    at ``/stream/push``, the ``_resolve_step()`` function accumulates
-    text, reasoning, and tool-call deltas, forwards events to the
-    ``StreamTracker`` according to the step's ``stream_mode``, and
-    resolves the future on ``done`` or ``error``.
+**Direct SSE endpoints** (``POST /converse``, ``POST /think/converse``)
+    These return an SSE ``StreamingResponse`` directly.  The response
+    iterates ``TaskGraph.run()`` and formats each event as an SSE frame.
+    The frontend consumes the stream from the POST response body using
+    a custom ``SSEStream`` class (since ``EventSource`` only supports
+    GET).
 
 
 Event types
@@ -57,12 +61,14 @@ Event types
 ============== ====================================================
 Event          Description
 ============== ====================================================
+``meta``       First event in a direct SSE stream.  Contains the
+               conversation ID.
 ``token``      A chunk of assistant text.
 ``reasoning``  A chunk of reasoning/thinking text.
 ``tool_call_delta``  Incremental tool-call arguments (streaming).
 ``tool_start`` A tool execution has begun.
 ``tool_end``   A tool execution has finished.
-``done``       The LLM call completed.  Closes the SSE connection.
+``done``       The graph completed.  Closes the SSE connection.
 ``error``      An error occurred.  Closes the SSE connection.
 ============== ====================================================
 
@@ -75,171 +81,136 @@ Normal (single-call) flow
   Frontend                 Server                    Worker           LLM
      │                       │                         │               │
      │  POST /converse       │                         │               │
-     │ ───────────────────>  │  create root task       │               │
-     │                       │  (IN_PROGRESS)          │               │
-     │                       │  drive_scheduler()      │               │
-     │                       │  ↳ scheduler.run()      │               │
-     │                       │  ↳ yield WorkStep       │               │
-     │                       │  ↳ push sub-task (READY)│               │
+     │ ───────────────────>  │                         │               │
+     │                       │  lb.acquire() worker    │               │
+     │                       │  ConverseGraph.run()    │               │
      │                       │                         │               │
-     │  EventSource          │                         │               │
-     │  GET /stream/<conv>   │                         │               │
-     │ ───────────────────>  │  tracker.subscribe()    │               │
+     │  SSE: meta            │                         │               │
+     │ <───────────────────  │  {conversation: id}     │               │
      │                       │                         │               │
-     │                       │  GET /work/pop          │               │
-     │                       │ <─────────────────────  │               │
-     │                       │  {pre-hydrated payload} │               │
+     │                       │  graph.prepare()        │               │
+     │                       │  graph.dispatch()       │               │
+     │                       │  ↳ POST /llm/complete   │               │
      │                       │ ─────────────────────>  │               │
-     │                       │                         │               │
-     │                       │                         │  POST         │
-     │                       │                         │  /llm/complete│
+     │                       │                         │  call LLM     │
      │                       │                         │ ────────────> │
      │                       │                         │               │
-     │                       │                         │  SSE: token   │
-     │                       │  NDJSON: token          │ <──────────── │
-     │  SSE: token           │ <─────────────────────  │               │
-     │ <───────────────────  │  _resolve_step →        │               │
-     │                       │  tracker.push("token")  │               │
+     │                       │  AsyncSSEIterator       │  SSE: token   │
+     │  SSE: token           │ <─────────────────────  │ <──────────── │
+     │ <───────────────────  │  tracker.push("token")  │               │
      │                       │                         │               │
      │                       │                         │  SSE: done    │
-     │                       │  NDJSON: done           │ <──────────── │
-     │                       │ <─────────────────────  │               │
-     │                       │  _resolve_step →        │               │
-     │                       │  future.set_result()    │               │
-     │                       │  driver.asend(result)   │               │
-     │                       │  ↳ generator exhausts   │               │
-     │  SSE: done            │  chat.append(assistant) │               │
-     │ <───────────────────  │  tracker.push("done")   │               │
-     │                       │                         │               │
-     │  close EventSource    │  unsubscribe            │               │
+     │                       │ <─────────────────────  │ <──────────── │
+     │                       │  chat.append(assistant) │               │
+     │  SSE: done            │  tracker.push("done")   │               │
+     │ <───────────────────  │                         │               │
+     │                       │  lb.release() worker    │               │
+     │  close connection     │                         │               │
 
 
 Emulated thinking flow
 ----------------------
 
-The **ThinkScheduler** (``assai/scheduler/thinking.py``) chains two
-LLM calls through the scheduler driver.  The worker remains completely
-unaware — it just executes one task at a time.
+The ``ThinkGraph`` (``assai/tasks/think.py``) chains two LLM calls
+through the same worker.  The worker remains completely unaware — it
+just executes one call at a time.
 
 ::
 
-  Frontend                 Server / Driver            Worker
+  Frontend                 Server / ThinkGraph        Worker
      │                       │                          │
      │  POST /think/converse │                          │
      │ ───────────────────>  │                          │
-     │                       │  create root task        │
-     │                       │  (IN_PROGRESS)           │
-     │                       │  drive_scheduler()       │
-     │                       │  ↳ ThinkScheduler.run()  │
+     │                       │  lb.acquire() worker     │
+     │                       │  ThinkGraph.run()        │
      │                       │                          │
-     │  EventSource          │                          │
-     │  GET /stream/<conv>   │                          │
-     │ ───────────────────>  │  tracker.subscribe()     │
+     │  SSE: meta            │                          │
+     │ <───────────────────  │                          │
      │                       │                          │
      │                       │       ┌─────────────────────────────┐
-     │                       │       │  Step 1: Think              │
+     │                       │       │  Phase 1: Think             │
      │                       │       └─────────────────────────────┘
-     │                       │  yield WorkStep(         │
+     │                       │  prepare("thinker", work)│
+     │                       │  dispatch(payload,       │
      │                       │    stream_mode="reasoning")
-     │                       │  push thinker sub-task   │
+     │                       │  ↳ POST /llm/complete    │
+     │                       │ ─────────────────────>   │
      │                       │                          │
-     │                       │  Worker pops sub-task    │
-     │                       │                    <──────│
-     │                       │                          │
-     │                       │  NDJSON: token           │
+     │                       │  SSE: token from worker  │
      │  SSE: reasoning       │ <────────────────────────│
-     │ <───────────────────  │  _resolve_step:          │
-     │                       │    stream_mode=reasoning  │
-     │                       │    → push as "reasoning"  │
+     │ <───────────────────  │  (remapped to reasoning) │
      │                       │                          │
-     │                       │  NDJSON: done            │
+     │                       │  SSE: done               │
      │                       │ <────────────────────────│
-     │                       │  future.set_result()     │
-     │                       │  driver.asend(result)    │
+     │                       │  Acc captures text       │
      │                       │                          │
      │                       │       ┌─────────────────────────────┐
-     │                       │       │  Step 2: Reply              │
+     │                       │       │  Phase 2: Reply             │
      │                       │       └─────────────────────────────┘
-     │                       │  yield WorkStep(         │
-     │                       │    stream_mode="token")   │
-     │                       │  push main sub-task      │
+     │                       │  prepare(agent, work,    │
+     │                       │    reasoning=acc.text)    │
+     │                       │  _run_with_tools(payload) │
+     │                       │  ↳ POST /llm/complete    │
+     │                       │ ─────────────────────>   │
      │                       │                          │
-     │                       │  Worker pops sub-task    │
-     │                       │                    <──────│
-     │                       │                          │
-     │                       │  NDJSON: token           │
      │  SSE: token           │ <────────────────────────│
-     │ <───────────────────  │  _resolve_step:          │
-     │                       │    stream_mode=token      │
-     │                       │    → push as "token"      │
+     │ <───────────────────  │                          │
      │                       │                          │
-     │                       │  NDJSON: done            │
+     │                       │  SSE: done               │
      │                       │ <────────────────────────│
-     │                       │  future.set_result()     │
-     │                       │  driver.asend(result)    │
-     │                       │  ↳ generator exhausts    │
-     │  SSE: done            │  chat.append(assistant)  │
-     │ <───────────────────  │  tracker.push("done")    │
-     │                       │                          │
-     │  close EventSource    │  unsubscribe             │
+     │                       │  chat.append(assistant)  │
+     │  SSE: done            │  tracker.push("done")    │
+     │ <───────────────────  │                          │
+     │                       │  lb.release() worker     │
+     │  close connection     │                          │
 
 Key points:
 
-1. The **worker is unchanged** — it pops a task, calls the LLM, streams
-   the result.  It does this twice (once for the thinker, once for the
-   main agent) without knowing they are related.
+1. The **worker is unchanged** — it receives a payload, calls the LLM,
+   streams the result.  It does this twice (once for the thinker, once
+   for the main agent) without knowing they are related.
 
-2. The **ThinkScheduler** generator owns the composition:
+2. The **ThinkGraph** owns the composition:
 
-   - First ``yield`` sends the thinker payload with
-     ``stream_mode="reasoning"`` — the driver remaps ``token`` events
-     to ``reasoning`` events for the frontend.
-   - The driver ``asend()``s back a ``StepResult`` containing the
-     accumulated thinker text.
-   - Second ``yield`` sends the main-agent payload (with reasoning
-     injected) and ``stream_mode="token"`` — tokens stream normally.
-   - Tool-call follow-ups are handled in a loop, same as
-     ``ConversationScheduler``.
+   - Phase 1 dispatches with ``stream_mode="reasoning"`` — the graph
+     remaps ``token`` events to ``reasoning`` events for the frontend.
+   - ``Acc`` accumulates the thinker's text.
+   - Phase 2 prepares the main agent with reasoning injected, then
+     enters the standard tool-call follow-up loop via
+     ``_run_with_tools()``.
 
-3. The **scheduler driver** manages the ``asyncio.Future`` bridge:
+3. Both phases run on the **same worker** within a single
+   ``lb.acquire()`` context — no worker release between phases.
 
-   - ``_push_step()`` writes the pre-hydrated payload to disk and
-     pushes a sub-task tagged ``ext.scheduler_driven=True``.
-   - ``_await_step()`` creates a future keyed by sub-task ID.
-   - ``_resolve_step()`` is called for every stream event; it fills
-     the future when ``done`` arrives.
-   - The SSE connection is per-conversation, not per-task, so events
-     from both steps flow through the same ``EventSource``.
-
-4. ``_do_pop()`` returns scheduler-driven sub-tasks' pre-hydrated
-   payloads directly — no re-hydration needed.
+4. The SSE connection is **per-request**, not per-task.  Events from
+   both phases flow through the same HTTP response.
 
 
 Native thinking
 ---------------
 
 When the model supports reasoning natively (e.g. via ``<think>`` tags),
-no scheduler is involved.  The frontend calls ``POST /converse`` with
-``enable_thinking: true``.  The LLM produces interleaved ``reasoning``
-and ``token`` events which the worker relays unchanged.  The stream
-handler forwards them as-is.
+no two-phase graph is needed.  The frontend calls ``POST /converse``
+with ``enable_thinking: true``.  The LLM produces interleaved
+``reasoning`` and ``token`` events which the worker relays unchanged.
+The ``ConverseGraph`` forwards them as-is.
 
 
 Tool-call flow
 --------------
 
-Tool calls are handled by the scheduler generator, not by the stream
-handler.  When the ``StepResult`` returned to the generator contains
-``tool_calls``, the scheduler:
+Tool calls are handled by ``TaskGraph._run_with_tools()``.  When the
+worker returns ``tool_call_delta`` events, ``Acc`` accumulates them.
+After the stream completes, if tool calls are present:
 
-1. Yields a ``WorkStep(kind="tool_call", stream_mode="tool")`` for
-   each call.
-2. Pushes ``tool_start`` / ``tool_end`` events via the ``StreamTracker``.
-3. Appends ``tool_call`` and ``tool_result`` messages to chat history.
-4. Builds follow-up messages and yields a new LLM ``WorkStep`` with
-   the tool results included.
-5. Repeats until no more tool calls are returned.
+1. For each tool call, push a ``tool_start`` event and dispatch the
+   tool via ``POST /tools/call`` to the worker.
+2. Push ``tool_end`` events and append ``tool_call`` / ``tool_result``
+   messages to chat history.
+3. Build follow-up messages (original + assistant tool calls + tool
+   results) and dispatch a new LLM call.
+4. Repeat until no more tool calls are returned.
 
-A legacy fallback in ``_handle_stream_event`` still handles tool-call
-dispatch for non-scheduler-driven tasks (e.g. internal LLM calls from
-``UberScheduler``'s routing step).
+The worker's ``/tools/call`` endpoint runs tool functions in a thread
+pool (``asyncio.to_thread``) so blocking tools (like ``ui.toast``
+which calls back to the orchestrator) don't deadlock the event loop.

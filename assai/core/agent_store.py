@@ -273,7 +273,15 @@ def compress_messages(
 
     Returns the (possibly shortened) messages list.
     """
-    total_chars = sum(len(m.get("content", "")) for m in messages)
+    def _content_len(m: dict) -> int:
+        c = m.get("content")
+        if isinstance(c, str):
+            return len(c)
+        if isinstance(c, list):
+            return sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
+        return 0
+
+    total_chars = sum(_content_len(m) for m in messages if isinstance(m, dict))
     estimated_tokens = total_chars // 4
     limit = int(context_window * threshold)
 
