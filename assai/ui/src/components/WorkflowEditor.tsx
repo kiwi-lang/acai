@@ -508,7 +508,7 @@ function ContextMenu({ x, y, flowX, flowY, onAddNode, onClose }: ContextMenuProp
       background: '#2a2a2a', border: `1px solid ${C.border}`, borderRadius: 4,
       minWidth: 160, padding: '4px 0', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
     }} onClick={e => e.stopPropagation()}>
-      <div style={{ fontSize: 9, color: C.muted, padding: '4px 12px', textTransform: 'uppercase', fontWeight: 600 }}>
+      <div style={{ fontSize: 13, color: C.muted, padding: '4px 12px', textTransform: 'uppercase', fontWeight: 600 }}>
         Add Node
       </div>
       {_nodeDefs.map(def => (
@@ -516,7 +516,7 @@ function ContextMenu({ x, y, flowX, flowY, onAddNode, onClose }: ContextMenuProp
           onClick={() => { onAddNode(def.type, { x: flowX, y: flowY }); onClose(); }}
           style={{
             padding: '5px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-            fontSize: 11, color: C.text,
+            fontSize: 15, color: C.text,
           }}
           onMouseEnter={e => (e.currentTarget.style.background = '#383838')}
           onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
@@ -524,7 +524,7 @@ function ContextMenu({ x, y, flowX, flowY, onAddNode, onClose }: ContextMenuProp
           <div style={{ width: 6, height: 6, borderRadius: 1, background: def.accent, flexShrink: 0 }} />
           <div>
             <div style={{ fontWeight: 500 }}>{def.label}</div>
-            <div style={{ fontSize: 9, color: C.muted }}>{def.description}</div>
+            <div style={{ fontSize: 13, color: C.muted }}>{def.description}</div>
           </div>
         </div>
       ))}
@@ -567,19 +567,19 @@ function CollapsibleBlock({ label, content, color, streaming, defaultOpen }: {
         }}
       >
         <span style={{
-          fontSize: 8, color, transition: 'transform .15s',
+          fontSize: 9, color, transition: 'transform .15s',
           display: 'inline-block',
           transform: expanded || streaming ? 'rotate(90deg)' : 'rotate(0deg)',
         }}>&#9654;</span>
-        <span style={{ fontSize: 10, color, fontWeight: 500 }}>{label}</span>
-        <span style={{ fontSize: 9, color: C.muted, marginLeft: 'auto' }}>
+        <span style={{ fontSize: 14, color, fontWeight: 500 }}>{label}</span>
+        <span style={{ fontSize: 13, color: C.muted, marginLeft: 'auto' }}>
           {streaming ? '' : summary}
         </span>
       </div>
       {(expanded || streaming) && (
         <div style={{
           padding: '4px 8px 6px 20px', borderTop: `1px solid ${color}22`,
-          fontSize: 10, lineHeight: '15px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          fontSize: 14, lineHeight: '20px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
           color: color + 'bb',
           maxHeight: 300, overflowY: 'auto',
         }}>
@@ -612,15 +612,15 @@ function ChatBubble({ msg }: { msg: ChatMessage }) {
       padding: '2px 0',
     }}>
       <div style={{
-        maxWidth: '85%', padding: '6px 10px', borderRadius: 6,
-        fontSize: 11, lineHeight: '16px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+        maxWidth: '85%', padding: '8px 12px', borderRadius: 6,
+        fontSize: 15, lineHeight: '22px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
         background: isUser ? C.blue + '33' : '#333',
         color: C.text,
         border: `1px solid ${isUser ? C.blue + '44' : C.border}`,
       }}>
-        {msg.role === 'system' && <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>system</div>}
+        {msg.role === 'system' && <div style={{ fontSize: 13, color: C.muted, marginBottom: 2 }}>system</div>}
         {msg.role === 'assistant' && msg.nodeLabel && (
-          <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>{msg.nodeLabel}</div>
+          <div style={{ fontSize: 13, color: C.muted, marginBottom: 2 }}>{msg.nodeLabel}</div>
         )}
         {msg.reasoning && (
           <CollapsibleBlock
@@ -652,7 +652,7 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
 
   const field = (label: string, key: string, opts?: { placeholder?: string; mono?: boolean; rows?: number }) => (
     <div style={{ marginBottom: 8 }}>
-      <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 14, color: C.muted, marginBottom: 2 }}>{label}</div>
       {(opts?.rows || 0) > 1 ? (
         <Textarea
           size="sm" rows={opts!.rows}
@@ -682,7 +682,7 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
         <IconButton aria-label="Delete" size="xs" variant="ghost" colorScheme="red"
           onClick={() => onDelete(node.id)}><TrashIcon /></IconButton>
       </HStack>
-      <Text fontSize="10px" color={C.muted}>{ntype} node</Text>
+      <Text fontSize="14px" color={C.muted}>{ntype} node</Text>
 
       {field('Label', 'label', { placeholder: ntype })}
 
@@ -706,7 +706,7 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
       )}
       {ntype === 'forward' && (
         <div style={{ marginBottom: 8 }}>
-          <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>Mode</div>
+          <div style={{ fontSize: 14, color: C.muted, marginBottom: 2 }}>Mode</div>
           <HStack gap={1}>
             {['token', 'reasoning'].map(mode => (
               <Button key={mode} size="xs" variant="outline" flex={1}
@@ -714,11 +714,11 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
                 borderColor={(data as any).mode === mode || (!((data as any).mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple : C.green) : C.border}
                 color={(data as any).mode === mode || (!((data as any).mode) && mode === 'token') ? (mode === 'reasoning' ? C.purple : C.green) : C.muted}
                 onClick={() => onUpdate(node.id, { ...data, mode })}
-                _hover={{ bg: '#333' }} fontSize="10px"
+                _hover={{ bg: '#333' }} fontSize="14px"
               >{mode}</Button>
             ))}
           </HStack>
-          <Text fontSize="9px" color={C.muted} mt={1}>
+          <Text fontSize="13px" color={C.muted} mt={1}>
             token = visible reply, reasoning = thinking bubble
           </Text>
         </div>
@@ -726,7 +726,7 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
       {ntype === 'condition' && (
         <>
           {field('Expression', 'expression', { placeholder: 'len(input) > 100', mono: true })}
-          <Text fontSize="9px" color={C.muted}>Variables: input, len</Text>
+          <Text fontSize="13px" color={C.muted}>Variables: input, len</Text>
         </>
       )}
     </VStack>
@@ -1157,9 +1157,9 @@ const WorkflowEditor: FC = () => {
 
           {/* Workflow meta */}
           <Box p={2} borderBottom={`1px solid ${C.border}`}>
-            <Text fontSize="9px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Workflow</Text>
+            <Text fontSize="13px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Workflow</Text>
             <Input size="sm" value={workflowName} onChange={e => setWorkflowName(e.target.value)}
-              bg="#1a1a1a" borderColor={C.border} fontSize="xs" mb={1} color={C.text}
+              bg="#1a1a1a" borderColor={C.border} fontSize="md" mb={1} color={C.text}
               readOnly={isBuiltin && !devMode} />
             <HStack gap={1}>
               <Button size="xs" onClick={handleSave} variant="outline" flex={1}
@@ -1183,7 +1183,7 @@ const WorkflowEditor: FC = () => {
             <HStack justify="space-between" cursor="pointer" onClick={() => setDevMode(!devMode)}>
               <HStack gap={1}>
                 {devMode ? <UnlockIcon /> : <LockIcon />}
-                <Text fontSize="9px" fontWeight="bold" color={devMode ? C.amber : C.muted}
+                <Text fontSize="13px" fontWeight="bold" color={devMode ? C.amber : C.muted}
                   textTransform="uppercase">Dev Mode</Text>
               </HStack>
               <div style={{
@@ -1200,13 +1200,13 @@ const WorkflowEditor: FC = () => {
               </div>
             </HStack>
             {devMode && (
-              <Text fontSize="9px" color={C.amber} mt={1}>Builtin graphs are editable</Text>
+              <Text fontSize="13px" color={C.amber} mt={1}>Builtin graphs are editable</Text>
             )}
           </Box>
 
           {/* Node palette */}
           <Box p={2} borderBottom={`1px solid ${C.border}`}>
-            <Text fontSize="9px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Nodes</Text>
+            <Text fontSize="13px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Nodes</Text>
             <VStack gap={0.5} align="stretch">
               {_nodeDefs.map(def => (
                 <Box key={def.type} draggable
@@ -1219,8 +1219,8 @@ const WorkflowEditor: FC = () => {
                   <HStack gap={2}>
                     <Box w="6px" h="6px" borderRadius="1px" bg={def.accent} flexShrink={0} />
                     <Box>
-                      <Text fontSize="10px" fontWeight={500} color={C.text}>{def.label}</Text>
-                      <Text fontSize="9px" color={C.muted}>{def.description}</Text>
+                      <Text fontSize="14px" fontWeight={500} color={C.text}>{def.label}</Text>
+                      <Text fontSize="13px" color={C.muted}>{def.description}</Text>
                     </Box>
                   </HStack>
                 </Box>
@@ -1230,9 +1230,9 @@ const WorkflowEditor: FC = () => {
 
           {/* Workflow list */}
           <Box p={2} flex={1} overflowY="auto">
-            <Text fontSize="9px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Workflows</Text>
+            <Text fontSize="13px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Workflows</Text>
             {savedWorkflows.length === 0 ? (
-              <Text fontSize="10px" color={C.muted}>None yet</Text>
+              <Text fontSize="14px" color={C.muted}>None yet</Text>
             ) : (
               <VStack gap={0.5} align="stretch">
                 {savedWorkflows.map(wf => {
@@ -1245,8 +1245,8 @@ const WorkflowEditor: FC = () => {
                       <HStack gap={1} overflow="hidden">
                         {wfBuiltin && (devMode ? <UnlockIcon /> : <LockIcon />)}
                         <Box overflow="hidden">
-                          <Text fontSize="10px" fontWeight={500} color={C.text} lineClamp={1}>{wf.name}</Text>
-                          <Text fontSize="9px" color={C.muted}>{wf.node_count}n · {wf.edge_count}e</Text>
+                          <Text fontSize="14px" fontWeight={500} color={C.text} lineClamp={1}>{wf.name}</Text>
+                          <Text fontSize="13px" color={C.muted}>{wf.node_count}n · {wf.edge_count}e</Text>
                         </Box>
                       </HStack>
                       {(!wfBuiltin || devMode) && (
@@ -1296,11 +1296,11 @@ const WorkflowEditor: FC = () => {
           <Panel position="top-left">
             <HStack gap={1}>
               <Button size="xs" variant="ghost" onClick={() => setShowSidebar(!showSidebar)}
-                color={C.muted} _hover={{ bg: '#333' }} fontSize="10px">
+                color={C.muted} _hover={{ bg: '#333' }} fontSize="14px">
                 {showSidebar ? '\u25c0 Hide' : '\u25b6 Panel'}
               </Button>
               <Button size="xs" variant="ghost" onClick={() => setShowChat(!showChat)}
-                color={showChat ? C.cyan : C.muted} _hover={{ bg: '#333' }} fontSize="10px">
+                color={showChat ? C.cyan : C.muted} _hover={{ bg: '#333' }} fontSize="14px">
                 <HStack gap={1}><ChatIcon /><Text>{showChat ? 'Hide Chat' : 'Test Chat'}</Text></HStack>
               </Button>
             </HStack>
@@ -1309,7 +1309,7 @@ const WorkflowEditor: FC = () => {
             <Panel position="top-center">
               <div style={{
                 background: C.amber + '22', border: `1px solid ${C.amber}44`, borderRadius: 4,
-                padding: '3px 10px', fontSize: 10, color: C.amber,
+                padding: '3px 10px', fontSize: 14, color: C.amber,
               }}>
                 Read-only builtin — enable Dev Mode to edit
               </div>
@@ -1333,9 +1333,9 @@ const WorkflowEditor: FC = () => {
             right={currentSelectedNode ? '240px' : (showChat ? '320px' : '3px')}
             maxH="140px" overflowY="auto"
             bg="#242424ee" border={`1px solid ${C.border}`} borderRadius="4px"
-            p={2} fontSize="10px" fontFamily="monospace" zIndex={10}>
+            p={2} fontSize="14px" fontFamily="monospace" zIndex={10}>
             <HStack justify="space-between" mb={1}>
-              <Text fontWeight="bold" color={C.text} fontSize="10px">Run Log</Text>
+              <Text fontWeight="bold" color={C.text} fontSize="14px">Run Log</Text>
               <Button size="xs" variant="ghost" onClick={() => setRunLog([])} color={C.muted}>Clear</Button>
             </HStack>
             {runLog.map((line, i) => (
@@ -1357,13 +1357,13 @@ const WorkflowEditor: FC = () => {
             <HStack justify="space-between">
               <HStack gap={1}>
                 <ChatIcon />
-                <Text fontSize="11px" fontWeight="bold" color={C.text}>Test Chat</Text>
+                <Text fontSize="15px" fontWeight="bold" color={C.text}>Test Chat</Text>
               </HStack>
               <HStack gap={1}>
                 <Button size="xs" variant="ghost" color={C.muted} onClick={() => { setChatMessages([]); setRunLog([]); }}
-                  _hover={{ bg: '#333' }} fontSize="9px">Clear</Button>
+                  _hover={{ bg: '#333' }} fontSize="13px">Clear</Button>
                 <Button size="xs" variant="ghost" color={C.muted} onClick={() => setShowChat(false)}
-                  _hover={{ bg: '#333' }} fontSize="10px">\u2715</Button>
+                  _hover={{ bg: '#333' }} fontSize="14px">\u2715</Button>
               </HStack>
             </HStack>
           </Box>
@@ -1372,8 +1372,8 @@ const WorkflowEditor: FC = () => {
           <Box flex={1} overflowY="auto" p={2} display="flex" flexDirection="column" gap={1}>
             {chatMessages.length === 0 && (
               <Box textAlign="center" py={8}>
-                <Text fontSize="10px" color={C.muted}>Send a message to test the workflow</Text>
-                <Text fontSize="9px" color={C.muted} mt={1}>
+                <Text fontSize="14px" color={C.muted}>Send a message to test the workflow</Text>
+                <Text fontSize="13px" color={C.muted} mt={1}>
                   Your message is passed as the user input
                 </Text>
               </Box>
@@ -1386,7 +1386,7 @@ const WorkflowEditor: FC = () => {
                 display: 'flex', justifyContent: 'flex-start', padding: '2px 0',
               }}>
                 <div style={{
-                  padding: '6px 14px', borderRadius: 6, fontSize: 11,
+                  padding: '6px 14px', borderRadius: 6, fontSize: 15,
                   background: '#333', color: C.muted, border: `1px solid ${C.border}`,
                 }}>
                   {'\u2026 starting'}
@@ -1401,7 +1401,7 @@ const WorkflowEditor: FC = () => {
             <HStack gap={1}>
               <input
                 style={{
-                  flex: 1, fontSize: 11, padding: '6px 10px', height: 32,
+                  flex: 1, fontSize: 15, padding: '8px 12px', height: 36,
                   background: '#1a1a1a', border: `1px solid ${C.border}`, borderRadius: 4,
                   color: C.text, outline: 'none',
                 }}
