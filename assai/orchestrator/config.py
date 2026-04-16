@@ -183,6 +183,12 @@ class QueueConfig:
     task_timeout: int = defaultfield("queue.task_timeout", int, 300)
 
 
+@dataclass
+class AuditConfig:
+    enabled: bool = defaultfield("audit.enabled", bool, True)
+    dir: str = defaultfield("audit.dir", str, ".audit")
+
+
 def _model_to_slug(model: str) -> str:
     """Derive a short slug from a model path like ``Org/Model-Name``."""
     return model.rsplit("/", 1)[-1].lower().replace("_", "-")
@@ -383,6 +389,7 @@ class AssaiConfig:
     worker: WorkerConfig = field(default_factory=WorkerConfig)
     git: GitConfig = field(default_factory=GitConfig)
     queue: QueueConfig = field(default_factory=QueueConfig)
+    audit: AuditConfig = field(default_factory=AuditConfig)
     providers: list[ProviderConfig] = field(default_factory=_load_providers_from_global)
     _active_name: str = ""
 
@@ -399,6 +406,9 @@ class AssaiConfig:
 
         if not os.path.isabs(self.worker.tasks_dir):
             self.worker.tasks_dir = os.path.join(ws, self.worker.tasks_dir)
+
+        if not os.path.isabs(self.audit.dir):
+            self.audit.dir = os.path.join(ws, self.audit.dir)
 
         url = self.queue.url
         if url.startswith("sqlite:///") and not url.startswith("sqlite:////"):

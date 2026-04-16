@@ -42,6 +42,9 @@ import {
   runWorkflow,
   saveBuiltinWorkflow,
   getNodeTypes,
+  listConversations,
+  listAgents,
+  getAgentInputs,
   type WorkflowSummary,
   type WorkflowSpec,
   type NodeTypeDef,
@@ -190,6 +193,114 @@ function colWidth(pins: PinDef[], hasField: boolean): number {
   return Math.max(labelW, hasField ? MIN_FIELD_W : EXEC_COL_W);
 }
 
+const fieldBaseStyle: CSSProperties = {
+  width: '100%', fontSize: 10, padding: '2px 4px', marginTop: 2,
+  background: '#222', border: `1px solid ${C.border}`, borderRadius: 2,
+  color: C.text, outline: 'none', height: 20, boxSizing: 'border-box',
+};
+
+const selectStyle: CSSProperties = {
+  ...fieldBaseStyle, cursor: 'pointer', appearance: 'auto',
+};
+
+type DropdownOption = { value: string; label: string };
+
+const _dynamicFetchers: Record<string, () => Promise<DropdownOption[]>> = {
+  agents: () => listAgents().then(list =>
+    list.map(a => ({ value: a.name, label: a.name })),
+  ),
+  conversations: () => listConversations().then(list =>
+    list.map(c => ({ value: c.id, label: c.title || c.id })),
+  ),
+};
+
+function useDynamicOptions(source: string | undefined): DropdownOption[] {
+  const [options, setOptions] = useState<DropdownOption[]>([]);
+  useEffect(() => {
+    if (!source || !_dynamicFetchers[source]) return;
+    _dynamicFetchers[source]().then(setOptions).catch(() => {});
+  }, [source]);
+  return options;
+}
+
+function PinFieldWidget({ pin, dataKey, data, onUpdate }: {
+  pin: PinDef; dataKey: string;
+  data: Record<string, unknown>;
+  onUpdate?: (data: Record<string, unknown>) => void;
+}) {
+  const value = (data as any)[dataKey];
+  const dynamicOpts = useDynamicOptions(pin.dynamic_choices);
+
+  if (pin.choices && pin.choices.length > 0) {
+    return (
+      <select
+        style={selectStyle}
+        value={String(value ?? pin.choices[0] ?? '')}
+        onChange={e => onUpdate?.({ ...data, [dataKey]: e.target.value })}
+      >
+        {pin.choices.map(c => (
+          <option key={c} value={c}>{c}</option>
+        ))}
+      </select>
+    );
+  }
+
+  if (pin.dynamic_choices && dynamicOpts.length > 0) {
+    return (
+      <select
+        style={selectStyle}
+        value={String(value ?? '')}
+        onChange={e => onUpdate?.({ ...data, [dataKey]: e.target.value })}
+      >
+        <option value="">— select —</option>
+        {dynamicOpts.map(o => (
+          <option key={o.value} value={o.value}>{o.label}</option>
+        ))}
+      </select>
+    );
+  }
+
+  if (pin.pin_type === 'bool') {
+    const checked = value === true || value === 'true';
+    return (
+      <label style={{
+        display: 'flex', alignItems: 'center', gap: 4, marginTop: 2,
+        cursor: 'pointer', fontSize: 10, color: C.text,
+      }}>
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={e => onUpdate?.({ ...data, [dataKey]: e.target.checked })}
+          style={{ accentColor: pin.color, width: 12, height: 12, cursor: 'pointer' }}
+        />
+        {checked ? 'true' : 'false'}
+      </label>
+    );
+  }
+
+  return (
+    <input
+      style={fieldBaseStyle}
+      value={String(value ?? '')}
+      onChange={e => onUpdate?.({ ...data, [dataKey]: e.target.value })}
+      placeholder={dataKey}
+    />
+  );
+}
+
+function PinLabel({ pin }: { pin: PinDef }) {
+  const isOptional = pin.optional !== false;
+  return (
+    <div style={{
+      fontSize: 10, lineHeight: '14px',
+      color: isOptional ? pin.color + '99' : pin.color,
+    }}>
+      {pin.label}
+      {!isOptional && <span style={{ color: C.red, marginLeft: 1, fontSize: 8 }}>*</span>}
+    </div>
+  );
+}
+
 function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets, children }: NodeShellProps) {
   if (!def) return null;
   const connected = connectedHandles || new Set<string>();
@@ -252,20 +363,9 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
               const showField = pin.kind === 'data' && !connected.has(pin.id);
               return (
                 <div key={pin.id} style={{ height: rowH, padding: pin.kind === 'exec' ? '0 4px 0 12px' : '3px 4px 3px 12px', display: 'flex', flexDirection: 'column', justifyContent: pin.kind === 'exec' ? 'center' : 'flex-start' }}>
-                  {pin.label && (
-                    <div style={{ fontSize: 10, color: pin.color, lineHeight: '14px' }}>{pin.label}</div>
-                  )}
+                  {pin.label && <PinLabel pin={pin} />}
                   {showField && (
-                    <input
-                      style={{
-                        width: '100%', fontSize: 10, padding: '2px 4px', marginTop: 2,
-                        background: '#222', border: `1px solid ${C.border}`, borderRadius: 2,
-                        color: C.text, outline: 'none', height: 20, boxSizing: 'border-box',
-                      }}
-                      value={String((data as any)[key] ?? '')}
-                      onChange={e => onUpdate?.({ ...data, [key]: e.target.value })}
-                      placeholder={key}
-                    />
+                    <PinFieldWidget pin={pin} dataKey={key} data={data} onUpdate={onUpdate} />
                   )}
                 </div>
               );
@@ -278,9 +378,7 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
           <div style={{ width: rightW }}>
             {rightCol.map(({ pin, rowH }) => (
               <div key={pin.id} style={{ height: rowH, padding: pin.kind === 'exec' ? '0 12px 0 4px' : '3px 12px 3px 4px', display: 'flex', flexDirection: 'column', justifyContent: pin.kind === 'exec' ? 'center' : 'flex-start', alignItems: 'flex-end' }}>
-                {pin.label && (
-                  <div style={{ fontSize: 10, color: pin.color, lineHeight: '14px' }}>{pin.label}</div>
-                )}
+                {pin.label && <PinLabel pin={pin} />}
                 {widgets[pin.id] && (
                   <div style={{ width: '100%', marginTop: 2 }}>{widgets[pin.id]}</div>
                 )}
@@ -319,6 +417,7 @@ function PinHandle({ pin, side, top, isConnected }: {
   const position = side === 'left' ? Position.Left : Position.Right;
   const handleType = side === 'left' ? 'target' : 'source';
 
+  const isRequired = !isExec && pin.optional === false;
   const shapeStyle: CSSProperties = isExec ? {
     width: 0, height: 0,
     borderTop: '5px solid transparent',
@@ -331,7 +430,7 @@ function PinHandle({ pin, side, top, isConnected }: {
     width: 8, height: 8,
     borderRadius: '50%',
     background: isConnected ? pin.color : 'transparent',
-    border: `1.5px solid ${pin.color}`,
+    border: `1.5px ${isRequired && !isConnected ? 'dashed' : 'solid'} ${pin.color}`,
   };
 
   const execStroke: CSSProperties | null = isExec && !isConnected ? {
@@ -403,12 +502,6 @@ function nodeProps(data: Record<string, unknown>) {
 function StartNode({ data, selected }: NodeProps) {
   const onUpdate = data._onUpdate as NodeDataUpdater;
   const pinWidgets: Record<string, React.ReactNode> = {
-    data_conversation: (
-      <input style={outputFieldStyle}
-        value={String(data.preview_conversation || '')}
-        onChange={e => onUpdate?.({ ...data, preview_conversation: e.target.value })}
-        placeholder="[]" />
-    ),
     data_message: (
       <input style={outputFieldStyle}
         value={String(data.preview_message || '')}
@@ -422,6 +515,48 @@ function StartNode({ data, selected }: NodeProps) {
   );
 }
 
+function FetchConversationNode({ data, selected }: NodeProps) {
+  return (
+    <NodeShell def={_nodeDefMap['fetch_conversation']} selected={selected}
+      {...nodeProps(data)} />
+  );
+}
+
+function AgentNodeComponent(typeName: string) {
+  const Comp: FC<NodeProps> = ({ data, selected }) => {
+    const baseDef = _nodeDefMap[typeName];
+    const [templateInputs, setTemplateInputs] = useState<string[]>([]);
+    const agentName = String(data.agent || '');
+
+    useEffect(() => {
+      if (!agentName) { setTemplateInputs([]); return; }
+      getAgentInputs(agentName).then(setTemplateInputs).catch(() => setTemplateInputs([]));
+    }, [agentName]);
+
+    if (!baseDef) return null;
+
+    const mergedDef = useMemo(() => {
+      if (templateInputs.length === 0) return baseDef;
+      const extraPins: PinDef[] = templateInputs.map(name => ({
+        id: `data_${name}`,
+        label: name,
+        color: C.cyan,
+        side: 'left' as const,
+        kind: 'data' as const,
+        pin_type: 'string',
+        optional: true,
+      }));
+      return { ...baseDef, pins: [...baseDef.pins, ...extraPins] };
+    }, [baseDef, templateInputs]);
+
+    return (
+      <NodeShell def={mergedDef} selected={selected} {...nodeProps(data)} />
+    );
+  };
+  Comp.displayName = typeName;
+  return Comp;
+}
+
 function GenericNode(typeName: string) {
   const Comp: FC<NodeProps> = ({ data, selected }) => {
     const def = _nodeDefMap[typeName];
@@ -433,9 +568,14 @@ function GenericNode(typeName: string) {
 }
 
 function buildNodeTypes(): NodeTypes {
-  const types: NodeTypes = { start: StartNode };
+  const types: NodeTypes = {
+    start: StartNode,
+    fetch_conversation: FetchConversationNode,
+    agent: AgentNodeComponent('agent'),
+    agent_call: AgentNodeComponent('agent_call'),
+  };
   for (const def of _nodeDefs) {
-    if (def.type === 'start') continue;
+    if (types[def.type]) continue;
     types[def.type] = GenericNode(def.type);
   }
   return types;
@@ -689,7 +829,6 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
       {ntype === 'start' && (
         <>
           {field('Preview Message', 'preview_message', { placeholder: 'Test user message', rows: 3 })}
-          {field('Preview Conversation', 'preview_conversation', { placeholder: 'Prior context (optional)', rows: 4 })}
         </>
       )}
       {ntype === 'agent' && (
@@ -921,7 +1060,8 @@ const WorkflowEditor: FC = () => {
     const defaultData: Record<string, unknown> = { label: _nodeDefMap[type]?.label || type };
     if (type === 'agent' || type === 'agent_call') defaultData.agent = 'default';
     if (type === 'condition') defaultData.expression = 'True';
-    if (type === 'start') { defaultData.preview_message = 'Hello!'; defaultData.preview_conversation = ''; }
+    if (type === 'start') { defaultData.preview_message = 'Hello!'; }
+    if (type === 'fetch_conversation') { defaultData.conversation_id = ''; defaultData.debug = true; }
     setNodes(nds => [...nds, { id: nid(), type, position, data: defaultData }]);
   }, [setNodes]);
 
@@ -1043,13 +1183,17 @@ const WorkflowEditor: FC = () => {
       catch { /* proceed */ }
     }
 
+    const priorMessages = chatMessages
+      .filter(m => !m.isStreaming && (m.role === 'user' || m.role === 'assistant'))
+      .map(m => ({ role: m.role, content: m.content }));
+
     setChatMessages(prev => [...prev, { role: 'user', content: message }]);
     setChatInput('');
     setIsRunning(true);
     setRunLog(['\u25b6 Starting workflow...']);
 
     try {
-      const response = await runWorkflow(specId, message, '', true);
+      const response = await runWorkflow(specId, message, '', true, priorMessages);
 
       await parseSSE(response, (eventType, data) => {
         if (eventType === 'workflow_start') {
@@ -1127,7 +1271,7 @@ const WorkflowEditor: FC = () => {
     } finally {
       setIsRunning(false);
     }
-  }, [buildSpec, workflowId]);
+  }, [buildSpec, workflowId, chatMessages]);
 
   /* Legacy Run button (uses preview inputs from Start node) */
   const handleRun = useCallback(async () => {

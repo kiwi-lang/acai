@@ -6,7 +6,8 @@ nodes with the :func:`register` decorator or call it manually.
 Built-in types
 --------------
 start, agent, agent_call, accumulate, stream_transform,
-for_each, tool_loop, tool, append, print, condition, output
+for_each, tool_loop, tool, append, print, condition, output,
+fetch_conversation
 
 Creating a custom node
 ----------------------
@@ -23,8 +24,14 @@ Creating a custom node
         pins = [
             Pin.exec_in(),
             Pin.exec_out(),
-            Pin.data("data_input", "input", Colors.green, "left"),
-            Pin.data("data_output", "output", Colors.green, "right"),
+            Pin.data("data_input", "input", Colors.green, "left",
+                     pin_type="string"),
+            Pin.data("data_output", "output", Colors.green, "right",
+                     pin_type="stream[string]"),
+            Pin.data("data_mode", "mode", Colors.amber, "left",
+                     pin_type="string", choices=("fast", "balanced", "quality")),
+            Pin.data("data_enabled", "enabled", Colors.green, "left",
+                     pin_type="bool"),
         ]
 
         async def execute(self, ctx: NodeContext):
@@ -81,12 +88,26 @@ class Pin:
     id: str
     label: str
     color: str
-    side: str   # "left" | "right"
-    kind: str   # "exec" | "data"
+    side: str          # "left" | "right"
+    kind: str          # "exec" | "data"
+    pin_type: str = "string"   # "string" | "bool" | "int" | "float" | "json"
+                               # | "stream" | "stream[string]" | "stream[json]"
+                               # | "message" | "message_list" | "any"
+    choices: tuple[str, ...] = ()
+    dynamic_choices: str = ""   # "agents" | "conversations" — frontend fetches list
+    optional: bool = True
 
     def to_dict(self) -> dict:
-        return {"id": self.id, "label": self.label, "color": self.color,
-                "side": self.side, "kind": self.kind}
+        d: dict = {
+            "id": self.id, "label": self.label, "color": self.color,
+            "side": self.side, "kind": self.kind, "pin_type": self.pin_type,
+            "optional": self.optional,
+        }
+        if self.choices:
+            d["choices"] = list(self.choices)
+        if self.dynamic_choices:
+            d["dynamic_choices"] = self.dynamic_choices
+        return d
 
     # Convenience constructors
     @staticmethod
@@ -102,8 +123,23 @@ class Pin:
         return Pin(id, label, color, side, "exec")
 
     @staticmethod
-    def data(id: str, label: str, color: str, side: str) -> Pin:
-        return Pin(id, label, color, side, "data")
+    def data(
+        id: str,
+        label: str,
+        color: str,
+        side: str,
+        pin_type: str = "string",
+        choices: tuple[str, ...] | list[str] = (),
+        dynamic_choices: str = "",
+        optional: bool = True,
+    ) -> Pin:
+        return Pin(
+            id, label, color, side, "data",
+            pin_type=pin_type,
+            choices=tuple(choices),
+            dynamic_choices=dynamic_choices,
+            optional=optional,
+        )
 
 
 # ===================================================================
@@ -191,6 +227,37 @@ def all_types() -> list[NodeType]:
 
 
 # ===================================================================
+# Helpers
+# ===================================================================
+
+_AGENT_NODE_KEYS = frozenset({
+    "label", "agent", "prompt_template", "stream_mode",
+    "preview_message", "expression", "tool", "args", "args_json",
+    "target_mode", "mode", "conversation_id", "debug",
+})
+
+
+def _extra_context(ctx: NodeContext) -> dict[str, Any] | None:
+    """Collect extra template variables from node data and wired inputs.
+
+    Any key in ``ctx.data`` or ``ctx.inputs`` that is not a well-known
+    node configuration key is treated as an extra Jinja2 template variable.
+    """
+    extra: dict[str, Any] = {}
+    for key, value in ctx.data.items():
+        if key.startswith("_") or key in _AGENT_NODE_KEYS:
+            continue
+        extra[key] = value
+    for key, value in ctx.inputs.items():
+        if key.startswith("_") or key in _AGENT_NODE_KEYS:
+            continue
+        if key in ("agent", "context", "reasoning", "stream_mode"):
+            continue
+        extra[key] = value
+    return extra or None
+
+
+# ===================================================================
 # Built-in node types
 # ===================================================================
 
@@ -202,38 +269,15 @@ class StartNode(NodeType):
     description = "Entry point"
     pins = [
         Pin.exec_out(),
-        Pin.data("data_conversation", "conversation", Colors.blue, "right"),
-        Pin.data("data_message", "message", Colors.amber, "right"),
+        Pin.data("data_message", "message", Colors.amber, "right",
+                 pin_type="message"),
     ]
 
     async def execute(self, ctx: NodeContext):
         msg_text = (ctx.work.get("message", "")
                     or ctx.data.get("preview_message", ""))
         message: dict = {"role": "user", "content": msg_text}
-
-        conv_raw = (ctx.work.get("conversation_preview", "")
-                    or ctx.data.get("preview_conversation", ""))
-        conversation: list[dict] = []
-
-        if conv_raw:
-            if isinstance(conv_raw, list):
-                conversation = conv_raw
-            elif isinstance(conv_raw, str):
-                conv_raw = conv_raw.strip()
-                if conv_raw.startswith("["):
-                    try:
-                        conversation = json.loads(conv_raw)
-                    except json.JSONDecodeError:
-                        conversation = [{"role": "user", "content": conv_raw}]
-                elif conv_raw:
-                    conversation = [{"role": "user", "content": conv_raw}]
-
-        if not conversation and ctx.graph.conversation:
-            conversation = list(ctx.graph.chat.read(ctx.graph.conversation))
-
-        yield {"type": "output", "data": {
-            "message": message, "conversation": conversation,
-        }}
+        yield {"type": "output", "data": {"message": message}}
 
 
 @register
@@ -253,9 +297,12 @@ class AgentNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_agent", "agent", Colors.cyan, "left"),
-        Pin.data("data_context", "context", Colors.blue, "left"),
-        Pin.data("data_stream", "stream", Colors.green, "right"),
+        Pin.data("data_agent", "agent", Colors.cyan, "left", pin_type="string",
+                 dynamic_choices="agents"),
+        Pin.data("data_context", "context", Colors.blue, "left",
+                 pin_type="message_list"),
+        Pin.data("data_stream", "stream", Colors.green, "right",
+                 pin_type="stream[string]"),
     ]
 
     async def execute(self, ctx: NodeContext):  # noqa: C901
@@ -284,7 +331,11 @@ class AgentNode(NodeType):
                 ctx.data["prompt_template"], variables,
             )
 
-        payload = ctx.graph.prepare(agent_name, agent_work)
+        extra = _extra_context(ctx)
+        payload = ctx.graph.prepare(
+            agent_name, agent_work,
+            **({"extra_context": extra} if extra else {}),
+        )
 
         if isinstance(context, list) and context:
             payload["messages"] = (
@@ -358,7 +409,8 @@ class ForwardNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_stream", "stream", Colors.green, "left"),
+        Pin.data("data_stream", "stream", Colors.green, "left",
+                 pin_type="stream", optional=False),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -389,12 +441,19 @@ class AgentCallNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_agent", "agent", Colors.cyan, "left"),
-        Pin.data("data_context", "context", Colors.blue, "left"),
-        Pin.data("data_reasoning", "reasoning", Colors.purple, "left"),
-        Pin.data("data_stream_mode", "stream_mode", Colors.amber, "left"),
-        Pin.data("data_stream", "stream", Colors.green, "right"),
-        Pin.data("data_payload", "payload", Colors.blue, "right"),
+        Pin.data("data_agent", "agent", Colors.cyan, "left", pin_type="string",
+                 dynamic_choices="agents"),
+        Pin.data("data_context", "context", Colors.blue, "left",
+                 pin_type="message_list"),
+        Pin.data("data_reasoning", "reasoning", Colors.purple, "left",
+                 pin_type="string"),
+        Pin.data("data_stream_mode", "stream_mode", Colors.amber, "left",
+                 pin_type="string",
+                 choices=("token", "reasoning", "silent")),
+        Pin.data("data_stream", "stream", Colors.green, "right",
+                 pin_type="stream"),
+        Pin.data("data_payload", "payload", Colors.blue, "right",
+                 pin_type="json"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -422,10 +481,13 @@ class AgentCallNode(NodeType):
                 ctx.data["prompt_template"], variables,
             )
 
-        payload = ctx.graph.prepare(
-            agent_name, agent_work,
-            **({"reasoning": reasoning} if reasoning else {}),
-        )
+        extra = _extra_context(ctx)
+        prepare_kwargs: dict[str, Any] = {}
+        if reasoning:
+            prepare_kwargs["reasoning"] = reasoning
+        if extra:
+            prepare_kwargs["extra_context"] = extra
+        payload = ctx.graph.prepare(agent_name, agent_work, **prepare_kwargs)
 
         if isinstance(context, list) and context:
             payload["messages"] = (
@@ -456,9 +518,12 @@ class AccumulateNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_stream", "stream", Colors.green, "left"),
-        Pin.data("data_response", "response", Colors.amber, "right"),
-        Pin.data("data_reasoning", "reasoning", Colors.purple, "right"),
+        Pin.data("data_stream", "stream", Colors.green, "left",
+                 pin_type="stream", optional=False),
+        Pin.data("data_response", "response", Colors.amber, "right",
+                 pin_type="message"),
+        Pin.data("data_reasoning", "reasoning", Colors.purple, "right",
+                 pin_type="string"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -501,8 +566,10 @@ class StreamTransformNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_stream", "stream", Colors.green, "left"),
-        Pin.data("data_stream_out", "stream_out", Colors.green, "right"),
+        Pin.data("data_stream", "stream", Colors.green, "left",
+                 pin_type="stream", optional=False),
+        Pin.data("data_stream_out", "stream_out", Colors.green, "right",
+                 pin_type="stream"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -538,9 +605,10 @@ class ForEachNode(NodeType):
         Pin.exec_in(),
         Pin.exec("exec_body", "body", Colors.green, "right"),
         Pin.exec("exec_then", "then", Colors.white, "right"),
-        Pin.data("data_array", "array", Colors.blue, "left"),
-        Pin.data("data_item", "item", Colors.green, "right"),
-        Pin.data("data_index", "index", Colors.amber, "right"),
+        Pin.data("data_array", "array", Colors.blue, "left", pin_type="json",
+                 optional=False),
+        Pin.data("data_item", "item", Colors.green, "right", pin_type="any"),
+        Pin.data("data_index", "index", Colors.amber, "right", pin_type="int"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -567,9 +635,12 @@ class ToolLoopNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_stream", "stream", Colors.green, "left"),
-        Pin.data("data_payload", "payload", Colors.blue, "left"),
-        Pin.data("data_response", "response", Colors.amber, "right"),
+        Pin.data("data_stream", "stream", Colors.green, "left",
+                 pin_type="stream", optional=False),
+        Pin.data("data_payload", "payload", Colors.blue, "left",
+                 pin_type="json", optional=False),
+        Pin.data("data_response", "response", Colors.amber, "right",
+                 pin_type="message"),
     ]
 
     async def execute(self, ctx: NodeContext):  # noqa: C901
@@ -651,9 +722,11 @@ class ToolNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_tool", "tool", Colors.cyan, "left"),
-        Pin.data("data_input", "input", Colors.green, "left"),
-        Pin.data("data_result", "result", Colors.green, "right"),
+        Pin.data("data_tool", "tool", Colors.cyan, "left", pin_type="string",
+                 optional=False),
+        Pin.data("data_input", "input", Colors.green, "left", pin_type="string"),
+        Pin.data("data_result", "result", Colors.green, "right",
+                 pin_type="string"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -691,9 +764,11 @@ class AppendNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_a", "array", Colors.blue, "left"),
-        Pin.data("data_b", "item", Colors.amber, "left"),
-        Pin.data("data_result", "result", Colors.blue, "right"),
+        Pin.data("data_a", "array", Colors.blue, "left",
+                 pin_type="message_list"),
+        Pin.data("data_b", "item", Colors.amber, "left", pin_type="any"),
+        Pin.data("data_result", "result", Colors.blue, "right",
+                 pin_type="message_list"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -721,7 +796,8 @@ class ConditionNode(NodeType):
         Pin.exec_in(),
         Pin.exec("exec_true", "true", Colors.green, "right"),
         Pin.exec("exec_false", "false", Colors.red, "right"),
-        Pin.data("data_value", "value", Colors.green, "left"),
+        Pin.data("data_value", "value", Colors.green, "left", pin_type="any",
+                 optional=False),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -750,7 +826,8 @@ class OutputNode(NodeType):
     description = "Final response"
     pins = [
         Pin.exec_in(),
-        Pin.data("data_response", "stream", Colors.green, "left"),
+        Pin.data("data_response", "stream", Colors.green, "left",
+                 pin_type="stream", optional=False),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -778,7 +855,7 @@ class PrintNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_value", "value", Colors.green, "left"),
+        Pin.data("data_value", "value", Colors.green, "left", pin_type="any"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -794,3 +871,60 @@ class PrintNode(NodeType):
                      "text": text},
         }}
         yield {"type": "output", "data": {}}
+
+
+@register
+class FetchConversationNode(NodeType):
+    """Load a conversation by ID — or from the test chat when debugging.
+
+    * **debug = false** (default): reads the conversation specified by
+      ``conversation_id`` from ``ChatStore``.
+    * **debug = true**: uses the message history accumulated in the
+      workflow builder's *Test Chat* panel (passed via
+      ``work["test_conversation"]`` at run time).
+
+    Wire the ``conversation`` output into any node that expects a
+    ``message_list`` (e.g. ``AgentCall.context``, ``Append.array``).
+    """
+
+    type = "fetch_conversation"
+    label = "Fetch Conversation"
+    accent = Colors.cyan
+    description = "Load conversation history"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_conversation_id", "conversation_id", Colors.cyan,
+                 "left", pin_type="string", dynamic_choices="conversations"),
+        Pin.data("data_debug", "debug", Colors.amber, "left",
+                 pin_type="bool"),
+        Pin.data("data_conversation", "conversation", Colors.blue, "right",
+                 pin_type="message_list"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        debug = ctx.inputs.get("debug", ctx.data.get("debug", False))
+        if isinstance(debug, str):
+            debug = debug.lower() in ("true", "1", "yes")
+
+        if debug:
+            conversation = ctx.work.get("test_conversation", [])
+            if isinstance(conversation, str):
+                conversation = conversation.strip()
+                if conversation.startswith("["):
+                    try:
+                        conversation = json.loads(conversation)
+                    except json.JSONDecodeError:
+                        conversation = []
+                else:
+                    conversation = []
+        else:
+            conv_id = (
+                ctx.inputs.get("conversation_id", "")
+                or ctx.data.get("conversation_id", "")
+            )
+            conversation = []
+            if conv_id and hasattr(ctx.graph, "chat"):
+                conversation = list(ctx.graph.chat.read(conv_id))
+
+        yield {"type": "output", "data": {"conversation": conversation}}

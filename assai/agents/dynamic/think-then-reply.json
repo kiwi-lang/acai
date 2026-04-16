@@ -7,8 +7,8 @@
       "id": "start",
       "type": "start",
       "position": {
-        "x": -336.55924817296244,
-        "y": -127.44947028511882
+        "x": -578.0427384538588,
+        "y": -121.33596420205815
       },
       "data": {
         "label": "Start",
@@ -19,8 +19,8 @@
       "id": "reply",
       "type": "agent_call",
       "position": {
-        "x": 591.3684878237133,
-        "y": -93.74937949523638
+        "x": 482.61044916138735,
+        "y": -274.8185934010962
       },
       "data": {
         "agent": "default",
@@ -55,8 +55,8 @@
       "id": "n_1_mo0yxhv0",
       "type": "accumulate",
       "position": {
-        "x": 248.15050514106412,
-        "y": -271.6109684335722
+        "x": 234.0663609240537,
+        "y": -276.01226350138796
       },
       "data": {
         "label": "Accumulate"
@@ -66,8 +66,8 @@
       "id": "n_1_mo0z1thv",
       "type": "output",
       "position": {
-        "x": 1108.0203285050477,
-        "y": -110.56135414108522
+        "x": 1166.1388070709475,
+        "y": -107.23704416397861
       },
       "data": {
         "label": "Output"
@@ -77,8 +77,8 @@
       "id": "n_4_mo0z3so8",
       "type": "print",
       "position": {
-        "x": 815.8466806836301,
-        "y": -128.80024550830484
+        "x": 724.7452239038068,
+        "y": -267.788365467266
       },
       "data": {
         "label": "Print"
@@ -93,6 +93,19 @@
       },
       "data": {
         "label": "Accumulate"
+      }
+    },
+    {
+      "id": "n_1_mo1ny3s7",
+      "type": "fetch_conversation",
+      "position": {
+        "x": -445.4798667671278,
+        "y": -139.66954929641224
+      },
+      "data": {
+        "label": "Fetch Conversation",
+        "conversation_id": "",
+        "debug": true
       }
     }
   ],
@@ -112,14 +125,6 @@
       "sourceHandle": "data_message",
       "targetHandle": "data_b",
       "type": "data"
-    },
-    {
-      "id": "e_start_exec_append",
-      "source": "start",
-      "target": "n_1_mo0yktzt",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
     },
     {
       "id": "e_append_exec_thinker",
@@ -216,6 +221,38 @@
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
+    },
+    {
+      "id": "xy-edge__startexec_out-n_1_mo1ny3s7exec_in",
+      "source": "start",
+      "target": "n_1_mo1ny3s7",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_1_mo1ny3s7exec_out-n_1_mo0yktztexec_in",
+      "source": "n_1_mo1ny3s7",
+      "target": "n_1_mo0yktzt",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_1_mo1ny3s7data_conversation-n_1_mo0yktztdata_a",
+      "source": "n_1_mo1ny3s7",
+      "target": "n_1_mo0yktzt",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_a",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_mo0zutvsdata_response-n_1_mo0z1thvdata_response",
+      "source": "n_1_mo0zutvs",
+      "target": "n_1_mo0z1thv",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_response",
+      "type": "data"
     }
   ]
 }

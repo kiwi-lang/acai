@@ -2,6 +2,7 @@
 
 from assai.orchestrator.config import (  # noqa: F401
     AssaiConfig,
+    AuditConfig,
     CuratorConfig,
     GitConfig,
     ProviderConfig,

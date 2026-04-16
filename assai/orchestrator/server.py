@@ -242,6 +242,16 @@ def create_router(config: AssaiConfig | None = None,
 
     configure_meta_tools(tool_registry)
 
+    from assai.utils.audit import AuditTrail, NullAuditTrail
+
+    def _make_audit(endpoint: str, **meta) -> AuditTrail | NullAuditTrail:
+        """Create an AuditTrail for a request, or a no-op when disabled."""
+        if not config.audit.enabled:
+            return NullAuditTrail()
+        trail = AuditTrail(output_dir=config.audit.dir)
+        trail.set_meta(endpoint=endpoint, **meta)
+        return trail
+
     orc = Orchestrator(config, queue, socketio_ref=_socketio_ref, chat=chat)
     threading.Thread(target=orc.run, daemon=True, name="orchestrator").start()
 
@@ -397,10 +407,16 @@ def create_router(config: AssaiConfig | None = None,
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+        audit = _make_audit(
+            "converse", conversation=conversation,
+            agent=agent_name, project=project,
+        )
+
         async def generate():
             yield _sse("meta", {"conversation": conversation})
             try:
                 async with lb.acquire() as worker:
+                    audit.record("worker.acquired", phase="server", worker=worker.url)
                     graph = ConverseGraph.from_work(
                         worker, work,
                         agent_store=agent_store,
@@ -409,6 +425,7 @@ def create_router(config: AssaiConfig | None = None,
                         tracker=tracker,
                         projects=projects,
                         tool_registry=tool_registry,
+                        audit=audit,
                     )
                     async for event in graph.run(work):
                         yield _sse(
@@ -416,13 +433,17 @@ def create_router(config: AssaiConfig | None = None,
                             event.get("data", {}),
                         )
             except TimeoutError:
+                audit.record("error", phase="server", error="worker timeout")
                 yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
             except Exception as exc:
                 log.exception("converse stream error")
+                audit.record("error", phase="server", error=str(exc))
                 yield _sse("error", {
                     "message": f"{type(exc).__name__}: {exc}",
                     "traceback": _tb.format_exc(),
                 })
+            finally:
+                audit.finalize()
 
         return StreamingResponse(
             generate(),
@@ -479,9 +500,15 @@ def create_router(config: AssaiConfig | None = None,
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+        audit = _make_audit(
+            "uber/converse", agent=agent_name,
+            current_conversation=current_conversation,
+        )
+
         async def generate():
             try:
                 async with lb.acquire() as worker:
+                    audit.record("worker.acquired", phase="server", worker=worker.url)
                     graph = UberGraph.from_work(
                         worker, work,
                         agent_store=agent_store,
@@ -490,6 +517,7 @@ def create_router(config: AssaiConfig | None = None,
                         tracker=tracker,
                         projects=projects,
                         tool_registry=tool_registry,
+                        audit=audit,
                     )
                     async for event in graph.run(work):
                         yield _sse(
@@ -497,13 +525,17 @@ def create_router(config: AssaiConfig | None = None,
                             event.get("data", {}),
                         )
             except TimeoutError:
+                audit.record("error", phase="server", error="worker timeout")
                 yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
             except Exception as exc:
                 log.exception("uber converse stream error")
+                audit.record("error", phase="server", error=str(exc))
                 yield _sse("error", {
                     "message": f"{type(exc).__name__}: {exc}",
                     "traceback": _tb.format_exc(),
                 })
+            finally:
+                audit.finalize()
 
         return StreamingResponse(
             generate(),
@@ -548,6 +580,12 @@ def create_router(config: AssaiConfig | None = None,
         """Return all registered node type definitions (pins, colors, etc.)."""
         from assai.tasks.nodes import all_types
         return [nt.to_dict() for nt in all_types()]
+
+    @router.get("/workflows/agent-inputs/{agent_name}")
+    def get_agent_template_inputs(agent_name: str):
+        """Return custom template variables for an agent."""
+        return {"agent": agent_name,
+                "inputs": agent_store.template_inputs(agent_name)}
 
     @router.get("/workflows")
     def list_workflows():
@@ -630,6 +668,7 @@ def create_router(config: AssaiConfig | None = None,
         message = data.get("message", "")
         conversation_raw = data.get("conversation", "")
         test_mode = data.get("test", False)
+        test_conversation = data.get("test_conversation", [])
 
         conversation_preview = ""
         conversation_id = ""
@@ -659,6 +698,9 @@ def create_router(config: AssaiConfig | None = None,
             "workflow_spec": spec,
             "stream_id": conversation_id or f"test-{workflow_id}",
         }
+
+        if test_conversation and isinstance(test_conversation, list):
+            work["test_conversation"] = test_conversation
 
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -760,10 +802,16 @@ def create_router(config: AssaiConfig | None = None,
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+        audit = _make_audit(
+            "think/converse", conversation=conversation,
+            agent=effective_agent, project=project or proj,
+        )
+
         async def generate():
             yield _sse("meta", {"conversation": conversation})
             try:
                 async with lb.acquire() as worker:
+                    audit.record("worker.acquired", phase="server", worker=worker.url)
                     graph = ThinkGraph.from_work(
                         worker, work,
                         agent_store=agent_store,
@@ -772,6 +820,7 @@ def create_router(config: AssaiConfig | None = None,
                         tracker=tracker,
                         projects=projects,
                         tool_registry=tool_registry,
+                        audit=audit,
                     )
                     async for event in graph.run(work):
                         yield _sse(
@@ -779,13 +828,17 @@ def create_router(config: AssaiConfig | None = None,
                             event.get("data", {}),
                         )
             except TimeoutError:
+                audit.record("error", phase="server", error="worker timeout")
                 yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
             except Exception as exc:
                 log.exception("think/converse stream error")
+                audit.record("error", phase="server", error=str(exc))
                 yield _sse("error", {
                     "message": f"{type(exc).__name__}: {exc}",
                     "traceback": _tb.format_exc(),
                 })
+            finally:
+                audit.finalize()
 
         return StreamingResponse(
             generate(),

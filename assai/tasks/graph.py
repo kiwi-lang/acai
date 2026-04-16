@@ -35,6 +35,8 @@ import traceback as _tb
 from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, TYPE_CHECKING
 
+from assai.utils.audit import AuditTrail, NullAuditTrail
+
 if TYPE_CHECKING:
     from assai.orchestrator.agent_store import AgentDef, AgentStore
     from assai.orchestrator.chat import ChatStore
@@ -155,6 +157,7 @@ class TaskGraph:
         tracker: StreamTracker | None = None,
         projects: ProjectStore | None = None,
         tool_registry: Any = None,
+        audit: AuditTrail | NullAuditTrail | None = None,
         stream_id: str = "",
         conversation: str = "",
     ):
@@ -165,6 +168,7 @@ class TaskGraph:
         self.tracker = tracker
         self.projects = projects
         self.tool_registry = tool_registry
+        self.audit = audit or NullAuditTrail()
         self.stream_id = stream_id
         self.conversation = conversation
 
@@ -224,62 +228,65 @@ class TaskGraph:
         """
         from assai.orchestrator.agent_store import hydrate_task, resolve_task
 
-        agent_def = self.agent(agent_name) or self.agent("default")
-        tool_defs, tools_desc = self._resolve_tools(agent_def)
+        with self.audit.span("prepare", phase="prepare", agent=agent_name):
+            agent_def = self.agent(agent_name) or self.agent("default")
+            tool_defs, tools_desc = self._resolve_tools(agent_def)
 
-        task_proxy = _TaskProxy(
-            id=work.get("task_id", ""),
-            kind=work.get("kind", "converse"),
-            title=work.get("title", ""),
-            project=work.get("project", ""),
-            agent=agent_name,
-            spec_path=work.get("spec_path", ""),
-            conversation=self.conversation,
-            enable_thinking=work.get("enable_thinking"),
-        )
-        resolved = resolve_task(task_proxy, self.config, self.chat, self.projects)
+            task_proxy = _TaskProxy(
+                id=work.get("task_id", ""),
+                kind=work.get("kind", "converse"),
+                title=work.get("title", ""),
+                project=work.get("project", ""),
+                agent=agent_name,
+                spec_path=work.get("spec_path", ""),
+                conversation=self.conversation,
+                enable_thinking=work.get("enable_thinking"),
+            )
+            resolved = resolve_task(task_proxy, self.config, self.chat, self.projects)
 
-        extra_context = kwargs.get("extra_context")
-        messages = hydrate_task(
-            agent_def, 
-            self.agent_store, 
-            resolved,
-            tools_description=tools_desc,
-            extra_context=extra_context,
-        )
+            extra_context = kwargs.get("extra_context")
+            messages = hydrate_task(
+                agent_def,
+                self.agent_store,
+                resolved,
+                tools_description=tools_desc,
+                extra_context=extra_context,
+            )
 
-        reasoning = kwargs.get("reasoning", "")
-        if reasoning:
-            msg = {
-                "role": "system",
-                "content": (
-                    "## Prior Reasoning\n"
-                    "The following analysis was produced about this task. "
-                    "Use it to inform your response.\n\n"
-                    + reasoning
-                ),
+            reasoning = kwargs.get("reasoning", "")
+            if reasoning:
+                msg = {
+                    "role": "system",
+                    "content": (
+                        "## Prior Reasoning\n"
+                        "The following analysis was produced about this task. "
+                        "Use it to inform your response.\n\n"
+                        + reasoning
+                    ),
+                }
+                pos = 1 if messages and messages[0].get("role") == "system" else 0
+                messages.insert(pos, msg)
+
+            payload: dict = {
+                "task_id": work.get("task_id", ""),
+                "kind": "llm_complete",
+                "messages": messages,
+                "conversation": self.conversation,
+                "agent": agent_name,
             }
-            pos = 1 if messages and messages[0].get("role") == "system" else 0
-            messages.insert(pos, msg)
+            if tool_defs:
+                payload["tools"] = tool_defs
+            if agent_def:
+                payload["compressor"] = agent_def.compressor
 
-        payload: dict = {
-            "task_id": work.get("task_id", ""),
-            "kind": "llm_complete",
-            "messages": messages,
-            "conversation": self.conversation,
-            "agent": agent_name,
-        }
-        if tool_defs:
-            payload["tools"] = tool_defs
-        if agent_def:
-            payload["compressor"] = agent_def.compressor
+            provider_info = work.get("provider_override")
+            if provider_info:
+                payload["provider"] = provider_info
 
-        provider_info = work.get("provider_override")
-        if provider_info:
-            payload["provider"] = provider_info
+            if task_proxy.enable_thinking is not None:
+                payload["enable_thinking"] = task_proxy.enable_thinking
 
-        if task_proxy.enable_thinking is not None:
-            payload["enable_thinking"] = task_proxy.enable_thinking
+            self.audit.save_payload(f"prepare-{agent_name}", messages)
 
         return payload
 
@@ -304,48 +311,53 @@ class TaskGraph:
 
         url = f"{self.worker.url}/llm/complete"
 
-        try:
-            async for event in AsyncSSEIterator(url, json=payload):
-                etype = event.event
-                try:
-                    edata = event.json()
-                except (json.JSONDecodeError, ValueError):
-                    edata = {}
+        async with self.audit.aspan(
+            "dispatch", phase="dispatch",
+            worker=self.worker.url, stream_mode=stream_mode,
+            agent=payload.get("agent", ""),
+        ):
+            try:
+                async for event in AsyncSSEIterator(url, json=payload):
+                    etype = event.event
+                    try:
+                        edata = event.json()
+                    except (json.JSONDecodeError, ValueError):
+                        edata = {}
 
-                if etype == "done":
-                    return
+                    if etype == "done":
+                        return
 
-                if etype == "token" and stream_mode == "reasoning":
-                    ev = {"event_type": "reasoning", "data": edata}
-                else:
-                    ev = {"event_type": etype, "data": edata}
+                    if etype == "token" and stream_mode == "reasoning":
+                        ev = {"event_type": "reasoning", "data": edata}
+                    else:
+                        ev = {"event_type": etype, "data": edata}
 
-                if self.tracker and self.stream_id and stream_mode != "silent":
+                    if self.tracker and self.stream_id and stream_mode != "silent":
+                        self.tracker.push(self.stream_id, ev)
+
+                    yield ev
+
+                    if etype == "error":
+                        return
+
+            except aiohttp.ClientError as exc:
+                log.error("dispatch worker error: %s", exc)
+                ev = {"event_type": "error", "data": {
+                    "message": f"Worker connection error: {exc}",
+                    "traceback": _tb.format_exc(),
+                }}
+                if self.tracker and self.stream_id:
                     self.tracker.push(self.stream_id, ev)
-
                 yield ev
-
-                if etype == "error":
-                    return
-
-        except aiohttp.ClientError as exc:
-            log.error("dispatch worker error: %s", exc)
-            ev = {"event_type": "error", "data": {
-                "message": f"Worker connection error: {exc}",
-                "traceback": _tb.format_exc(),
-            }}
-            if self.tracker and self.stream_id:
-                self.tracker.push(self.stream_id, ev)
-            yield ev
-        except Exception as exc:
-            log.exception("dispatch error")
-            ev = {"event_type": "error", "data": {
-                "message": f"{type(exc).__name__}: {exc}",
-                "traceback": _tb.format_exc(),
-            }}
-            if self.tracker and self.stream_id:
-                self.tracker.push(self.stream_id, ev)
-            yield ev
+            except Exception as exc:
+                log.exception("dispatch error")
+                ev = {"event_type": "error", "data": {
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "traceback": _tb.format_exc(),
+                }}
+                if self.tracker and self.stream_id:
+                    self.tracker.push(self.stream_id, ev)
+                yield ev
 
     # ------------------------------------------------------------------
     # dispatch_tool — single tool call via the worker
@@ -391,6 +403,16 @@ class TaskGraph:
                 msg["reasoning"] = acc.reasoning
             self.chat.append(self.conversation, msg)
 
+        self.audit.record(
+            "response.saved", phase="response",
+            text_length=len(acc.text),
+            reasoning_length=len(acc.reasoning),
+        )
+        self.audit.save_payload("response", {
+            "text": acc.text,
+            "reasoning": acc.reasoning,
+        })
+
     async def _run_with_tools(self, payload: dict) -> AsyncIterator[dict]:
         """Dispatch a payload and handle the tool-call follow-up loop.
 
@@ -398,6 +420,7 @@ class TaskGraph:
         available as ``self._last_acc`` for callers that need the text.
         Does NOT yield ``done`` — the caller decides when the graph ends.
         """
+        _tool_round = 0
         acc = Acc(self.dispatch(payload))
         async for event in acc:
             yield event
@@ -433,11 +456,16 @@ class TaskGraph:
                     self.tracker.push(self.stream_id, start_ev)
                 yield start_ev
 
-                try:
-                    result_text = await self.dispatch_tool(tool_name, tool_args)
-                except Exception as exc:
-                    log.exception("tool dispatch error: %s", tool_name)
-                    result_text = f"[Tool error] {type(exc).__name__}: {exc}"
+                async with self.audit.aspan(
+                    "tool", phase="tool",
+                    tool=tool_name, args=tool_args,
+                    tool_round=_tool_round,
+                ):
+                    try:
+                        result_text = await self.dispatch_tool(tool_name, tool_args)
+                    except Exception as exc:
+                        log.exception("tool dispatch error: %s", tool_name)
+                        result_text = f"[Tool error] {type(exc).__name__}: {exc}"
 
                 followup.append({
                     "role": "tool",
@@ -475,6 +503,7 @@ class TaskGraph:
             followup_payload = dict(payload)
             followup_payload["messages"] = followup
             payload = followup_payload
+            _tool_round += 1
 
             acc = Acc(self.dispatch(followup_payload))
             async for event in acc:

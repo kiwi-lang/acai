@@ -251,6 +251,32 @@ class AgentStore:
             return bi
         return ws
 
+    _STANDARD_VARS = frozenset({
+        "agent", "task", "messages", "project", "spec",
+        "tools_description", "datetime",
+        "range", "true", "false", "none", "loop",
+    })
+
+    def template_inputs(self, name: str) -> list[str]:
+        """Return custom Jinja2 variable names used by the agent's template.
+
+        Standard context variables (``agent``, ``task``, ``messages``, etc.)
+        are excluded — only user-defined variables that need explicit values
+        are returned, sorted alphabetically.
+        """
+        from jinja2 import Environment, meta as jinja_meta
+
+        src = self.read_template(name)
+        if not src:
+            return []
+        try:
+            env = Environment()
+            ast = env.parse(src)
+            all_vars = jinja_meta.find_undeclared_variables(ast)
+        except Exception:
+            return []
+        return sorted(all_vars - self._STANDARD_VARS)
+
 
 # ------------------------------------------------------------------
 # Context compression

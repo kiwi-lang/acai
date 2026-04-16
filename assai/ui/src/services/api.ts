@@ -372,6 +372,10 @@ export interface PinDef {
     color: string;
     side: 'left' | 'right';
     kind: 'exec' | 'data';
+    pin_type?: string;
+    choices?: string[];
+    dynamic_choices?: string;
+    optional?: boolean;
 }
 
 export interface NodeTypeDef {
@@ -384,6 +388,11 @@ export interface NodeTypeDef {
 
 export async function getNodeTypes(): Promise<NodeTypeDef[]> {
     return request<NodeTypeDef[]>('/workflows/node-types');
+}
+
+export async function getAgentInputs(agentName: string): Promise<string[]> {
+    const res = await request<{ agent: string; inputs: string[] }>(`/workflows/agent-inputs/${agentName}`);
+    return res.inputs;
 }
 
 // Workflow types
@@ -445,11 +454,21 @@ export async function deleteWorkflow(id: string): Promise<void> {
     await request(`/workflows/${id}`, { method: 'DELETE' });
 }
 
-export async function runWorkflow(id: string, message = '', conversation = '', test = false): Promise<Response> {
+export async function runWorkflow(
+    id: string,
+    message = '',
+    conversation = '',
+    test = false,
+    testConversation?: Array<{ role: string; content: string }>,
+): Promise<Response> {
+    const body: Record<string, unknown> = { message, conversation, test };
+    if (testConversation && testConversation.length > 0) {
+        body.test_conversation = testConversation;
+    }
     const response = await fetch(`${API_BASE}/workflows/${id}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, conversation, test }),
+        body: JSON.stringify(body),
     });
     if (!response.ok) {
         const err = await response.json().catch(() => ({}));
