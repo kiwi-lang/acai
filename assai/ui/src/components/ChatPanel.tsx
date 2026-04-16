@@ -486,10 +486,9 @@ const ChatPanel = ({
             if (think === 'emulated') {
                 const r = await thinkConverse(pending, convId, project || '', '',
                     initialProviderRef.current, initialAgentRef.current);
-                if (signal?.cancelled) return;
-                activeTaskRef.current = r.task_id;
-                setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true, taskId: r.task_id }]);
-                openEventSource(convId);
+                if (signal?.cancelled) { r.stream.close(); return; }
+                setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
+                attachListeners(r.stream);
             } else {
                 const r = await converse(pending, convId, project || '', '',
                     initialProviderRef.current, initialAgentRef.current,
@@ -669,12 +668,11 @@ const ChatPanel = ({
         try {
             if (thinkingMode === 'emulated') {
                 const resp = await thinkConverse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent);
-                activeTaskRef.current = resp.task_id;
                 setMessages(prev => [
                     ...prev,
-                    { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
+                    { role: 'assistant', content: '', isStreaming: true },
                 ]);
-                openEventSource(cid);
+                attachListeners(resp.stream);
             } else {
                 const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
                     thinkingMode === 'native' ? true : undefined);
@@ -689,7 +687,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
-    }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, openEventSource, attachListeners]);
+    }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, attachListeners]);
 
     const handleSend = async (overrideText?: string) => {
         const text = (overrideText ?? input).trim();
@@ -715,7 +713,6 @@ const ChatPanel = ({
                 attachListeners(resp.stream);
             } else if (thinkingMode === 'emulated') {
                 const resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
-                activeTaskRef.current = resp.task_id;
                 convIdRef.current = resp.conversation;
                 joinConversation(resp.conversation);
                 const convChanged = resp.conversation !== (prevConvId || '');
@@ -726,9 +723,9 @@ const ChatPanel = ({
                 }
                 setMessages(prev => [
                     ...prev,
-                    { role: 'assistant', content: '', isStreaming: true, taskId: resp.task_id },
+                    { role: 'assistant', content: '', isStreaming: true },
                 ]);
-                openEventSource(resp.conversation);
+                attachListeners(resp.stream);
             } else {
                 const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
                     thinkingMode === 'native' ? true : undefined);

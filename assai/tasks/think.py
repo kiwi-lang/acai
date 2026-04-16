@@ -46,7 +46,7 @@ class ThinkGraph(TaskGraph):
         # Phase 2 — reply using the reasoning
         try:
             reply_payload = self.prepare(
-                agent_name, work, reasoning=think_acc.text,
+                agent_name, work, reasoning=think_acc.reasoning,
             )
         except Exception as exc:
             log.exception("ThinkGraph prepare (reply) error")

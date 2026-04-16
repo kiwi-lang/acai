@@ -144,12 +144,22 @@ export async function thinkConverse(
     parent_task = '',
     provider = '',
     agent = '',
-): Promise<{ task_id: string; conversation: string }> {
+): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
-    return request<{ task_id: string; conversation: string }>('/think/converse', {
+
+    const response = await fetch(`${API_BASE}/think/converse`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
     });
+
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || err.message || `HTTP ${response.status}`);
+    }
+
+    const convId = response.headers.get('X-Conversation') || conversation;
+    return { conversation: convId, stream: new SSEStream(response) };
 }
 
 export interface HistoryResponse {
