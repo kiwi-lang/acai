@@ -1,85 +1,221 @@
 {
   "id": "think-then-reply",
   "name": "Think then Reply",
-  "description": "Thinker agent's stream fans out to Forward (reasoning display) and Accumulate (response data). The response is appended to the conversation for the replier, whose stream fans out to Forward (visible reply) and Accumulate.",
+  "description": "Thinker agent streams reasoning to user, reply agent uses the reasoning, tool loop handles any tool calls.",
   "nodes": [
     {
       "id": "start",
       "type": "start",
-      "position": { "x": 20, "y": 200 },
+      "position": {
+        "x": -336.55924817296244,
+        "y": -127.44947028511882
+      },
       "data": {
         "label": "Start",
-        "preview_message": "What is the meaning of life?"
+        "preview_message": "How are you ?"
       }
     },
     {
-      "id": "append1",
+      "id": "reply",
+      "type": "agent_call",
+      "position": {
+        "x": 591.3684878237133,
+        "y": -93.74937949523638
+      },
+      "data": {
+        "agent": "default",
+        "label": "Replier"
+      }
+    },
+    {
+      "id": "n_1_mo0yktzt",
       "type": "append",
-      "position": { "x": 220, "y": 200 },
-      "data": { "label": "Build Context" }
+      "position": {
+        "x": -184.39107706036395,
+        "y": -125.6246709239179
+      },
+      "data": {
+        "label": "Append"
+      }
     },
     {
-      "id": "thinker",
-      "type": "agent",
-      "position": { "x": 420, "y": 100 },
-      "data": { "agent": "thinker", "label": "Thinker" }
+      "id": "n_3_mo0ylr10",
+      "type": "agent_call",
+      "position": {
+        "x": 30.47304946088869,
+        "y": -272.83563798841914
+      },
+      "data": {
+        "label": "Thinker",
+        "agent": "thinker",
+        "stream_mode": "reasoning"
+      }
     },
     {
-      "id": "fwd_think",
-      "type": "forward",
-      "position": { "x": 620, "y": 30 },
-      "data": { "label": "As Reasoning", "mode": "reasoning" }
-    },
-    {
-      "id": "acc_think",
+      "id": "n_1_mo0yxhv0",
       "type": "accumulate",
-      "position": { "x": 620, "y": 170 },
-      "data": { "label": "Collect" }
+      "position": {
+        "x": 248.15050514106412,
+        "y": -271.6109684335722
+      },
+      "data": {
+        "label": "Accumulate"
+      }
     },
     {
-      "id": "append2",
-      "type": "append",
-      "position": { "x": 830, "y": 200 },
-      "data": { "label": "Add Reply" }
+      "id": "n_1_mo0z1thv",
+      "type": "output",
+      "position": {
+        "x": 1108.0203285050477,
+        "y": -110.56135414108522
+      },
+      "data": {
+        "label": "Output"
+      }
     },
     {
-      "id": "replier",
-      "type": "agent",
-      "position": { "x": 1030, "y": 200 },
-      "data": { "agent": "default", "label": "Replier" }
+      "id": "n_4_mo0z3so8",
+      "type": "print",
+      "position": {
+        "x": 815.8466806836301,
+        "y": -128.80024550830484
+      },
+      "data": {
+        "label": "Print"
+      }
     },
     {
-      "id": "fwd_reply",
-      "type": "forward",
-      "position": { "x": 1230, "y": 130 },
-      "data": { "label": "As Reply", "mode": "token" }
-    },
-    {
-      "id": "acc_reply",
+      "id": "n_1_mo0zutvs",
       "type": "accumulate",
-      "position": { "x": 1230, "y": 270 },
-      "data": { "label": "Collect" }
+      "position": {
+        "x": 938.583869814437,
+        "y": -96.31015910439793
+      },
+      "data": {
+        "label": "Accumulate"
+      }
     }
   ],
   "edges": [
-    { "id": "e1", "source": "start",     "target": "append1",   "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e2", "source": "append1",    "target": "thinker",  "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e3", "source": "thinker",    "target": "fwd_think","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e4", "source": "fwd_think",  "target": "acc_think","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e5", "source": "acc_think",  "target": "append2",  "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e6", "source": "append2",    "target": "replier",  "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e7", "source": "replier",    "target": "fwd_reply","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e8", "source": "fwd_reply",  "target": "acc_reply","sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-
-    { "id": "d1",  "source": "start",     "target": "append1",   "sourceHandle": "data_conversation", "targetHandle": "data_a",        "type": "data" },
-    { "id": "d2",  "source": "start",     "target": "append1",   "sourceHandle": "data_message",      "targetHandle": "data_b",        "type": "data" },
-    { "id": "d3",  "source": "append1",   "target": "thinker",   "sourceHandle": "data_result",       "targetHandle": "data_context",  "type": "data" },
-    { "id": "d4",  "source": "thinker",   "target": "fwd_think", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" },
-    { "id": "d5",  "source": "thinker",   "target": "acc_think", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" },
-    { "id": "d6",  "source": "acc_think", "target": "append2",   "sourceHandle": "data_response",     "targetHandle": "data_b",        "type": "data" },
-    { "id": "d7",  "source": "append1",   "target": "append2",   "sourceHandle": "data_result",       "targetHandle": "data_a",        "type": "data" },
-    { "id": "d8",  "source": "append2",   "target": "replier",   "sourceHandle": "data_result",       "targetHandle": "data_context",  "type": "data" },
-    { "id": "d9",  "source": "replier",   "target": "fwd_reply", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" },
-    { "id": "d10", "source": "replier",   "target": "acc_reply", "sourceHandle": "data_stream",       "targetHandle": "data_stream",   "type": "data" }
+    {
+      "id": "e_start_conv_append_a",
+      "source": "start",
+      "target": "n_1_mo0yktzt",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_a",
+      "type": "data"
+    },
+    {
+      "id": "e_start_msg_append_b",
+      "source": "start",
+      "target": "n_1_mo0yktzt",
+      "sourceHandle": "data_message",
+      "targetHandle": "data_b",
+      "type": "data"
+    },
+    {
+      "id": "e_start_exec_append",
+      "source": "start",
+      "target": "n_1_mo0yktzt",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_append_exec_thinker",
+      "source": "n_1_mo0yktzt",
+      "target": "n_3_mo0ylr10",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_append_result_thinker_ctx",
+      "source": "n_1_mo0yktzt",
+      "target": "n_3_mo0ylr10",
+      "sourceHandle": "data_result",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "e_thinker_exec_acc",
+      "source": "n_3_mo0ylr10",
+      "target": "n_1_mo0yxhv0",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_thinker_stream_acc",
+      "source": "n_3_mo0ylr10",
+      "target": "n_1_mo0yxhv0",
+      "sourceHandle": "data_stream",
+      "targetHandle": "data_stream",
+      "type": "data"
+    },
+    {
+      "id": "e_acc_exec_reply",
+      "source": "n_1_mo0yxhv0",
+      "target": "reply",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_append_result_reply_ctx",
+      "source": "n_1_mo0yktzt",
+      "target": "reply",
+      "sourceHandle": "data_result",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "e_acc_reasoning_reply",
+      "source": "n_1_mo0yxhv0",
+      "target": "reply",
+      "sourceHandle": "data_reasoning",
+      "targetHandle": "data_reasoning",
+      "type": "data"
+    },
+    {
+      "id": "e_reply_exec_print",
+      "source": "reply",
+      "target": "n_4_mo0z3so8",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_reply_payload_print",
+      "source": "reply",
+      "target": "n_4_mo0z3so8",
+      "sourceHandle": "data_payload",
+      "targetHandle": "data_value",
+      "type": "data"
+    },
+    {
+      "id": "e_print_exec_acc2",
+      "source": "n_4_mo0z3so8",
+      "target": "n_1_mo0zutvs",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_reply_stream_acc2",
+      "source": "reply",
+      "target": "n_1_mo0zutvs",
+      "sourceHandle": "data_stream",
+      "targetHandle": "data_stream",
+      "type": "data"
+    },
+    {
+      "id": "e_acc2_exec_output",
+      "source": "n_1_mo0zutvs",
+      "target": "n_1_mo0z1thv",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    }
   ]
 }

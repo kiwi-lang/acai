@@ -629,33 +629,35 @@ def create_router(config: AssaiConfig | None = None,
         data = await _json_body(request)
         message = data.get("message", "")
         conversation_raw = data.get("conversation", "")
+        test_mode = data.get("test", False)
 
         conversation_preview = ""
         conversation_id = ""
 
-        if isinstance(conversation_raw, str) and conversation_raw.strip().startswith("["):
-            conversation_preview = conversation_raw
-        elif isinstance(conversation_raw, list):
-            conversation_preview = json.dumps(conversation_raw, ensure_ascii=False)
-        elif conversation_raw:
-            conversation_id = conversation_raw
+        if not test_mode:
+            if isinstance(conversation_raw, str) and conversation_raw.strip().startswith("["):
+                conversation_preview = conversation_raw
+            elif isinstance(conversation_raw, list):
+                conversation_preview = json.dumps(conversation_raw, ensure_ascii=False)
+            elif conversation_raw:
+                conversation_id = conversation_raw
 
-        if not conversation_id:
-            meta = chat.create(
-                title=f"Workflow: {spec.get('name', workflow_id)}"[:80],
-                agent="default",
-            )
-            conversation_id = meta.id
+            if not conversation_id:
+                meta = chat.create(
+                    title=f"Workflow: {spec.get('name', workflow_id)}"[:80],
+                    agent="default",
+                )
+                conversation_id = meta.id
 
-        if message:
-            chat.append(conversation_id, {"role": "user", "content": message})
+            if message:
+                chat.append(conversation_id, {"role": "user", "content": message})
 
         work = {
             "message": message,
             "conversation": conversation_id,
             "conversation_preview": conversation_preview,
             "workflow_spec": spec,
-            "stream_id": conversation_id,
+            "stream_id": conversation_id or f"test-{workflow_id}",
         }
 
         def _sse(event: str, data: dict) -> str:

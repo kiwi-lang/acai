@@ -364,6 +364,28 @@ export async function listToolNamespaces(): Promise<ToolNamespace[]> {
     return request<ToolNamespace[]>('/tools/namespaces');
 }
 
+// Node types (from server)
+
+export interface PinDef {
+    id: string;
+    label: string;
+    color: string;
+    side: 'left' | 'right';
+    kind: 'exec' | 'data';
+}
+
+export interface NodeTypeDef {
+    type: string;
+    label: string;
+    accent: string;
+    description: string;
+    pins: PinDef[];
+}
+
+export async function getNodeTypes(): Promise<NodeTypeDef[]> {
+    return request<NodeTypeDef[]>('/workflows/node-types');
+}
+
 // Workflow types
 
 export interface WorkflowSummary {
@@ -423,11 +445,11 @@ export async function deleteWorkflow(id: string): Promise<void> {
     await request(`/workflows/${id}`, { method: 'DELETE' });
 }
 
-export async function runWorkflow(id: string, message = '', conversation = ''): Promise<Response> {
+export async function runWorkflow(id: string, message = '', conversation = '', test = false): Promise<Response> {
     const response = await fetch(`${API_BASE}/workflows/${id}/run`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message, conversation }),
+        body: JSON.stringify({ message, conversation, test }),
     });
     if (!response.ok) {
         const err = await response.json().catch(() => ({}));

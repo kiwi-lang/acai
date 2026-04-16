@@ -1,4 +1,5 @@
 import { FC, useCallback, useRef, useState, useEffect, useMemo, DragEvent, CSSProperties } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
   ReactFlow,
   Background,
@@ -40,8 +41,11 @@ import {
   deleteWorkflow,
   runWorkflow,
   saveBuiltinWorkflow,
+  getNodeTypes,
   type WorkflowSummary,
   type WorkflowSpec,
+  type NodeTypeDef,
+  type PinDef,
 } from '../services/api';
 
 /* ================================================================== */
@@ -68,103 +72,21 @@ const C = {
 type PinColor = typeof C[keyof typeof C];
 
 /* ================================================================== */
-/*  Pin definitions per node type                                      */
+/*  Node type definitions — loaded from server at mount                */
 /* ================================================================== */
 
-interface PinDef {
-  id: string;          // handle id, e.g. "data_message"
-  label: string;
-  color: string;
-  side: 'left' | 'right';
-  kind: 'exec' | 'data';
+type NodeDef = NodeTypeDef;
+
+let _nodeDefs: NodeDef[] = [];
+let _nodeDefMap: Record<string, NodeDef> = {};
+
+function setNodeDefs(defs: NodeDef[]) {
+  _nodeDefs = defs;
+  _nodeDefMap = Object.fromEntries(defs.map(d => [d.type, d]));
 }
-
-interface NodeDef {
-  type: string;
-  label: string;
-  accent: string;
-  pins: PinDef[];
-  description: string;
-}
-
-const NODE_DEFS: NodeDef[] = [
-  {
-    type: 'start', label: 'Start', accent: C.green, description: 'Entry point',
-    pins: [
-      { id: 'exec_out',          label: '',             color: C.white, side: 'right', kind: 'exec' },
-      { id: 'data_conversation',  label: 'conversation', color: C.blue,  side: 'right', kind: 'data' },
-      { id: 'data_message',       label: 'message',      color: C.amber, side: 'right', kind: 'data' },
-    ],
-  },
-  {
-    type: 'agent', label: 'Agent', accent: C.blue, description: 'LLM agent call',
-    pins: [
-      { id: 'exec_in',      label: '',        color: C.white,  side: 'left',  kind: 'exec' },
-      { id: 'exec_out',     label: '',        color: C.white,  side: 'right', kind: 'exec' },
-      { id: 'data_agent',   label: 'agent',   color: C.cyan,   side: 'left',  kind: 'data' },
-      { id: 'data_context', label: 'context', color: C.blue,   side: 'left',  kind: 'data' },
-      { id: 'data_stream',  label: 'stream',  color: C.green,  side: 'right', kind: 'data' },
-    ],
-  },
-  {
-    type: 'forward', label: 'Forward', accent: C.purple, description: 'Stream to user',
-    pins: [
-      { id: 'exec_in',     label: '',       color: C.white,  side: 'left',  kind: 'exec' },
-      { id: 'exec_out',    label: '',       color: C.white,  side: 'right', kind: 'exec' },
-      { id: 'data_stream', label: 'stream', color: C.green,  side: 'left',  kind: 'data' },
-    ],
-  },
-  {
-    type: 'accumulate', label: 'Accumulate', accent: C.green, description: 'Stream to response',
-    pins: [
-      { id: 'exec_in',       label: '',         color: C.white,  side: 'left',  kind: 'exec' },
-      { id: 'exec_out',      label: '',         color: C.white,  side: 'right', kind: 'exec' },
-      { id: 'data_stream',   label: 'stream',   color: C.green,  side: 'left',  kind: 'data' },
-      { id: 'data_response', label: 'response', color: C.amber,  side: 'right', kind: 'data' },
-    ],
-  },
-  {
-    type: 'tool', label: 'Tool', accent: C.amber, description: 'Single tool call',
-    pins: [
-      { id: 'exec_in',     label: '',       color: C.white,  side: 'left',  kind: 'exec' },
-      { id: 'exec_out',    label: '',       color: C.white,  side: 'right', kind: 'exec' },
-      { id: 'data_tool',   label: 'tool',   color: C.cyan,   side: 'left',  kind: 'data' },
-      { id: 'data_input',  label: 'input',  color: C.green,  side: 'left',  kind: 'data' },
-      { id: 'data_result', label: 'result', color: C.green,  side: 'right', kind: 'data' },
-    ],
-  },
-  {
-    type: 'append', label: 'Append', accent: C.purple, description: 'Append item to array',
-    pins: [
-      { id: 'exec_in',     label: '',       color: C.white,  side: 'left',  kind: 'exec' },
-      { id: 'exec_out',    label: '',       color: C.white,  side: 'right', kind: 'exec' },
-      { id: 'data_a',      label: 'array',  color: C.blue,   side: 'left',  kind: 'data' },
-      { id: 'data_b',      label: 'item',   color: C.amber,  side: 'left',  kind: 'data' },
-      { id: 'data_result', label: 'result', color: C.blue,   side: 'right', kind: 'data' },
-    ],
-  },
-  {
-    type: 'condition', label: 'Condition', accent: C.red, description: 'Branch on expression',
-    pins: [
-      { id: 'exec_in',    label: '',      color: C.white, side: 'left',  kind: 'exec' },
-      { id: 'exec_true',  label: 'true',  color: C.green, side: 'right', kind: 'exec' },
-      { id: 'exec_false', label: 'false', color: C.red,   side: 'right', kind: 'exec' },
-      { id: 'data_value', label: 'value', color: C.green, side: 'left',  kind: 'data' },
-    ],
-  },
-  {
-    type: 'output', label: 'Output', accent: C.cyan, description: 'Final response',
-    pins: [
-      { id: 'exec_in',       label: '',         color: C.white, side: 'left', kind: 'exec' },
-      { id: 'data_response', label: 'response', color: C.amber, side: 'left', kind: 'data' },
-    ],
-  },
-];
-
-const NODE_DEF_MAP = Object.fromEntries(NODE_DEFS.map(d => [d.type, d]));
 
 function getPinDefs(nodeType: string): PinDef[] {
-  return NODE_DEF_MAP[nodeType]?.pins || [];
+  return _nodeDefMap[nodeType]?.pins || [];
 }
 
 /* ================================================================== */
@@ -177,7 +99,10 @@ function ExecEdge(props: EdgeProps) {
     targetX: props.targetX, targetY: props.targetY,
     sourcePosition: props.sourcePosition, targetPosition: props.targetPosition,
   });
-  return <BaseEdge path={path} style={{ stroke: C.white, strokeWidth: 2 }} />;
+  return <BaseEdge path={path} style={{
+    stroke: props.selected ? '#ff6060' : C.white,
+    strokeWidth: props.selected ? 3 : 2,
+  }} />;
 }
 
 function DataEdge(props: EdgeProps) {
@@ -187,7 +112,11 @@ function DataEdge(props: EdgeProps) {
     targetX: props.targetX, targetY: props.targetY,
     sourcePosition: props.sourcePosition, targetPosition: props.targetPosition,
   });
-  return <BaseEdge path={path} style={{ stroke: color, strokeWidth: 1.5, opacity: 0.7 }} />;
+  return <BaseEdge path={path} style={{
+    stroke: props.selected ? '#ff6060' : color,
+    strokeWidth: props.selected ? 2.5 : 1.5,
+    opacity: props.selected ? 1 : 0.7,
+  }} />;
 }
 
 const edgeTypes: EdgeTypes = {
@@ -262,6 +191,7 @@ function colWidth(pins: PinDef[], hasField: boolean): number {
 }
 
 function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets, children }: NodeShellProps) {
+  if (!def) return null;
   const connected = connectedHandles || new Set<string>();
   const widgets = pinWidgets || {};
 
@@ -487,49 +417,29 @@ function StartNode({ data, selected }: NodeProps) {
     ),
   };
   return (
-    <NodeShell def={NODE_DEF_MAP['start']} selected={selected}
+    <NodeShell def={_nodeDefMap['start']} selected={selected}
       {...nodeProps(data)} pinWidgets={pinWidgets} />
   );
 }
 
-function AgentNode({ data, selected }: NodeProps) {
-  return <NodeShell def={NODE_DEF_MAP['agent']} selected={selected} {...nodeProps(data)} />;
+function GenericNode(typeName: string) {
+  const Comp: FC<NodeProps> = ({ data, selected }) => {
+    const def = _nodeDefMap[typeName];
+    if (!def) return null;
+    return <NodeShell def={def} selected={selected} {...nodeProps(data)} />;
+  };
+  Comp.displayName = typeName;
+  return Comp;
 }
 
-function ToolNode({ data, selected }: NodeProps) {
-  return <NodeShell def={NODE_DEF_MAP['tool']} selected={selected} {...nodeProps(data)} />;
+function buildNodeTypes(): NodeTypes {
+  const types: NodeTypes = { start: StartNode };
+  for (const def of _nodeDefs) {
+    if (def.type === 'start') continue;
+    types[def.type] = GenericNode(def.type);
+  }
+  return types;
 }
-
-function ForwardNode({ data, selected }: NodeProps) {
-  return <NodeShell def={NODE_DEF_MAP['forward']} selected={selected} {...nodeProps(data)} />;
-}
-
-function AccumulateNode({ data, selected }: NodeProps) {
-  return <NodeShell def={NODE_DEF_MAP['accumulate']} selected={selected} {...nodeProps(data)} />;
-}
-
-function AppendNode({ data, selected }: NodeProps) {
-  return <NodeShell def={NODE_DEF_MAP['append']} selected={selected} {...nodeProps(data)} />;
-}
-
-function ConditionNode({ data, selected }: NodeProps) {
-  return <NodeShell def={NODE_DEF_MAP['condition']} selected={selected} {...nodeProps(data)} />;
-}
-
-function OutputNode({ data, selected }: NodeProps) {
-  return <NodeShell def={NODE_DEF_MAP['output']} selected={selected} {...nodeProps(data)} />;
-}
-
-const nodeTypes: NodeTypes = {
-  start: StartNode,
-  agent: AgentNode,
-  forward: ForwardNode,
-  accumulate: AccumulateNode,
-  tool: ToolNode,
-  append: AppendNode,
-  condition: ConditionNode,
-  output: OutputNode,
-};
 
 /* ================================================================== */
 /*  SVG icons                                                          */
@@ -601,7 +511,7 @@ function ContextMenu({ x, y, flowX, flowY, onAddNode, onClose }: ContextMenuProp
       <div style={{ fontSize: 9, color: C.muted, padding: '4px 12px', textTransform: 'uppercase', fontWeight: 600 }}>
         Add Node
       </div>
-      {NODE_DEFS.map(def => (
+      {_nodeDefs.map(def => (
         <div key={def.type}
           onClick={() => { onAddNode(def.type, { x: flowX, y: flowY }); onClose(); }}
           style={{
@@ -627,58 +537,71 @@ function ContextMenu({ x, y, flowX, flowY, onAddNode, onClose }: ContextMenuProp
 /* ================================================================== */
 
 interface ChatMessage {
-  role: 'user' | 'assistant' | 'system' | 'reasoning';
+  role: 'user' | 'assistant' | 'system' | 'print';
   content: string;
+  reasoning?: string;
   nodeLabel?: string;
+  isStreaming?: boolean;
 }
 
-function ChatBubble({ msg, streaming }: { msg: ChatMessage; streaming?: boolean }) {
-  const isUser = msg.role === 'user';
-  const isReasoning = msg.role === 'reasoning';
-  const [expanded, setExpanded] = useState(false);
-
-  if (isReasoning) {
-    const label = msg.nodeLabel ? `${msg.nodeLabel} thinking` : 'thinking';
-    const preview = msg.content.length > 80
-      ? msg.content.slice(0, 80) + '…'
-      : msg.content;
-    return (
-      <div style={{ display: 'flex', justifyContent: 'flex-start', padding: '2px 0' }}>
+function CollapsibleBlock({ label, content, color, streaming, defaultOpen }: {
+  label: string; content: string; color: string; streaming?: boolean; defaultOpen?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(defaultOpen ?? false);
+  if (!content) return null;
+  const chars = content.length;
+  const summary = chars > 1000
+    ? `${(chars / 1000).toFixed(1)}k chars`
+    : `${chars} chars`;
+  return (
+    <div style={{
+      borderRadius: 6, overflow: 'hidden', marginBottom: 4, width: '100%',
+      background: color + '14', border: `1px solid ${color}33`,
+    }}>
+      <div
+        onClick={() => !streaming && setExpanded(e => !e)}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6,
+          padding: '5px 8px', cursor: streaming ? 'default' : 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        <span style={{
+          fontSize: 8, color, transition: 'transform .15s',
+          display: 'inline-block',
+          transform: expanded || streaming ? 'rotate(90deg)' : 'rotate(0deg)',
+        }}>&#9654;</span>
+        <span style={{ fontSize: 10, color, fontWeight: 500 }}>{label}</span>
+        <span style={{ fontSize: 9, color: C.muted, marginLeft: 'auto' }}>
+          {streaming ? '' : summary}
+        </span>
+      </div>
+      {(expanded || streaming) && (
         <div style={{
-          maxWidth: '85%', borderRadius: 6, overflow: 'hidden',
-          background: C.purple + '12', border: `1px solid ${C.purple}33`,
+          padding: '4px 8px 6px 20px', borderTop: `1px solid ${color}22`,
+          fontSize: 10, lineHeight: '15px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+          color: color + 'bb',
+          maxHeight: 300, overflowY: 'auto',
         }}>
-          <div
-            onClick={() => !streaming && setExpanded(e => !e)}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              padding: '5px 10px', cursor: streaming ? 'default' : 'pointer',
-              userSelect: 'none',
-            }}
-          >
-            <span style={{
-              fontSize: 8, color: C.purple, transition: 'transform .15s',
-              display: 'inline-block',
-              transform: expanded || streaming ? 'rotate(90deg)' : 'rotate(0deg)',
-            }}>&#9654;</span>
-            <span style={{ fontSize: 10, color: C.purple, fontWeight: 500 }}>{label}</span>
-            {!expanded && !streaming && (
-              <span style={{ fontSize: 10, color: C.purple + '88', fontStyle: 'italic', marginLeft: 2 }}>
-                {preview}
-              </span>
-            )}
-          </div>
-          {(expanded || streaming) && (
-            <div style={{
-              padding: '2px 10px 8px 22px',
-              fontSize: 10, lineHeight: '15px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-              color: C.purple + 'cc', fontStyle: 'italic',
-              maxHeight: 300, overflowY: 'auto',
-            }}>
-              {msg.content}
-            </div>
-          )}
+          {content}
         </div>
+      )}
+    </div>
+  );
+}
+
+function ChatBubble({ msg }: { msg: ChatMessage }) {
+  const isUser = msg.role === 'user';
+  const showCursor = msg.isStreaming && msg.role === 'assistant';
+
+  if (msg.role === 'print') {
+    return (
+      <div style={{ padding: '2px 0', maxWidth: '85%' }}>
+        <CollapsibleBlock
+          label={msg.nodeLabel || 'Print'}
+          content={msg.content}
+          color={C.cyan}
+        />
       </div>
     );
   }
@@ -699,7 +622,15 @@ function ChatBubble({ msg, streaming }: { msg: ChatMessage; streaming?: boolean 
         {msg.role === 'assistant' && msg.nodeLabel && (
           <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>{msg.nodeLabel}</div>
         )}
-        {msg.content}
+        {msg.reasoning && (
+          <CollapsibleBlock
+            label="Reasoning"
+            content={msg.reasoning}
+            color={C.purple}
+            streaming={msg.isStreaming && !msg.content}
+          />
+        )}
+        {msg.content}{showCursor && '\u2588'}
       </div>
     </div>
   );
@@ -883,15 +814,27 @@ async function parseSSE(
 /* ================================================================== */
 
 const WorkflowEditor: FC = () => {
+  const { workflowIdParam } = useParams<{ workflowIdParam?: string }>();
+  const navigate = useNavigate();
+
   const [nodes, setNodes, onNodesChange] = useNodesState(DEFAULT_NODES);
   const [edges, setEdges, onEdgesChange] = useEdgesState(DEFAULT_EDGES);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
-  const [workflowId, setWorkflowId] = useState('');
+  const [workflowId, _setWorkflowId] = useState('');
   const [workflowName, setWorkflowName] = useState('New Workflow');
   const [workflowDesc, setWorkflowDesc] = useState('');
+
+  const setWorkflowId = useCallback((id: string) => {
+    _setWorkflowId(id);
+    if (id) {
+      navigate(`/workflows/${id}`, { replace: true });
+    } else {
+      navigate('/workflows', { replace: true });
+    }
+  }, [navigate]);
   const [savedWorkflows, setSavedWorkflows] = useState<WorkflowSummary[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -907,17 +850,21 @@ const WorkflowEditor: FC = () => {
   const [chatInput, setChatInput] = useState('');
   const chatEndRef = useRef<HTMLDivElement>(null);
   const [runLog, setRunLog] = useState<string[]>([]);
-  const [streamingText, setStreamingText] = useState('');
-  const [streamingReasoning, setStreamingReasoning] = useState('');
-  const [streamingNodeLabel, setStreamingNodeLabel] = useState('');
+  const [nodeDefsVersion, setNodeDefsVersion] = useState(0);
 
   useEffect(() => {
+    getNodeTypes().then(defs => {
+      setNodeDefs(defs);
+      setNodeDefsVersion(v => v + 1);
+    }).catch(() => {});
     listWorkflows().then(setSavedWorkflows).catch(() => {});
   }, []);
 
+  const nodeTypes = useMemo(() => buildNodeTypes(), [nodeDefsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages, streamingText, streamingReasoning]);
+  }, [chatMessages]);
 
   /* Compute connected handles set per node for hollow/filled pins */
   const connectedMap = useMemo(() => {
@@ -971,8 +918,8 @@ const WorkflowEditor: FC = () => {
 
   /* Add node (used by both drag-drop and context menu) */
   const addNode = useCallback((type: string, position: { x: number; y: number }) => {
-    const defaultData: Record<string, unknown> = { label: NODE_DEF_MAP[type]?.label || type };
-    if (type === 'agent') defaultData.agent = 'default';
+    const defaultData: Record<string, unknown> = { label: _nodeDefMap[type]?.label || type };
+    if (type === 'agent' || type === 'agent_call') defaultData.agent = 'default';
     if (type === 'condition') defaultData.expression = 'True';
     if (type === 'start') { defaultData.preview_message = 'Hello!'; defaultData.preview_conversation = ''; }
     setNodes(nds => [...nds, { id: nid(), type, position, data: defaultData }]);
@@ -1057,11 +1004,21 @@ const WorkflowEditor: FC = () => {
       };
     }));
     setSelectedNode(null);
-  }, [setNodes, setEdges]);
+  }, [setNodes, setEdges, setWorkflowId]);
 
   const handleLoad = useCallback(async (id: string) => {
     try { loadSpec(await getWorkflow(id)); } catch (err) { console.error('Load failed', err); }
   }, [loadSpec]);
+
+  /* Auto-load workflow from URL param */
+  const initialLoadDone = useRef(false);
+  useEffect(() => {
+    if (initialLoadDone.current) return;
+    if (workflowIdParam) {
+      initialLoadDone.current = true;
+      handleLoad(workflowIdParam);
+    }
+  }, [workflowIdParam, handleLoad]);
 
   const handleDelete = useCallback(async (id: string) => {
     try {
@@ -1086,110 +1043,91 @@ const WorkflowEditor: FC = () => {
       catch { /* proceed */ }
     }
 
-    const userMsg: ChatMessage = { role: 'user', content: message };
-    setChatMessages(prev => [...prev, userMsg]);
+    setChatMessages(prev => [...prev, { role: 'user', content: message }]);
     setChatInput('');
     setIsRunning(true);
-    setStreamingText('');
-    setStreamingReasoning('');
-    setStreamingNodeLabel('');
     setRunLog(['\u25b6 Starting workflow...']);
 
-    const conversation = chatMessages
-      .filter(m => m.role !== 'system' && m.role !== 'reasoning')
-      .map(m => ({ role: m.role, content: m.content }));
-    conversation.push({ role: 'user', content: message });
-    const conversationJson = JSON.stringify(conversation);
-
-    let accTokens = '';
-    let accReasoning = '';
-    let currentNodeLabel = '';
-    let finalOutput = '';
-    const finishedMessages: ChatMessage[] = [];
-
     try {
-      const response = await runWorkflow(specId, message, conversationJson);
+      const response = await runWorkflow(specId, message, '', true);
 
       await parseSSE(response, (eventType, data) => {
         if (eventType === 'workflow_start') {
           setRunLog(p => [...p, `\u2699 ${data.name} (${data.node_count} nodes)`]);
 
         } else if (eventType === 'node_start') {
-          currentNodeLabel = data.label || data.node_id;
-          setStreamingNodeLabel(currentNodeLabel);
-          setRunLog(p => [...p, `  \u2192 ${currentNodeLabel} [${data.type}]`]);
+          setRunLog(p => [...p, `  \u2192 ${data.label || data.node_id} [${data.type}]`]);
 
-          if (data.type === 'forward') {
-            accTokens = '';
-            accReasoning = '';
-            setStreamingText('');
-            setStreamingReasoning('');
-          }
-
-        } else if (eventType === 'agent_token') {
+        } else if (eventType === 'reasoning') {
           const token = data.token || '';
-          if (data.stream_mode === 'reasoning') {
-            accReasoning += token;
-            setStreamingReasoning(accReasoning);
-          } else {
-            accTokens += token;
-            setStreamingText(accTokens);
-          }
+          setChatMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last?.isStreaming) {
+              copy[copy.length - 1] = { ...last, reasoning: (last.reasoning || '') + token };
+            } else {
+              copy.push({ role: 'assistant', content: '', reasoning: token, isStreaming: true });
+            }
+            return copy;
+          });
+
+        } else if (eventType === 'token') {
+          const token = data.token || '';
+          setChatMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last?.isStreaming) {
+              copy[copy.length - 1] = { ...last, content: last.content + token };
+            } else {
+              copy.push({ role: 'assistant', content: token, isStreaming: true });
+            }
+            return copy;
+          });
+
+        } else if (eventType === 'print') {
+          setChatMessages(prev => {
+            const copy = [...prev];
+            const last = copy[copy.length - 1];
+            if (last?.isStreaming) copy[copy.length - 1] = { ...last, isStreaming: false };
+            copy.push({
+              role: 'print',
+              content: data.text || '',
+              nodeLabel: data.label || 'Print',
+            });
+            return copy;
+          });
+
+        } else if (eventType === 'tool_start') {
+          setRunLog(p => [...p, `    \u26a1 ${data.tool_name}`]);
+
+        } else if (eventType === 'tool_end') {
+          setRunLog(p => [...p, `    \u2713 ${data.tool_name}: ${(data.result_preview || '').slice(0, 80)}`]);
 
         } else if (eventType === 'node_end') {
           const pv = data.output_preview ? `: ${data.output_preview.slice(0, 120)}` : '';
           setRunLog(p => [...p, `  \u2713 ${data.node_id}${pv}`]);
 
-          if (data.type === 'forward') {
-            if (accReasoning) {
-              finishedMessages.push({
-                role: 'reasoning', content: accReasoning,
-                nodeLabel: currentNodeLabel,
-              });
-            }
-            if (accTokens) {
-              finishedMessages.push({
-                role: 'assistant', content: accTokens,
-                nodeLabel: currentNodeLabel,
-              });
-            }
-            setStreamingText('');
-            setStreamingReasoning('');
-            accTokens = '';
-            accReasoning = '';
-          }
-          if (data.final_output) finalOutput = data.final_output;
-
         } else if (eventType === 'workflow_end') {
           setRunLog(p => [...p, '\u2713 Finished']);
-          if (data.output && !finalOutput) finalOutput = data.output;
 
         } else if (eventType === 'error') {
           setRunLog(p => [...p, `\u2717 ${data.message || 'Error'}`]);
+          setChatMessages(prev => [...prev, { role: 'system', content: `Error: ${data.message || 'Error'}` }]);
 
         } else if (eventType === 'done') {
           setRunLog(p => [...p, '\u2014 Done \u2014']);
+          setChatMessages(prev => prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
         }
       });
 
-      setChatMessages(prev => {
-        const next = [...prev, ...finishedMessages];
-        if (finalOutput && !finishedMessages.some(
-          m => m.role === 'assistant' && m.content === finalOutput,
-        )) {
-          next.push({ role: 'assistant', content: finalOutput });
-        }
-        return next;
-      });
+      setChatMessages(prev => prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
     } catch (err: any) {
       setRunLog(p => [...p, `\u2717 ${err.message || 'Failed'}`]);
       setChatMessages(prev => [...prev, { role: 'system', content: `Error: ${err.message || 'Failed'}` }]);
     } finally {
       setIsRunning(false);
-      setStreamingText('');
-      setStreamingReasoning('');
     }
-  }, [buildSpec, workflowId, chatMessages]);
+  }, [buildSpec, workflowId]);
 
   /* Legacy Run button (uses preview inputs from Start node) */
   const handleRun = useCallback(async () => {
@@ -1270,7 +1208,7 @@ const WorkflowEditor: FC = () => {
           <Box p={2} borderBottom={`1px solid ${C.border}`}>
             <Text fontSize="9px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Nodes</Text>
             <VStack gap={0.5} align="stretch">
-              {NODE_DEFS.map(def => (
+              {_nodeDefs.map(def => (
                 <Box key={def.type} draggable
                   onDragStart={e => { e.dataTransfer.setData('application/workflow-node-type', def.type); e.dataTransfer.effectAllowed = 'move'; }}
                   px={2} py={1} borderRadius="3px"
@@ -1343,6 +1281,8 @@ const WorkflowEditor: FC = () => {
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           isValidConnection={isValidConnection}
+          defaultEdgeOptions={{ selectable: true, deletable: true }}
+          deleteKeyCode={['Backspace', 'Delete']}
           fitView
           colorMode="dark"
           proOptions={{ hideAttribution: true }}
@@ -1352,7 +1292,7 @@ const WorkflowEditor: FC = () => {
           <Controls style={{ background: '#242424', border: `1px solid ${C.border}`, borderRadius: 4 }} />
           <MiniMap style={{ background: '#242424', border: `1px solid ${C.border}`, borderRadius: 4 }}
             maskColor="rgba(0,0,0,0.5)"
-            nodeColor={n => NODE_DEF_MAP[n.type || '']?.accent || '#555'} />
+            nodeColor={n => _nodeDefMap[n.type || '']?.accent || '#555'} />
           <Panel position="top-left">
             <HStack gap={1}>
               <Button size="xs" variant="ghost" onClick={() => setShowSidebar(!showSidebar)}
@@ -1441,19 +1381,7 @@ const WorkflowEditor: FC = () => {
             {chatMessages.map((msg, i) => (
               <ChatBubble key={i} msg={msg} />
             ))}
-            {isRunning && streamingReasoning && (
-              <ChatBubble streaming msg={{
-                role: 'reasoning', content: streamingReasoning + '\u2588',
-                nodeLabel: streamingNodeLabel,
-              }} />
-            )}
-            {isRunning && streamingText && (
-              <ChatBubble msg={{
-                role: 'assistant', content: streamingText + '\u2588',
-                nodeLabel: streamingNodeLabel,
-              }} />
-            )}
-            {isRunning && !streamingText && !streamingReasoning && (
+            {isRunning && !chatMessages.some(m => m.isStreaming) && (
               <div style={{
                 display: 'flex', justifyContent: 'flex-start', padding: '2px 0',
               }}>
@@ -1461,9 +1389,7 @@ const WorkflowEditor: FC = () => {
                   padding: '6px 14px', borderRadius: 6, fontSize: 11,
                   background: '#333', color: C.muted, border: `1px solid ${C.border}`,
                 }}>
-                  {streamingNodeLabel
-                    ? `${streamingNodeLabel} \u2026`
-                    : '\u2026 starting'}
+                  {'\u2026 starting'}
                 </div>
               </div>
             )}

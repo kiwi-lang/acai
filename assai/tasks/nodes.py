@@ -5,7 +5,8 @@ nodes with the :func:`register` decorator or call it manually.
 
 Built-in types
 --------------
-start, agent, tool, append, condition, output
+start, agent, agent_call, accumulate, stream_transform,
+for_each, tool_loop, tool, append, print, condition, output
 
 Creating a custom node
 ----------------------
@@ -26,9 +27,12 @@ Creating a custom node
             Pin.data("data_output", "output", Colors.green, "right"),
         ]
 
-        async def execute(self, ctx: NodeContext) -> dict[str, Any]:
+        async def execute(self, ctx: NodeContext):
             value = ctx.inputs.get("input", "")
-            return {"output": do_something(value)}
+            # yield events to stream to the user
+            yield {"type": "event", "data": {"event_type": "token", "data": {"token": "hi"}}}
+            # yield output to populate downstream data pins
+            yield {"type": "output", "data": {"output": do_something(value)}}
 """
 
 from __future__ import annotations
@@ -37,7 +41,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any, AsyncIterator, TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from assai.tasks.dynamic import DynamicGraph
@@ -129,7 +133,14 @@ class NodeType:
     * ``accent``      — hex color for the node header.
     * ``description`` — short tooltip text.
     * ``pins``        — list of :class:`Pin` definitions.
-    * ``streaming``   — if *True* the executor calls :meth:`execute_stream`.
+
+    The ``execute`` method is an **async generator** that yields
+    tagged event dicts:
+
+    * ``{"type": "event", "data": ...}`` — forwarded to the user
+      as-is (SSE tokens, tool progress, etc.).
+    * ``{"type": "output", "data": {pin: value, ...}}`` — consumed
+      by ``DynamicGraph`` to populate downstream data pins.
     """
 
     type: str = ""
@@ -137,19 +148,11 @@ class NodeType:
     accent: str = "#888"
     description: str = ""
     pins: list[Pin] = []
-    streaming: bool = False
 
-    async def execute(self, ctx: NodeContext) -> dict[str, Any]:
-        """Execute the node.  Return ``{pin_name: value}``."""
-        return {}
-
-    async def execute_stream(
-        self, ctx: NodeContext,
-    ) -> AsyncIterator[dict]:
-        """For streaming nodes: yield SSE event dicts, then yield the
-        output ``{pin_name: value}`` dict as the final item (it will
-        NOT have an ``event_type`` key)."""
-        yield await self.execute(ctx)  # default: non-streaming fallback
+    async def execute(self, ctx: NodeContext):
+        """Async generator yielding ``{"type": ..., "data": ...}`` dicts."""
+        yield {"type": "output", "data": {}}
+        return  # noqa: B901
 
     def to_dict(self) -> dict:
         return {
@@ -203,7 +206,7 @@ class StartNode(NodeType):
         Pin.data("data_message", "message", Colors.amber, "right"),
     ]
 
-    async def execute(self, ctx: NodeContext) -> dict[str, Any]:
+    async def execute(self, ctx: NodeContext):
         msg_text = (ctx.work.get("message", "")
                     or ctx.data.get("preview_message", ""))
         message: dict = {"role": "user", "content": msg_text}
@@ -228,24 +231,25 @@ class StartNode(NodeType):
         if not conversation and ctx.graph.conversation:
             conversation = list(ctx.graph.chat.read(ctx.graph.conversation))
 
-        return {"message": message, "conversation": conversation}
+        yield {"type": "output", "data": {
+            "message": message, "conversation": conversation,
+        }}
 
 
 @register
 class AgentNode(NodeType):
     """LLM agent call — outputs a token stream.
 
-    The agent does NOT send tokens to the client.  Its only data
-    output is ``stream``: a list of token-event dicts collected
-    during execution.  Wire the stream into an :class:`AccumulateNode`
-    to forward tokens to the user and produce a usable response.
+    Dispatches to the worker, collects tokens via ``Acc``, and
+    handles tool-call follow-ups internally.  The token events are
+    pushed to the user in real time by ``dispatch()`` / tracker.
+    The only data output is ``stream``: a list of token-event dicts.
     """
 
     type = "agent"
     label = "Agent"
     accent = Colors.blue
     description = "LLM agent call"
-    streaming = True
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -254,9 +258,7 @@ class AgentNode(NodeType):
         Pin.data("data_stream", "stream", Colors.green, "right"),
     ]
 
-    async def execute_stream(  # noqa: C901
-        self, ctx: NodeContext,
-    ) -> AsyncIterator[dict]:
+    async def execute(self, ctx: NodeContext):  # noqa: C901
         from assai.tasks.graph import Acc
 
         agent_name = (ctx.inputs.get("agent", "")
@@ -289,20 +291,9 @@ class AgentNode(NodeType):
                 list(context) + payload.get("messages", [])[-1:]
             )
 
-        stream_events: list[dict] = []
-
-        async def _collect(a: Acc) -> None:
-            async for event in a:
-                etype = event.get("event_type", "")
-                edata = event.get("data", {})
-                if etype in ("token", "reasoning"):
-                    stream_events.append({
-                        "token": edata.get("token", ""),
-                        "mode": etype,
-                    })
-
         acc = Acc(ctx.graph.dispatch(payload))
-        await _collect(acc)
+        async for event in acc:
+            yield {"type": "event", "data": event}
 
         while acc.tool_calls:
             followup = list(payload["messages"])
@@ -320,11 +311,303 @@ class AgentNode(NodeType):
                 except (json.JSONDecodeError, TypeError):
                     tool_args = {}
 
-                yield {
+                try:
+                    result_text = await ctx.graph.dispatch_tool(
+                        tool_name, tool_args,
+                    )
+                except Exception as exc:
+                    log.exception("tool dispatch error: %s", tool_name)
+                    result_text = (
+                        f"[Tool error] {type(exc).__name__}: {exc}"
+                    )
+
+                followup.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": result_text,
+                })
+
+            followup_payload = dict(payload)
+            followup_payload["messages"] = followup
+            payload = followup_payload
+
+            acc = Acc(ctx.graph.dispatch(followup_payload))
+            async for event in acc:
+                yield {"type": "event", "data": event}
+
+        yield {"type": "output", "data": {
+            "stream": {"text": acc.text, "reasoning": acc.reasoning,
+                       "tool_calls": acc.tool_calls, "payload": payload},
+        }}
+
+
+@register
+class ForwardNode(NodeType):
+    """Forward a token stream to the user via tracker.
+
+    Pushes each token as an SSE event through the stream tracker.
+    The ``mode`` field controls display: ``"token"`` (default) for a
+    regular reply bubble, ``"reasoning"`` for a collapsible thinking
+    bubble.
+    """
+
+    type = "forward"
+    label = "Forward"
+    accent = Colors.purple
+    description = "Stream to user"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_stream", "stream", Colors.green, "left"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        stream = ctx.inputs.get("stream")
+        if stream is None:
+            yield {"type": "output", "data": {}}
+            return
+        async for event in stream:
+            yield {"type": "event", "data": event}
+        yield {"type": "output", "data": {}}
+
+
+@register
+class AgentCallNode(NodeType):
+    """Pure LLM agent call — prepare, dispatch, return the stream.
+
+    Calls ``prepare()`` then ``dispatch()``.  Token events are pushed
+    to the user in real time by ``dispatch()`` via the tracker.
+
+    Returns a bundled dict on the ``stream`` pin so downstream nodes
+    (AccForward, ToolLoop, etc.) can inspect or transform the result.
+    """
+
+    type = "agent_call"
+    label = "Agent Call"
+    accent = Colors.blue
+    description = "LLM call"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_agent", "agent", Colors.cyan, "left"),
+        Pin.data("data_context", "context", Colors.blue, "left"),
+        Pin.data("data_reasoning", "reasoning", Colors.purple, "left"),
+        Pin.data("data_stream_mode", "stream_mode", Colors.amber, "left"),
+        Pin.data("data_stream", "stream", Colors.green, "right"),
+        Pin.data("data_payload", "payload", Colors.blue, "right"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        agent_name = (ctx.inputs.get("agent", "") or ctx.data.get("agent", "default"))
+        reasoning = ctx.inputs.get("reasoning", "")
+        stream_mode = (ctx.inputs.get("stream_mode", "") or ctx.data.get("stream_mode", "token"))
+        context = ctx.inputs.get("context", [])
+
+        agent_work = dict(ctx.work)
+
+        if isinstance(context, list):
+            context_str = "\n".join(
+                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                for m in context if isinstance(m, dict)
+            ) if context else ""
+        else:
+            context_str = str(context)
+
+        agent_work["message"] = context_str
+
+        if ctx.data.get("prompt_template"):
+            variables = {"context": context_str, "input": context_str,
+                         "message": ctx.work.get("message", "")}
+            agent_work["message"] = substitute(
+                ctx.data["prompt_template"], variables,
+            )
+
+        payload = ctx.graph.prepare(
+            agent_name, agent_work,
+            **({"reasoning": reasoning} if reasoning else {}),
+        )
+
+        if isinstance(context, list) and context:
+            payload["messages"] = (
+                list(context) + payload.get("messages", [])[-1:]
+            )
+
+        yield {
+            "type": "output",
+            "data": {
+                "stream": ctx.graph.dispatch(payload, stream_mode=stream_mode),
+                "payload": payload,
+            },
+        }
+
+
+@register
+class AccumulateNode(NodeType):
+    """Consume a token stream, forward events to the user, and accumulate.
+
+    Each event from the stream is yielded through to the user while
+    the full text and reasoning are accumulated for downstream pins.
+    """
+
+    type = "accumulate"
+    label = "Accumulate"
+    accent = Colors.green
+    description = "Stream to response"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_stream", "stream", Colors.green, "left"),
+        Pin.data("data_response", "response", Colors.amber, "right"),
+        Pin.data("data_reasoning", "reasoning", Colors.purple, "right"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        from assai.tasks.graph import Acc
+
+        stream = ctx.inputs.get("stream")
+        if stream is None:
+            yield {"type": "output", "data": {
+                "response": {"role": "assistant", "content": ""},
+                "reasoning": "",
+            }}
+            return
+
+        acc = Acc(stream)
+        async for event in acc:
+            yield {"type": "event", "data": event}
+
+        yield {"type": "output", "data": {
+            "response": {"role": "assistant", "content": acc.text},
+            "reasoning": acc.reasoning,
+        }}
+
+
+@register
+class StreamTransformNode(NodeType):
+    """Relabel stream event modes (e.g. token -> reasoning).
+
+    Takes the bundled stream dict from :class:`AgentCallNode` (or a
+    plain token list) and rewrites the ``mode`` field of every event
+    to the value configured in ``node.data.target_mode``.  Useful when
+    you want the agent to dispatch in default ``"token"`` mode but
+    display the result as ``"reasoning"`` (or vice-versa) without
+    changing the agent node itself.
+    """
+
+    type = "stream_transform"
+    label = "Stream Transform"
+    accent = Colors.purple
+    description = "Relabel stream mode"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_stream", "stream", Colors.green, "left"),
+        Pin.data("data_stream_out", "stream_out", Colors.green, "right"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        stream = ctx.inputs.get("stream")
+        target_mode = ctx.data.get("target_mode", "reasoning")
+
+        async def transformed():
+            if stream is None:
+                return
+            async for event in stream:
+                if event.get("event_type") in ("token", "reasoning"):
+                    yield {**event, "event_type": target_mode}
+                else:
+                    yield event
+
+        yield {"type": "output", "data": {"stream_out": transformed()}}
+
+
+@register
+class ForEachNode(NodeType):
+    """Iterate over an array, firing the body exec pin per item.
+
+    Execution logic is handled by
+    :class:`~assai.tasks.dynamic.DynamicGraph` — see the call-stack
+    mechanism there.  This node only declares pins.
+    """
+
+    type = "for_each"
+    label = "For Each"
+    accent = Colors.amber
+    description = "Loop over array"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec("exec_body", "body", Colors.green, "right"),
+        Pin.exec("exec_then", "then", Colors.white, "right"),
+        Pin.data("data_array", "array", Colors.blue, "left"),
+        Pin.data("data_item", "item", Colors.green, "right"),
+        Pin.data("data_index", "index", Colors.amber, "right"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        yield {"type": "output", "data": {}}
+        return  # noqa: B901
+
+
+@register
+class ToolLoopNode(NodeType):
+    """Stream-transformer: handle tool calls from an agent reply.
+
+    Takes the bundled output of :class:`AgentCallNode` on the
+    ``stream`` pin.  If there are tool calls, dispatches them and
+    re-calls the agent in a loop.  Follow-up tokens are pushed to
+    the user via ``dispatch()`` / tracker automatically.
+
+    Conceptually: **stream in -> (tool handling) -> stream out**.
+    """
+
+    type = "tool_loop"
+    label = "Tool Loop"
+    accent = Colors.amber
+    description = "Handle tool calls"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_stream", "stream", Colors.green, "left"),
+        Pin.data("data_payload", "payload", Colors.blue, "left"),
+        Pin.data("data_response", "response", Colors.amber, "right"),
+    ]
+
+    async def execute(self, ctx: NodeContext):  # noqa: C901
+        from assai.tasks.graph import Acc
+
+        stream = ctx.inputs.get("stream")
+        if stream is None:
+            yield {"type": "output", "data": {
+                "response": {"role": "assistant", "content": ""},
+            }}
+            return
+
+        acc = Acc(stream)
+        async for event in acc:
+            yield {"type": "event", "data": event}
+
+        payload = ctx.inputs.get("payload", {})
+        while acc.tool_calls:
+            followup = list(payload.get("messages", []))
+            followup.append({
+                "role": "assistant",
+                "content": acc.text or None,
+                "tool_calls": acc.tool_calls,
+            })
+
+            for call in acc.tool_calls:
+                fn = call.get("function", {})
+                tool_name = fn.get("name", "")
+                try:
+                    tool_args = json.loads(fn.get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    tool_args = {}
+
+                yield {"type": "event", "data": {
                     "event_type": "tool_start",
                     "data": {"node_id": ctx.node_id,
                              "tool_name": tool_name, "args": tool_args},
-                }
+                }}
 
                 try:
                     result_text = await ctx.graph.dispatch_tool(
@@ -342,98 +625,21 @@ class AgentNode(NodeType):
                     "content": result_text,
                 })
 
-                yield {
+                yield {"type": "event", "data": {
                     "event_type": "tool_end",
                     "data": {"node_id": ctx.node_id,
                              "tool_name": tool_name,
                              "result_preview": result_text[:200]},
-                }
+                }}
 
-            followup_payload = dict(payload)
-            followup_payload["messages"] = followup
-            payload = followup_payload
+            payload = dict(payload, messages=followup)
+            acc = Acc(ctx.graph.dispatch(payload))
+            async for event in acc:
+                yield {"type": "event", "data": event}
 
-            acc = Acc(ctx.graph.dispatch(followup_payload))
-            await _collect(acc)
-
-        yield {"stream": stream_events}
-
-
-@register
-class ForwardNode(NodeType):
-    """Forward a token stream to the user.
-
-    Sends each token to the chat UI as SSE events.  The ``mode``
-    field controls display: ``"token"`` (default) for a regular
-    reply bubble, ``"reasoning"`` for a collapsible thinking bubble.
-
-    Wire the agent's ``stream`` pin to both this node and an
-    :class:`AccumulateNode` in parallel — Forward handles display,
-    Accumulate handles data.
-    """
-
-    type = "forward"
-    label = "Forward"
-    accent = Colors.purple
-    description = "Stream to user"
-    streaming = True
-    pins = [
-        Pin.exec_in(),
-        Pin.exec_out(),
-        Pin.data("data_stream", "stream", Colors.green, "left"),
-    ]
-
-    async def execute_stream(
-        self, ctx: NodeContext,
-    ) -> AsyncIterator[dict]:
-        events = ctx.inputs.get("stream", [])
-        if not isinstance(events, list):
-            events = []
-        mode = ctx.data.get("mode", "token")
-
-        for ev in events:
-            token = ev.get("token", "") if isinstance(ev, dict) else ""
-            if token:
-                yield {
-                    "event_type": "agent_token",
-                    "data": {"node_id": ctx.node_id,
-                             "token": token,
-                             "stream_mode": mode},
-                }
-
-        yield {}
-
-
-@register
-class AccumulateNode(NodeType):
-    """Accumulate a token stream into a response message.
-
-    Collects all tokens from the stream and outputs a single
-    ``{"role": "assistant", "content": "..."}`` message.
-    Does not send anything to the client — pair with
-    :class:`ForwardNode` if you also want to display the stream.
-    """
-
-    type = "accumulate"
-    label = "Accumulate"
-    accent = Colors.green
-    description = "Stream to response"
-    pins = [
-        Pin.exec_in(),
-        Pin.exec_out(),
-        Pin.data("data_stream", "stream", Colors.green, "left"),
-        Pin.data("data_response", "response", Colors.amber, "right"),
-    ]
-
-    async def execute(self, ctx: NodeContext) -> dict[str, Any]:
-        events = ctx.inputs.get("stream", [])
-        if not isinstance(events, list):
-            events = []
-        text = ""
-        for ev in events:
-            token = ev.get("token", "") if isinstance(ev, dict) else ""
-            text += token
-        return {"response": {"role": "assistant", "content": text}}
+        yield {"type": "output", "data": {
+            "response": {"role": "assistant", "content": acc.text},
+        }}
 
 
 @register
@@ -450,12 +656,15 @@ class ToolNode(NodeType):
         Pin.data("data_result", "result", Colors.green, "right"),
     ]
 
-    async def execute(self, ctx: NodeContext) -> dict[str, Any]:
+    async def execute(self, ctx: NodeContext):
         tool_name = str(
             ctx.inputs.get("tool", "") or ctx.data.get("tool", ""),
         )
         if not tool_name:
-            return {"result": "[Error] Tool node has no tool name"}
+            yield {"type": "output", "data": {
+                "result": "[Error] Tool node has no tool name",
+            }}
+            return
 
         raw_args = ctx.data.get("args") or {}
         node_input = str(ctx.inputs.get("input", ""))
@@ -470,7 +679,7 @@ class ToolNode(NodeType):
             log.exception("tool node error: %s", tool_name)
             result = f"[Tool error] {type(exc).__name__}: {exc}"
 
-        return {"result": result}
+        yield {"type": "output", "data": {"result": result}}
 
 
 @register
@@ -487,7 +696,7 @@ class AppendNode(NodeType):
         Pin.data("data_result", "result", Colors.blue, "right"),
     ]
 
-    async def execute(self, ctx: NodeContext) -> dict[str, Any]:
+    async def execute(self, ctx: NodeContext):
         a = ctx.inputs.get("a", [])
         b = ctx.inputs.get("b", {})
         if not isinstance(a, list):
@@ -499,7 +708,7 @@ class AppendNode(NodeType):
             result.extend(b)
         elif b:
             result.append({"role": "assistant", "content": str(b)})
-        return {"result": result}
+        yield {"type": "output", "data": {"result": result}}
 
 
 @register
@@ -515,7 +724,7 @@ class ConditionNode(NodeType):
         Pin.data("data_value", "value", Colors.green, "left"),
     ]
 
-    async def execute(self, ctx: NodeContext) -> dict[str, Any]:
+    async def execute(self, ctx: NodeContext):
         value = ctx.inputs.get("value", "")
         if isinstance(value, (list, dict)):
             input_for_eval = json.dumps(value, ensure_ascii=False)
@@ -530,7 +739,7 @@ class ConditionNode(NodeType):
             ))
         except Exception:
             result = True
-        return {"_condition": result, "value": value}
+        yield {"type": "output", "data": {"_condition": result, "value": value}}
 
 
 @register
@@ -541,8 +750,47 @@ class OutputNode(NodeType):
     description = "Final response"
     pins = [
         Pin.exec_in(),
-        Pin.data("data_response", "response", Colors.amber, "left"),
+        Pin.data("data_response", "stream", Colors.green, "left"),
     ]
 
-    async def execute(self, ctx: NodeContext) -> dict[str, Any]:
-        return {}
+    async def execute(self, ctx: NodeContext):
+        stream = ctx.inputs.get("stream", [])
+
+        if hasattr(stream, "__aiter__"):
+            async for event in stream:
+                yield {"type": "event", "data": event}
+    
+        elif isinstance(stream, (list, tuple)):
+            for event in stream:
+                yield {"type": "event", "data": event}
+
+        yield {"type": "output", "data": {}}
+
+
+@register
+class PrintNode(NodeType):
+    """Debug node — JSON-dump the input value and send it to the user."""
+
+    type = "print"
+    label = "Print"
+    accent = Colors.cyan
+    description = "Display value"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_value", "value", Colors.green, "left"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        value = ctx.inputs.get("value", None)
+        try:
+            text = json.dumps(value, indent=2, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = str(value)
+        yield {"type": "event", "data": {
+            "event_type": "print",
+            "data": {"node_id": ctx.node_id,
+                     "label": ctx.data.get("label", "Print"),
+                     "text": text},
+        }}
+        yield {"type": "output", "data": {}}

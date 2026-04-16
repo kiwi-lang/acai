@@ -37,6 +37,7 @@ function App() {
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/tasks" element={<TasksPage />} />
               <Route path="/workflows" element={<WorkflowEditor />} />
+              <Route path="/workflows/:workflowIdParam" element={<WorkflowEditor />} />
               <Route path="/uber" element={<UberChat />} />
               <Route path="/status" element={<StatusPage />} />
               </Routes>

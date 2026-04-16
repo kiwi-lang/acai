@@ -15,6 +15,7 @@ import json
 import logging
 import traceback as _tb
 from collections import defaultdict
+from dataclasses import dataclass
 from typing import Any, AsyncIterator
 
 from assai.tasks.graph import TaskGraph
@@ -22,6 +23,14 @@ from assai.tasks import nodes as node_registry
 from assai.tasks.nodes import NodeContext
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class _ForEachFrame:
+    """Call-stack frame for a ForEach node iteration."""
+    node_id: str
+    items: list
+    index: int = 0
 
 
 # ------------------------------------------------------------------
@@ -135,11 +144,32 @@ class DynamicGraph(TaskGraph):
 
         outputs: dict[str, dict[str, Any]] = {}
         final_text = ""
+        final_reasoning = ""
         current_id: str | None = start["id"]
-        max_steps = len(spec.nodes) * 2 + 10
+        max_steps = len(spec.nodes) * 4 + 20
+        foreach_stack: list[_ForEachFrame] = []
 
         for _step in range(max_steps):
             if current_id is None:
+                # Dead end — check ForEach call stack
+                if foreach_stack:
+                    frame = foreach_stack[-1]
+                    frame.index += 1
+                    if frame.index < len(frame.items):
+                        outputs[frame.node_id] = {
+                            "item": frame.items[frame.index],
+                            "index": frame.index,
+                        }
+                        nexts = spec.exec_edges(frame.node_id, "exec_body")
+                        current_id = nexts[0]["target"] if nexts else None
+                        if current_id is None:
+                            foreach_stack.pop()
+                        continue
+                    else:
+                        foreach_stack.pop()
+                        nexts = spec.exec_edges(frame.node_id, "exec_then")
+                        current_id = nexts[0]["target"] if nexts else None
+                        continue
                 break
 
             node = spec.node(current_id)
@@ -158,6 +188,41 @@ class DynamicGraph(TaskGraph):
                            if src_handle.startswith("data_") else src_handle)
                 if src_id in outputs and src_pin in outputs[src_id]:
                     resolved[pin_name] = outputs[src_id][src_pin]
+
+            # -- ForEach: handled by the executor, not the node ----------
+            if ntype == "for_each":
+                array = resolved.get("array", [])
+                if not isinstance(array, list):
+                    array = list(array) if array else []
+
+                yield {
+                    "event_type": "node_start",
+                    "data": {"node_id": current_id, "type": ntype,
+                             "label": data.get("label", current_id)},
+                }
+
+                if not array:
+                    outputs[current_id] = {"item": None, "index": 0}
+                    yield {"event_type": "node_end", "data": {
+                        "node_id": current_id, "type": ntype,
+                        "output_preview": "(empty array)",
+                    }}
+                    nexts = spec.exec_edges(current_id, "exec_then")
+                    current_id = nexts[0]["target"] if nexts else None
+                else:
+                    outputs[current_id] = {
+                        "item": array[0], "index": 0,
+                    }
+                    foreach_stack.append(_ForEachFrame(
+                        node_id=current_id, items=array, index=0,
+                    ))
+                    yield {"event_type": "node_end", "data": {
+                        "node_id": current_id, "type": ntype,
+                        "output_preview": f"{len(array)} items",
+                    }}
+                    nexts = spec.exec_edges(current_id, "exec_body")
+                    current_id = nexts[0]["target"] if nexts else None
+                continue
 
             # -- look up node type from registry -------------------------
             node_type = node_registry.get(ntype)
@@ -181,17 +246,23 @@ class DynamicGraph(TaskGraph):
                 work=work,
             )
 
-            # -- execute (streaming or sync) -----------------------------
+            # -- execute (iterate the async generator) --------------------
+            node_out: dict[str, Any] = {}
             try:
-                if node_type.streaming:
-                    node_out: dict[str, Any] = {}
-                    async for item in node_type.execute_stream(ctx):
-                        if isinstance(item, dict) and "event_type" in item:
-                            yield item
-                        else:
-                            node_out = item
-                else:
-                    node_out = await node_type.execute(ctx)
+                async for event in node_type.execute(ctx):
+                    etype = event.get("type", "")
+                    edata = event.get("data", {})
+                    if etype == "output":
+                        node_out.update(edata)
+                    elif etype == "event":
+                        evt = edata.get("event_type", "")
+                        if evt == "token":
+                            final_text += (edata.get("data", {})
+                                           .get("token", ""))
+                        elif evt == "reasoning":
+                            final_reasoning += (edata.get("data", {})
+                                                .get("token", ""))
+                        yield edata
             except Exception as exc:
                 log.exception("node %s failed", current_id)
                 yield self._error_event(
@@ -205,9 +276,14 @@ class DynamicGraph(TaskGraph):
             # -- build preview for node_end event ------------------------
             preview = ""
             for v in node_out.values():
-                if v:
-                    preview = (v if isinstance(v, str)
-                               else json.dumps(v, ensure_ascii=False))[:200]
+                if isinstance(v, str):
+                    preview = v[:200]
+                    break
+                if isinstance(v, (dict, list, int, float, bool)):
+                    try:
+                        preview = json.dumps(v, ensure_ascii=False)[:200]
+                    except (TypeError, ValueError):
+                        continue
                     break
 
             node_end_data: dict[str, Any] = {
@@ -216,31 +292,12 @@ class DynamicGraph(TaskGraph):
             }
 
             if ntype == "output":
-                resp = resolved.get("response", "")
-                if isinstance(resp, dict):
-                    node_end_data["final_output"] = (
-                        resp.get("content", "")
-                        or json.dumps(resp, ensure_ascii=False)
-                    )
-                elif isinstance(resp, str):
-                    node_end_data["final_output"] = resp
-                else:
-                    node_end_data["final_output"] = json.dumps(
-                        resp, ensure_ascii=False,
-                    )
+                node_end_data["final_output"] = final_text
 
             yield {"event_type": "node_end", "data": node_end_data}
 
-            # -- output node → extract final text and stop ---------------
+            # -- output node → stop execution --------------------------------
             if ntype == "output":
-                resp = resolved.get("response", "")
-                if isinstance(resp, dict):
-                    final_text = (resp.get("content", "")
-                                  or json.dumps(resp, ensure_ascii=False))
-                elif isinstance(resp, str):
-                    final_text = resp
-                else:
-                    final_text = json.dumps(resp, ensure_ascii=False)
                 break
 
             # -- follow exec edge to the next node -----------------------
@@ -255,9 +312,10 @@ class DynamicGraph(TaskGraph):
 
         # -- persist final response to conversation ----------------------
         if final_text and self.conversation:
-            self.chat.append(self.conversation, {
-                "role": "assistant", "content": final_text,
-            })
+            msg: dict = {"role": "assistant", "content": final_text}
+            if final_reasoning:
+                msg["reasoning"] = final_reasoning
+            self.chat.append(self.conversation, msg)
 
         yield {
             "event_type": "workflow_end",
