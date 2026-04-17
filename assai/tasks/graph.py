@@ -286,7 +286,7 @@ class TaskGraph:
             if task_proxy.enable_thinking is not None:
                 payload["enable_thinking"] = task_proxy.enable_thinking
 
-            self.audit.save_payload(f"prepare-{agent_name}", messages)
+            self.audit.save_payload(f"prepare-{agent_name}", payload)
 
         return payload
 
@@ -306,10 +306,16 @@ class TaskGraph:
         The terminal ``done`` event from the worker is consumed but
         **not** yielded — use ``run()`` for graph-level completion.
         """
+        import time as _time
         import aiohttp
         from assai.orchestrator.iterator import AsyncSSEIterator
 
         url = f"{self.worker.url}/llm/complete"
+
+        _dispatch_t0 = _time.monotonic()
+        _first_token_t: float | None = None
+        _last_token_t: float | None = None
+        _token_count = 0
 
         async with self.audit.aspan(
             "dispatch", phase="dispatch",
@@ -324,7 +330,27 @@ class TaskGraph:
                     except (json.JSONDecodeError, ValueError):
                         edata = {}
 
+                    if etype in ("token", "reasoning"):
+                        _token_count += 1
+                        now = _time.monotonic()
+                        if _first_token_t is None:
+                            _first_token_t = now
+                        _last_token_t = now
+
                     if etype == "done":
+                        if _token_count > 0:
+                            ttft = round((_first_token_t - _dispatch_t0) * 1000, 2)
+                            gen = round((_last_token_t - _dispatch_t0) * 1000, 2)
+                            itl = round(
+                                gen / max(_token_count - 1, 1), 2,
+                            )
+                            self.audit.record(
+                                "dispatch.tokens", phase="dispatch",
+                                ttft_ms=ttft,
+                                token_count=_token_count,
+                                itl_ms=itl,
+                                generation_ms=gen,
+                            )
                         return
 
                     if etype == "token" and stream_mode == "reasoning":
