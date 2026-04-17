@@ -5,5 +5,10 @@
   "provider": "auto",
   "output_format": "messages",
   "tools": ["filesystem", "code", "git"],
-  "max_iterations": 40
+  "max_iterations": 40,
+  "tool_permissions": [
+    "read",
+    "write",
+    "execute"
+  ]
 }

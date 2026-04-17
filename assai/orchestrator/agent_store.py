@@ -58,6 +58,7 @@ class AgentDef:
     system_template: str = "system.j2"
     context_sources: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
+    tool_permissions: list[str] = field(default_factory=lambda: ["read"])
     sandbox: SandboxConfig = field(default_factory=SandboxConfig)
     max_iterations: int = 20
     approval_required: bool = False

@@ -7,7 +7,10 @@ import os
 import shutil
 import subprocess
 
+from assai.orchestrator.tools import tool
 
+
+@tool(permissions=("read",))
 def glob_files(pattern: str, path: str = ".") -> str:
     """Find files matching a glob pattern under a directory, newest first.
 
@@ -41,6 +44,7 @@ def glob_files(pattern: str, path: str = ".") -> str:
     return json.dumps({"root": root, "matches": matches, "count": len(matches)})
 
 
+@tool(permissions=("read",))
 def grep(
     pattern: str,
     path: str = ".",

@@ -52,15 +52,30 @@ log = logging.getLogger(__name__)
 # @tool decorator (lightweight, no registry)
 # ---------------------------------------------------------------------------
 
-def tool(*, gpu: bool = False, name: str | None = None):
+VALID_PERMISSIONS = frozenset({"read", "write", "execute"})
+
+
+def tool(
+    *,
+    gpu: bool = False,
+    name: str | None = None,
+    permissions: tuple[str, ...] | list[str] = ("read",),
+):
     """Mark a function with tool constraints.
 
     This does **not** register the function anywhere — discovery does
     that automatically.  Use this only when you need to override
-    defaults (e.g. ``gpu=True``).
+    defaults (e.g. ``gpu=True``, ``permissions=("read", "write")``).
+
+    Permissions:
+        read    — inspects state without side effects
+        write   — creates, modifies or deletes persistent state
+        execute — runs arbitrary commands / subprocesses
     """
+    perms = tuple(p for p in permissions if p in VALID_PERMISSIONS) or ("read",)
+
     def decorator(fn: Callable) -> Callable:
-        fn._tool_meta = {"gpu": gpu, "name": name}
+        fn._tool_meta = {"gpu": gpu, "name": name, "permissions": perms}
         return fn
     return decorator
 
@@ -137,6 +152,7 @@ class ToolDef:
     required: list[str]
     fn: Callable
     gpu: bool = False
+    permissions: tuple[str, ...] = ("read",)
 
 
 def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
@@ -144,6 +160,7 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
     meta = getattr(fn, "_tool_meta", {})
     tool_name = meta.get("name") or fn.__name__
     gpu = meta.get("gpu", False)
+    permissions = tuple(meta.get("permissions", ("read",)))
     qualified = f"{namespace}.{tool_name}"
 
     hints = get_type_hints(fn)
@@ -185,6 +202,7 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
         required=required,
         fn=fn,
         gpu=gpu,
+        permissions=permissions,
     )
 
 
@@ -265,16 +283,26 @@ class ToolRegistry:
     # MCP definition generation
     # ------------------------------------------------------------------
 
-    def mcp_definitions(self, namespaces: list[str] | None = None) -> list[dict]:
+    def mcp_definitions(
+        self,
+        namespaces: list[str] | None = None,
+        allowed_permissions: set[str] | None = None,
+    ) -> list[dict]:
         """Return MCP-compatible tool definitions.
 
         If *namespaces* is ``None`` all tools are included; otherwise only
         tools whose namespace appears in the list.
+
+        If *allowed_permissions* is given, only tools whose permissions
+        intersect with the allowed set are included.
         """
         defs: list[dict] = []
         for td in self._tools.values():
             if namespaces is not None and td.namespace not in namespaces:
                 continue
+            if allowed_permissions is not None:
+                if not set(td.permissions) & allowed_permissions:
+                    continue
             defs.append({
                 "type": "function",
                 "function": {
@@ -285,6 +313,7 @@ class ToolRegistry:
                         "properties": td.parameters,
                         "required": td.required,
                     },
+                    "permissions": list(td.permissions),
                 },
             })
         return defs

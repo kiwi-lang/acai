@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import os
 
+from assai.orchestrator.tools import tool
+
 _DEFAULT_NAME = ".assai-session-todos.json"
 
 
+@tool(permissions=("write",))
 def todo_write(cwd: str, todos_json: str, filename: str = "") -> str:
     """Replace the session todo list stored as JSON in the workspace.
 
@@ -35,6 +38,7 @@ def todo_write(cwd: str, todos_json: str, filename: str = "") -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def todo_read(cwd: str, filename: str = "") -> str:
     """Read the session todo list JSON file if it exists.
 

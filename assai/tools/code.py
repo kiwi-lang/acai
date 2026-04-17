@@ -11,7 +11,10 @@ import json
 import os
 import subprocess
 
+from assai.orchestrator.tools import tool
 
+
+@tool(permissions=("read",))
 def search(pattern: str, cwd: str = ".", file_glob: str = "", max_results: int = 50) -> str:
     """Search for a text pattern in project files using grep.
 
@@ -42,6 +45,7 @@ def search(pattern: str, cwd: str = ".", file_glob: str = "", max_results: int =
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("execute",))
 def run_tests(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     """Run the project test suite.
 
@@ -66,6 +70,7 @@ def run_tests(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     return _run(command, cwd, timeout)
 
 
+@tool(permissions=("execute",))
 def lint(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     """Run the project linter.
 
@@ -87,6 +92,7 @@ def lint(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     return _run(command, cwd, timeout)
 
 
+@tool(permissions=("execute",))
 def typecheck(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     """Run the project type checker.
 
@@ -108,6 +114,7 @@ def typecheck(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     return _run(command, cwd, timeout)
 
 
+@tool(permissions=("execute",))
 def build(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     """Build the project.
 

@@ -4,5 +4,8 @@
   "role": "planner",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["tasks", "ui"]
+  "tools": ["tasks", "project", "search", "session", "filesystem"],
+  "tool_permissions": [
+    "read"
+  ]
 }

@@ -4,9 +4,14 @@
   "role": "worker",
   "provider": "auto",
   "output_format": "messages",
+  "tool_permissions": [
+    "read",
+    "write",
+    "execute"
+  ],
   "tools": [
-    "filesystem", "code", "git", "meta", "notebook",
-    "session", "search", "shell", "tasks", "test", "ui", "web"
+    "filesystem", "code", "git", "make", "meta", "notebook",
+    "project", "session", "search", "shell", "tasks", "ui", "web"
   ],
   "max_iterations": 40
 }

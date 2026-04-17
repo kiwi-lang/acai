@@ -700,7 +700,7 @@ class ToolLoopNode(NodeType):
                     "event_type": "tool_end",
                     "data": {"node_id": ctx.node_id,
                              "tool_name": tool_name,
-                             "result_preview": result_text[:200]},
+                             "result_preview": result_text[:2000]},
                 }}
 
             payload = dict(payload, messages=followup)

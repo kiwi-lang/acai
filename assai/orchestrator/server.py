@@ -954,10 +954,9 @@ def create_router(config: AssaiConfig | None = None,
                     chat.append(conversation, msg)
                 elif kind == "tool_call" and conversation:
                     tool_name = data.get("tool", task.title.replace("tool: ", ""))
-                    result_preview = result_text[:500] if result_text else ""
                     chat.append(conversation, {
                         "role": "tool_result",
-                        "content": result_preview,
+                        "content": result_text or "",
                         "name": tool_name,
                     })
 

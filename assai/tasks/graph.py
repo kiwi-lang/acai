@@ -171,6 +171,7 @@ class TaskGraph:
         self.audit = audit or NullAuditTrail()
         self.stream_id = stream_id
         self.conversation = conversation
+        self._allowed_tools: set[str] | None = None
 
     @classmethod
     def from_work(
@@ -197,9 +198,20 @@ class TaskGraph:
         if not agent_def.tools or self.tool_registry is None:
             return None, ""
 
-        tool_defs = self.tool_registry.mcp_definitions(namespaces=agent_def.tools)
+        allowed_perms = set(agent_def.tool_permissions) if agent_def.tool_permissions else None
+        tool_defs = self.tool_registry.mcp_definitions(
+            namespaces=agent_def.tools,
+            allowed_permissions=allowed_perms,
+        )
         if not tool_defs:
+            self._allowed_tools = set()
             return None, ""
+
+        self._allowed_tools = {
+            td["function"]["name"]
+            for td in tool_defs
+            if "function" in td and "name" in td["function"]
+        }
 
         lines: list[str] = []
         for td in tool_defs:
@@ -391,6 +403,12 @@ class TaskGraph:
 
     async def dispatch_tool(self, tool_name: str, args: dict) -> str:
         """Dispatch a tool call to the worker and return the result text."""
+        if self._allowed_tools is not None and tool_name not in self._allowed_tools:
+            log.warning("blocked disallowed tool call: %s", tool_name)
+            return (
+                f"[Tool error] Tool '{tool_name}' is not permitted for this agent. "
+                "Check the agent's tool namespaces and permissions."
+            )
         from assai.orchestrator.dispatcher import dispatch_tool
         base_url = self.worker.url.rsplit("/worker", 1)[0]
         ctx: dict = {
@@ -510,7 +528,7 @@ class TaskGraph:
                     })
                     self.chat.append(self.conversation, {
                         "role": "tool_result",
-                        "content": result_text[:500],
+                        "content": result_text,
                         "name": tool_name,
                     })
 
@@ -519,7 +537,7 @@ class TaskGraph:
                     "data": {
                         "conversation": self.conversation,
                         "tool_name": tool_name,
-                        "result_preview": result_text[:200],
+                        "result_preview": result_text[:2000],
                     },
                 }
                 if self.tracker and self.stream_id:

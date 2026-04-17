@@ -11,10 +11,12 @@ import logging
 from typing import Optional
 
 from assai.orchestrator.context import current_client
+from assai.orchestrator.tools import tool
 
 log = logging.getLogger(__name__)
 
 
+@tool(permissions=("write",))
 def toast(
     message: str,
     title: Optional[str] = None,

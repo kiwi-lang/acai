@@ -92,6 +92,9 @@ interface AgentFormData {
     temperature: string;
     max_tokens: string;
     tools: string;
+    tool_permissions_read: boolean;
+    tool_permissions_write: boolean;
+    tool_permissions_execute: boolean;
     context_sources: string;
     max_iterations: string;
     approval_required: boolean;
@@ -109,7 +112,8 @@ const emptyForm: AgentFormData = {
     name: '', description: '', role: 'worker', avatar: '',
     provider: 'auto', output_format: 'messages',
     temperature: '0.7', max_tokens: '4096',
-    tools: '', context_sources: '', max_iterations: '20',
+    tools: '', tool_permissions_read: true, tool_permissions_write: false, tool_permissions_execute: false,
+    context_sources: '', max_iterations: '20',
     approval_required: false, tags: '',
     sandbox_type: 'none', sandbox_network: true, sandbox_gpu: false,
     sandbox_timeout: '120', sandbox_memory_limit: '4G',
@@ -174,6 +178,11 @@ const AgentsPage = () => {
             output_format: f.output_format,
             model_overrides,
             tools: f.tools ? f.tools.split(',').map(s => s.trim()).filter(Boolean) : [],
+            tool_permissions: [
+                ...(f.tool_permissions_read ? ['read'] : []),
+                ...(f.tool_permissions_write ? ['write'] : []),
+                ...(f.tool_permissions_execute ? ['execute'] : []),
+            ],
             context_sources: f.context_sources ? f.context_sources.split(',').map(s => s.trim()).filter(Boolean) : [],
             max_iterations: parseInt(f.max_iterations) || 20,
             approval_required: f.approval_required,
@@ -203,6 +212,9 @@ const AgentsPage = () => {
             temperature: String(a.model_overrides?.temperature ?? '0.7'),
             max_tokens: String(a.model_overrides?.max_tokens ?? '4096'),
             tools: a.tools.join(', '),
+            tool_permissions_read: (a.tool_permissions ?? ['read']).includes('read'),
+            tool_permissions_write: (a.tool_permissions ?? ['read']).includes('write'),
+            tool_permissions_execute: (a.tool_permissions ?? ['read']).includes('execute'),
             context_sources: a.context_sources.join(', '),
             max_iterations: String(a.max_iterations),
             approval_required: a.approval_required,
@@ -607,6 +619,35 @@ const AgentsPage = () => {
                                         borderColor="var(--border-input)"
                                     />
                                 )}
+
+                                {/* Tool permissions */}
+                                <HStack gap={3} mt={2}>
+                                    <Text fontSize="xs" color="var(--text-muted)">Permissions:</Text>
+                                    {(['read', 'write', 'execute'] as const).map(perm => {
+                                        const key = `tool_permissions_${perm}` as keyof AgentFormData;
+                                        const isOn = form[key] as boolean;
+                                        const colors = { read: 'blue', write: 'orange', execute: 'red' };
+                                        return (
+                                            <Box
+                                                key={perm}
+                                                as="button"
+                                                px={3} py={1}
+                                                borderRadius="md"
+                                                fontSize="xs"
+                                                fontWeight="medium"
+                                                border="1px solid"
+                                                borderColor={isOn ? `${colors[perm]}.400` : 'var(--border-primary)'}
+                                                bg={isOn ? `${colors[perm]}.900` : 'transparent'}
+                                                color={isOn ? `${colors[perm]}.200` : 'var(--text-tertiary)'}
+                                                cursor="pointer"
+                                                _hover={{ borderColor: `${colors[perm]}.400` }}
+                                                onClick={() => setField(key, !isOn)}
+                                            >
+                                                {perm}
+                                            </Box>
+                                        );
+                                    })}
+                                </HStack>
                             </Box>
 
                             {/* Context sources */}

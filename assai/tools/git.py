@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import subprocess
 
+from assai.orchestrator.tools import tool
 
+
+@tool(permissions=("read",))
 def status(cwd: str = ".") -> str:
     """Show the git status of the working directory.
 
@@ -30,6 +33,7 @@ def status(cwd: str = ".") -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def diff(cwd: str = ".", ref: str = "") -> str:
     """Show the git diff of uncommitted changes.
 
@@ -50,6 +54,7 @@ def diff(cwd: str = ".", ref: str = "") -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def commit(message: str, cwd: str = ".", files: str = "") -> str:
     """Stage and commit changes.
 
@@ -79,6 +84,7 @@ def commit(message: str, cwd: str = ".", files: str = "") -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def push(cwd: str = ".", remote: str = "origin") -> str:
     """Push the current branch to the remote.
 
@@ -104,6 +110,7 @@ def push(cwd: str = ".", remote: str = "origin") -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def worktree_list(cwd: str = ".") -> str:
     """List git worktrees for the repository.
 
@@ -125,6 +132,7 @@ def worktree_list(cwd: str = ".") -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def worktree_add(
     worktree_path: str,
     branch: str = "",
@@ -157,6 +165,7 @@ def worktree_add(
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def worktree_remove(worktree_path: str, force: bool = False) -> str:
     """Remove a worktree directory registration (``git worktree remove``).
 
@@ -182,6 +191,7 @@ def worktree_remove(worktree_path: str, force: bool = False) -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def log(cwd: str = ".", count: int = 10) -> str:
     """Show recent git log entries.
 

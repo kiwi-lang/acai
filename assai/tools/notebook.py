@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 from typing import Optional
 
+from assai.orchestrator.tools import tool
 
+
+@tool(permissions=("read",))
 def read_notebook(path: str) -> str:
     """Load a notebook and return cell indices, types, and source previews.
 
@@ -36,6 +39,7 @@ def read_notebook(path: str) -> str:
     return json.dumps({"path": path, "nbformat": nb.get("nbformat"), "cells": summary})
 
 
+@tool(permissions=("write",))
 def edit_notebook_cell(
     notebook_path: str,
     new_source: str,

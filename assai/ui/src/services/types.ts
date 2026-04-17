@@ -199,6 +199,7 @@ export interface AgentDef {
     system_template: string;
     context_sources: string[];
     tools: string[];
+    tool_permissions: string[];
     sandbox: SandboxConfig;
     max_iterations: number;
     approval_required: boolean;

@@ -4,5 +4,8 @@
   "role": "worker",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["ui"]
+  "tools": ["ui"],
+  "tool_permissions": [
+    "read"
+  ]
 }

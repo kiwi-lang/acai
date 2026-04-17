@@ -12,6 +12,7 @@ import requests as http
 from dataclasses import dataclass
 
 from assai.orchestrator.context import current_context, current_client
+from assai.orchestrator.tools import tool
 
 @dataclass
 class Task:
@@ -31,6 +32,7 @@ def _require_client():
     return client
 
 
+@tool(permissions=("write",))
 def create(
     title: str,
     description: str = "",
@@ -68,6 +70,7 @@ def create(
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def update(
     task_id: str,
     title: str = "",
@@ -110,6 +113,7 @@ def update(
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def list_tasks(
     project: str = "",
     status: str = "",
@@ -134,6 +138,7 @@ def list_tasks(
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def get(task_id: str) -> str:
     """Get full details of a specific task.
 
@@ -149,6 +154,7 @@ def get(task_id: str) -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def mark_ready(task_id: str) -> str:
     """Mark a task as ready to be picked up by a worker.
 

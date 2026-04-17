@@ -5,7 +5,10 @@ from __future__ import annotations
 import json
 import os
 
+from assai.orchestrator.tools import tool
 
+
+@tool(permissions=("read",))
 def read_file(
     path: str,
     encoding: str = "utf-8",
@@ -34,6 +37,7 @@ def read_file(
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def edit_file(
     path: str,
     old_string: str,
@@ -69,6 +73,7 @@ def edit_file(
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
     """Write content to a file, creating parent directories as needed.
 
@@ -86,6 +91,7 @@ def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def list_directory(path: str = ".", recursive: bool = False) -> str:
     """List the entries in a directory.
 
@@ -113,6 +119,7 @@ def list_directory(path: str = ".", recursive: bool = False) -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def make_directory(path: str) -> str:
     """Create a directory (and parents) if it does not exist.
 
@@ -126,6 +133,7 @@ def make_directory(path: str) -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("write",))
 def delete_file(path: str) -> str:
     """Delete a file.
 
@@ -139,6 +147,7 @@ def delete_file(path: str) -> str:
         return json.dumps({"error": str(exc)})
 
 
+@tool(permissions=("read",))
 def file_info(path: str) -> str:
     """Return size and modification time of a file.
 
