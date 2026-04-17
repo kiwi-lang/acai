@@ -517,3 +517,8 @@ export async function checkInflight(convId: string): Promise<{ inflight: boolean
 export async function getContextStats(convId: string): Promise<{ estimated_tokens: number; max_context: number }> {
     return request(`/conversations/${convId}/context-stats`);
 }
+
+// Audit trail
+export async function getAudit(auditId: string): Promise<any> {
+    return request(`/audit/${auditId}`);
+}

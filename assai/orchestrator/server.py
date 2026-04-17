@@ -705,10 +705,17 @@ def create_router(config: AssaiConfig | None = None,
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+        audit = _make_audit(
+            "workflow/run", workflow=workflow_id,
+            workflow_name=spec.get("name", workflow_id),
+            conversation=conversation_id,
+        )
+
         async def generate():
             yield _sse("meta", {"conversation": conversation_id})
             try:
                 async with lb.acquire() as worker:
+                    audit.record("worker.acquired", phase="server", worker=worker.url)
                     graph = DynamicGraph.from_work(
                         worker, work,
                         agent_store=agent_store,
@@ -717,6 +724,7 @@ def create_router(config: AssaiConfig | None = None,
                         tracker=tracker,
                         projects=projects,
                         tool_registry=tool_registry,
+                        audit=audit,
                     )
                     async for event in graph.run(work):
                         yield _sse(
@@ -724,13 +732,18 @@ def create_router(config: AssaiConfig | None = None,
                             event.get("data", {}),
                         )
             except TimeoutError:
+                audit.record("error", phase="server", error="worker timeout")
                 yield _sse("error", {"message": "No worker available (timeout)."})
             except Exception as exc:
                 log.exception("workflow run error")
+                audit.record("error", phase="server", error=str(exc))
                 yield _sse("error", {
                     "message": f"{type(exc).__name__}: {exc}",
                     "traceback": _tb.format_exc(),
                 })
+            finally:
+                audit.finalize()
+                yield _sse("audit_complete", {"audit_id": audit.request_id})
 
         return StreamingResponse(
             generate(),
@@ -988,6 +1001,49 @@ def create_router(config: AssaiConfig | None = None,
                 tracker.unsubscribe(stream_id, q)
 
         return StreamingResponse(generate(), media_type="text/event-stream")
+
+    # ==================================================================
+    # Audit trail endpoints
+    # ==================================================================
+
+    @router.get("/audit/{audit_id}")
+    def get_audit(audit_id: str):
+        audit_dir = config.audit.dir
+        path = os.path.join(audit_dir, audit_id, "audit.json")
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "audit not found"}, status_code=404)
+        with open(path) as f:
+            return json.load(f)
+
+    @router.get("/audit")
+    def list_audits(request: Request):
+        audit_dir = config.audit.dir
+        if not os.path.isdir(audit_dir):
+            return []
+        limit = int(request.query_params.get("limit", "20"))
+        dirs = sorted(
+            [d for d in os.listdir(audit_dir)
+             if os.path.isdir(os.path.join(audit_dir, d)) and d != "latest"],
+            key=lambda d: os.path.getmtime(os.path.join(audit_dir, d)),
+            reverse=True,
+        )[:limit]
+        results = []
+        for d in dirs:
+            p = os.path.join(audit_dir, d, "audit.json")
+            if not os.path.isfile(p):
+                continue
+            try:
+                with open(p) as f:
+                    data = json.load(f)
+                results.append({
+                    "request_id": data.get("request_id", d),
+                    "started_at_iso": data.get("started_at_iso", ""),
+                    "total_duration_ms": data.get("total_duration_ms", 0),
+                    "meta": data.get("meta", {}),
+                })
+            except Exception:
+                continue
+        return results
 
     # ==================================================================
     # Task queue CRUD

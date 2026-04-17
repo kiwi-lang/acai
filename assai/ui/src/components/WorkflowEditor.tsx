@@ -45,6 +45,7 @@ import {
   listConversations,
   listAgents,
   getAgentInputs,
+  getAudit,
   type WorkflowSummary,
   type WorkflowSpec,
   type NodeTypeDef,
@@ -97,15 +98,25 @@ function getPinDefs(nodeType: string): PinDef[] {
 /* ================================================================== */
 
 function ExecEdge(props: EdgeProps) {
+  const traversed = !!(props.data as any)?._traversed;
   const [path] = getBezierPath({
     sourceX: props.sourceX, sourceY: props.sourceY,
     targetX: props.targetX, targetY: props.targetY,
     sourcePosition: props.sourcePosition, targetPosition: props.targetPosition,
   });
-  return <BaseEdge path={path} style={{
-    stroke: props.selected ? '#ff6060' : C.white,
-    strokeWidth: props.selected ? 3 : 2,
-  }} />;
+  const stroke = props.selected ? '#ff6060' : traversed ? C.green : C.white;
+  const strokeWidth = props.selected ? 3 : traversed ? 2.5 : 2;
+  return (
+    <>
+      <BaseEdge path={path} style={{ stroke, strokeWidth, transition: 'stroke 0.3s' }} />
+      {traversed && (
+        <BaseEdge path={path} style={{
+          stroke: C.green, strokeWidth: 4, opacity: 0.2,
+          filter: `drop-shadow(0 0 3px ${C.green})`,
+        }} />
+      )}
+    </>
+  );
 }
 
 function DataEdge(props: EdgeProps) {
@@ -301,10 +312,28 @@ function PinLabel({ pin }: { pin: PinDef }) {
   );
 }
 
+function heatColor(t: number, max: number): string {
+  if (max <= 0) return C.green;
+  const r = Math.min(t / max, 1);
+  if (r < 0.25) return '#4caf50';
+  if (r < 0.50) return '#8bc34a';
+  if (r < 0.75) return '#ff9800';
+  return '#f44336';
+}
+
+function fmtMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets, children }: NodeShellProps) {
   if (!def) return null;
   const connected = connectedHandles || new Set<string>();
   const widgets = pinWidgets || {};
+  const execActive = !!data._execActive;
+  const execDone = !!data._execDone;
+  const timingMs = data._timingMs as number | null;
+  const maxTimingMs = (data._maxTimingMs as number) || 0;
 
   const leftPins = def.pins.filter(p => p.side === 'left');
   const rightPins = def.pins.filter(p => p.side === 'right');
@@ -325,22 +354,34 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
   const headerW = def.label.length * 6.5 + 20;
   const totalW = Math.max(leftW + rightW + (hasBothCols ? 1 : 0), headerW);
 
+  let borderColor = selected ? def.accent : C.border;
+  let boxShadow: string | undefined;
+  if (execActive) {
+    borderColor = C.green;
+    boxShadow = `0 0 8px ${C.green}88, 0 0 2px ${C.green}`;
+  } else if (execDone) {
+    borderColor = C.green + '99';
+  }
+
   const nodeStyle: CSSProperties = {
     background: C.node,
     borderRadius: 4,
-    border: `1px solid ${selected ? def.accent : C.border}`,
+    border: `2px solid ${borderColor}`,
     width: totalW,
     fontSize: 11,
     overflow: 'visible',
+    boxShadow,
+    transition: 'border-color 0.2s, box-shadow 0.2s',
   };
 
-  const headerBg = def.accent + '26';
+  const headerBg = execActive ? C.green + '30' : execDone ? C.green + '18' : def.accent + '26';
 
   return (
     <div style={nodeStyle}>
       {/* Header */}
       <div style={{
         height: HEADER_H, display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between',
         padding: '0 8px', background: headerBg,
         borderRadius: '3px 3px 0 0',
         borderBottom: `1px solid ${C.border}`,
@@ -348,6 +389,20 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
         <span style={{ color: C.text, fontWeight: 500, fontSize: 11, letterSpacing: '0.02em' }}>
           {def.label}
         </span>
+        {timingMs != null && (
+          <span style={{
+            display: 'inline-flex', alignItems: 'center', gap: 2,
+            fontSize: 9, fontWeight: 500, lineHeight: 1,
+            color: heatColor(timingMs, maxTimingMs),
+          }}>
+            <svg width="9" height="9" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <circle cx="12" cy="12" r="10" />
+              <polyline points="12 6 12 12 16 14" />
+            </svg>
+            {fmtMs(timingMs)}
+          </span>
+        )}
       </div>
 
       {/* Two-column body */}
@@ -991,6 +1046,12 @@ const WorkflowEditor: FC = () => {
   const [runLog, setRunLog] = useState<string[]>([]);
   const [nodeDefsVersion, setNodeDefsVersion] = useState(0);
 
+  /* Execution highlighting state */
+  const [activeNodeId, setActiveNodeId] = useState<string | null>(null);
+  const [completedNodeIds, setCompletedNodeIds] = useState<Set<string>>(new Set());
+  const [activeEdgeId, setActiveEdgeId] = useState<string | null>(null);
+  const [lastAudit, setLastAudit] = useState<any>(null);
+
   useEffect(() => {
     getNodeTypes().then(defs => {
       setNodeDefs(defs);
@@ -1025,6 +1086,24 @@ const WorkflowEditor: FC = () => {
     [setNodes],
   );
 
+  const nodeTimings = useMemo(() => {
+    const map: Record<string, number> = {};
+    if (!lastAudit?.events) return map;
+    for (const e of lastAudit.events) {
+      if (e.event === 'node.end' && e.node_id && e.duration_ms != null) {
+        map[e.node_id] = e.duration_ms;
+      } else if (e.event === 'node.exec' && e.node_id && e.duration_ms != null) {
+        map[e.node_id] = e.duration_ms;
+      }
+    }
+    return map;
+  }, [lastAudit]);
+
+  const maxNodeTime = useMemo(() => {
+    const vals = Object.values(nodeTimings);
+    return vals.length > 0 ? Math.max(...vals) : 0;
+  }, [nodeTimings]);
+
   const enrichedNodes = useMemo(() =>
     nodes.map(n => ({
       ...n,
@@ -1032,9 +1111,20 @@ const WorkflowEditor: FC = () => {
         ...n.data,
         _connected: connectedMap[n.id] || new Set(),
         _onUpdate: (d: Record<string, unknown>) => updateNodeData(n.id, d),
+        _execActive: n.id === activeNodeId,
+        _execDone: completedNodeIds.has(n.id),
+        _timingMs: nodeTimings[n.id] ?? null,
+        _maxTimingMs: maxNodeTime,
       },
     })),
-  [nodes, connectedMap, updateNodeData]);
+  [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime]);
+
+  const enrichedEdges = useMemo(() =>
+    edges.map(e => ({
+      ...e,
+      data: { ...(e.data || {}), _traversed: e.id === activeEdgeId },
+    })),
+  [edges, activeEdgeId]);
 
   const onConnect = useCallback((params: Connection) => {
     const etype = edgeTypeFromHandles(params.sourceHandle);
@@ -1198,9 +1288,14 @@ const WorkflowEditor: FC = () => {
       await parseSSE(response, (eventType, data) => {
         if (eventType === 'workflow_start') {
           setRunLog(p => [...p, `\u2699 ${data.name} (${data.node_count} nodes)`]);
+          setActiveNodeId(null);
+          setCompletedNodeIds(new Set());
+          setActiveEdgeId(null);
+          setLastAudit(null);
 
         } else if (eventType === 'node_start') {
           setRunLog(p => [...p, `  \u2192 ${data.label || data.node_id} [${data.type}]`]);
+          setActiveNodeId(data.node_id);
 
         } else if (eventType === 'reasoning') {
           const token = data.token || '';
@@ -1247,16 +1342,31 @@ const WorkflowEditor: FC = () => {
         } else if (eventType === 'tool_end') {
           setRunLog(p => [...p, `    \u2713 ${data.tool_name}: ${(data.result_preview || '').slice(0, 80)}`]);
 
+        } else if (eventType === 'edge_traversed') {
+          setActiveEdgeId(data.edge_id || null);
+
         } else if (eventType === 'node_end') {
           const pv = data.output_preview ? `: ${data.output_preview.slice(0, 120)}` : '';
           setRunLog(p => [...p, `  \u2713 ${data.node_id}${pv}`]);
+          setActiveNodeId(null);
+          if (data.node_id) {
+            setCompletedNodeIds(prev => new Set(prev).add(data.node_id));
+          }
 
         } else if (eventType === 'workflow_end') {
           setRunLog(p => [...p, '\u2713 Finished']);
+          setActiveNodeId(null);
+          setActiveEdgeId(null);
+          setCompletedNodeIds(new Set());
 
         } else if (eventType === 'error') {
           setRunLog(p => [...p, `\u2717 ${data.message || 'Error'}`]);
           setChatMessages(prev => [...prev, { role: 'system', content: `Error: ${data.message || 'Error'}` }]);
+
+        } else if (eventType === 'audit_complete') {
+          if (data.audit_id) {
+            getAudit(data.audit_id).then(setLastAudit).catch(() => {});
+          }
 
         } else if (eventType === 'done') {
           setRunLog(p => [...p, '\u2014 Done \u2014']);
@@ -1412,7 +1522,7 @@ const WorkflowEditor: FC = () => {
       <Box flex={1} h="100%" ref={wrapperRef} position="relative">
         <ReactFlow
           nodes={enrichedNodes}
-          edges={edges}
+          edges={enrichedEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
@@ -1472,15 +1582,22 @@ const WorkflowEditor: FC = () => {
         )}
 
         {/* Run log */}
-        {runLog.length > 0 && (
+        {(runLog.length > 0 || lastAudit) && (
           <Box position="absolute" bottom={3} left={3}
             right={currentSelectedNode ? '240px' : (showChat ? '320px' : '3px')}
-            maxH="140px" overflowY="auto"
+            maxH="200px" overflowY="auto"
             bg="#242424ee" border={`1px solid ${C.border}`} borderRadius="4px"
             p={2} fontSize="14px" fontFamily="monospace" zIndex={10}>
             <HStack justify="space-between" mb={1}>
               <Text fontWeight="bold" color={C.text} fontSize="14px">Run Log</Text>
-              <Button size="xs" variant="ghost" onClick={() => setRunLog([])} color={C.muted}>Clear</Button>
+              <HStack gap={1}>
+                {lastAudit && (
+                  <Text fontSize="11px" color={C.cyan}>
+                    {lastAudit.total_duration_ms?.toFixed(0)}ms
+                  </Text>
+                )}
+                <Button size="xs" variant="ghost" onClick={() => { setRunLog([]); setLastAudit(null); }} color={C.muted}>Clear</Button>
+              </HStack>
             </HStack>
             {runLog.map((line, i) => (
               <Text key={i} color={
@@ -1488,6 +1605,22 @@ const WorkflowEditor: FC = () => {
                 line.includes('\u2713') ? C.green : C.muted
               }>{line}</Text>
             ))}
+            {lastAudit && (
+              <Box mt={1} pt={1} borderTop={`1px solid ${C.border}`}>
+                <Text fontSize="11px" color={C.cyan} mb={1}>
+                  Audit: {lastAudit.request_id} \u2022 {lastAudit.total_duration_ms?.toFixed(0)}ms total
+                </Text>
+                {lastAudit.events
+                  ?.filter((e: any) => e.phase === 'node')
+                  .map((e: any, i: number) => (
+                    <Text key={i} fontSize="11px" color={C.muted}>
+                      {e.elapsed_ms?.toFixed(0).padStart(6)}ms {e.event}
+                      {e.label ? ` (${e.label})` : ''}
+                      {e.duration_ms != null ? ` ${e.duration_ms.toFixed(0)}ms` : ''}
+                    </Text>
+                  ))}
+              </Box>
+            )}
           </Box>
         )}
       </Box>

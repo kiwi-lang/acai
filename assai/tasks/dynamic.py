@@ -149,6 +149,17 @@ class DynamicGraph(TaskGraph):
         max_steps = len(spec.nodes) * 4 + 20
         foreach_stack: list[_ForEachFrame] = []
 
+        def _edge_event(edge: dict) -> dict:
+            return {
+                "event_type": "edge_traversed",
+                "data": {
+                    "edge_id": edge.get("id", ""),
+                    "source": edge["source"],
+                    "target": edge["target"],
+                    "source_handle": edge.get("sourceHandle", ""),
+                },
+            }
+
         for _step in range(max_steps):
             if current_id is None:
                 # Dead end — check ForEach call stack
@@ -161,6 +172,8 @@ class DynamicGraph(TaskGraph):
                             "index": frame.index,
                         }
                         nexts = spec.exec_edges(frame.node_id, "exec_body")
+                        if nexts:
+                            yield _edge_event(nexts[0])
                         current_id = nexts[0]["target"] if nexts else None
                         if current_id is None:
                             foreach_stack.pop()
@@ -168,6 +181,8 @@ class DynamicGraph(TaskGraph):
                     else:
                         foreach_stack.pop()
                         nexts = spec.exec_edges(frame.node_id, "exec_then")
+                        if nexts:
+                            yield _edge_event(nexts[0])
                         current_id = nexts[0]["target"] if nexts else None
                         continue
                 break
@@ -195,19 +210,27 @@ class DynamicGraph(TaskGraph):
                 if not isinstance(array, list):
                     array = list(array) if array else []
 
+                node_label = data.get("label", current_id)
                 yield {
                     "event_type": "node_start",
                     "data": {"node_id": current_id, "type": ntype,
-                             "label": data.get("label", current_id)},
+                             "label": node_label},
                 }
 
                 if not array:
                     outputs[current_id] = {"item": None, "index": 0}
+                    self.audit.record(
+                        "node.exec", phase="node",
+                        node_id=current_id, node_type=ntype,
+                        label=node_label, duration_ms=0,
+                    )
                     yield {"event_type": "node_end", "data": {
                         "node_id": current_id, "type": ntype,
                         "output_preview": "(empty array)",
                     }}
                     nexts = spec.exec_edges(current_id, "exec_then")
+                    if nexts:
+                        yield _edge_event(nexts[0])
                     current_id = nexts[0]["target"] if nexts else None
                 else:
                     outputs[current_id] = {
@@ -216,11 +239,18 @@ class DynamicGraph(TaskGraph):
                     foreach_stack.append(_ForEachFrame(
                         node_id=current_id, items=array, index=0,
                     ))
+                    self.audit.record(
+                        "node.exec", phase="node",
+                        node_id=current_id, node_type=ntype,
+                        label=node_label, items=len(array), duration_ms=0,
+                    )
                     yield {"event_type": "node_end", "data": {
                         "node_id": current_id, "type": ntype,
                         "output_preview": f"{len(array)} items",
                     }}
                     nexts = spec.exec_edges(current_id, "exec_body")
+                    if nexts:
+                        yield _edge_event(nexts[0])
                     current_id = nexts[0]["target"] if nexts else None
                 continue
 
@@ -232,10 +262,11 @@ class DynamicGraph(TaskGraph):
                 )
                 return
 
+            node_label = data.get("label", current_id)
             yield {
                 "event_type": "node_start",
                 "data": {"node_id": current_id, "type": ntype,
-                         "label": data.get("label", current_id)},
+                         "label": node_label},
             }
 
             ctx = NodeContext(
@@ -249,20 +280,24 @@ class DynamicGraph(TaskGraph):
             # -- execute (iterate the async generator) --------------------
             node_out: dict[str, Any] = {}
             try:
-                async for event in node_type.execute(ctx):
-                    etype = event.get("type", "")
-                    edata = event.get("data", {})
-                    if etype == "output":
-                        node_out.update(edata)
-                    elif etype == "event":
-                        evt = edata.get("event_type", "")
-                        if evt == "token":
-                            final_text += (edata.get("data", {})
-                                           .get("token", ""))
-                        elif evt == "reasoning":
-                            final_reasoning += (edata.get("data", {})
-                                                .get("token", ""))
-                        yield edata
+                async with self.audit.aspan(
+                    "node", phase="node",
+                    node_id=current_id, node_type=ntype, label=node_label,
+                ):
+                    async for event in node_type.execute(ctx):
+                        etype = event.get("type", "")
+                        edata = event.get("data", {})
+                        if etype == "output":
+                            node_out.update(edata)
+                        elif etype == "event":
+                            evt = edata.get("event_type", "")
+                            if evt == "token":
+                                final_text += (edata.get("data", {})
+                                               .get("token", ""))
+                            elif evt == "reasoning":
+                                final_reasoning += (edata.get("data", {})
+                                                    .get("token", ""))
+                            yield edata
             except Exception as exc:
                 log.exception("node %s failed", current_id)
                 yield self._error_event(
@@ -308,6 +343,8 @@ class DynamicGraph(TaskGraph):
             else:
                 nexts = spec.exec_edges(current_id, "exec_out")
 
+            if nexts:
+                yield _edge_event(nexts[0])
             current_id = nexts[0]["target"] if nexts else None
 
         # -- persist final response to conversation ----------------------

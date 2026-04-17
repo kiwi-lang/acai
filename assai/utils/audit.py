@@ -125,11 +125,12 @@ class AuditTrail:
             dur = round((time.monotonic() - t0) * 1000, 2)
             self.record(
                 f"{name}.error", phase=phase, duration_ms=dur, error=str(exc),
+                **data,
             )
             raise
         else:
             dur = round((time.monotonic() - t0) * 1000, 2)
-            self.record(f"{name}.end", phase=phase, duration_ms=dur)
+            self.record(f"{name}.end", phase=phase, duration_ms=dur, **data)
 
     @asynccontextmanager
     async def aspan(
@@ -144,11 +145,12 @@ class AuditTrail:
             dur = round((time.monotonic() - t0) * 1000, 2)
             self.record(
                 f"{name}.error", phase=phase, duration_ms=dur, error=str(exc),
+                **data,
             )
             raise
         else:
             dur = round((time.monotonic() - t0) * 1000, 2)
-            self.record(f"{name}.end", phase=phase, duration_ms=dur)
+            self.record(f"{name}.end", phase=phase, duration_ms=dur, **data)
 
     # ------------------------------------------------------------------
     # Payload snapshots
