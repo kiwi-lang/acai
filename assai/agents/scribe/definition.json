@@ -1,0 +1,10 @@
+{
+  "name": "scribe",
+  "description": "a knowledge management specialist that maintains persistent documents from conversations",
+  "role": "system",
+  "provider": "auto",
+  "output_format": "messages",
+  "tools": ["knowledge"],
+  "tool_permissions": ["read", "write"],
+  "compressor": ""
+}

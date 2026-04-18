@@ -43,9 +43,10 @@ def _find_repo_root() -> str | None:
 class ContainerSandbox(Sandbox):
     """Manages a Docker/Podman container running ``assai mcp``.
 
-    The project worktree is bind-mounted at ``/workspace`` inside the
-    container.  One container is started per *session_id* and reused
-    until :meth:`stop` is called.
+    The project worktree is bind-mounted at the **same absolute path**
+    inside the container so that file paths are consistent between
+    host and sandbox.  One container is started per *session_id* and
+    reused until :meth:`stop` is called.
     """
 
     def __init__(
@@ -188,11 +189,13 @@ class ContainerSandbox(Sandbox):
         project_path: str,
         sandbox_config: SandboxConfig | None,
     ) -> list[str]:
+        abs_path = os.path.abspath(project_path)
         cmd = [
             self.runtime, "run", "-d",
             "--name", name,
             "-p", f":{self.container_port}",
-            "-v", f"{project_path}:/workspace",
+            "-v", f"{abs_path}:{abs_path}",
+            "-w", abs_path,
         ]
 
         if sandbox_config is not None:

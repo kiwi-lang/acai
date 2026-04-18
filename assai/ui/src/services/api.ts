@@ -18,14 +18,26 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 }
 
 // Conversations CRUD
-export async function listConversations(): Promise<ConversationMeta[]> {
-    return request<ConversationMeta[]>('/conversations');
+export async function listConversations(
+    opts: { project?: string; task_id?: string } = {},
+): Promise<ConversationMeta[]> {
+    const params = new URLSearchParams();
+    if (opts.project) params.set('project', opts.project);
+    if (opts.task_id) params.set('task_id', opts.task_id);
+    const qs = params.toString();
+    return request<ConversationMeta[]>(`/conversations${qs ? `?${qs}` : ''}`);
 }
 
-export async function createConversation(title = '', project = ''): Promise<ConversationMeta> {
+export async function createConversation(
+    title = '',
+    project = '',
+    task_id = '',
+): Promise<ConversationMeta> {
+    const body: Record<string, string> = { title, project };
+    if (task_id) body.task_id = task_id;
     return request<ConversationMeta>('/conversations', {
         method: 'POST',
-        body: JSON.stringify({ title, project }),
+        body: JSON.stringify(body),
     });
 }
 
@@ -108,6 +120,17 @@ export class SSEStream {
     }
 }
 
+// Graph definitions
+export interface GraphDef {
+    kind: string;
+    label: string;
+    description: string;
+}
+
+export async function listGraphs(): Promise<GraphDef[]> {
+    return request<GraphDef[]>('/graphs');
+}
+
 // Converse — returns an SSE stream; conversation id arrives as the first "meta" event
 export async function converse(
     message: string,
@@ -117,9 +140,11 @@ export async function converse(
     provider = '',
     agent = '',
     enable_thinking?: boolean,
+    graph?: string,
 ): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
     if (enable_thinking !== undefined) body.enable_thinking = enable_thinking;
+    if (graph) body.graph = graph;
 
     const response = await fetch(`${API_BASE}/converse`, {
         method: 'POST',

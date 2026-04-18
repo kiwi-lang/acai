@@ -33,7 +33,8 @@ RUN pip install --no-cache-dir \
         importlib_resources \
     && pip install --no-cache-dir -e . --no-deps
 
-WORKDIR /workspace
+# Working directory is set at runtime via `podman run -w <host_path>`
+# to keep paths consistent between host and container.
 
 EXPOSE 9200
 

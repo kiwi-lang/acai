@@ -45,9 +45,20 @@ class ThinkGraph(TaskGraph):
 
         # Phase 2 — reply using the reasoning
         try:
-            reply_payload = self.prepare(
-                agent_name, work, reasoning=think_acc.reasoning,
-            )
+            reply_payload = self.prepare(agent_name, work)
+            if think_acc.reasoning:
+                msg = {
+                    "role": "system",
+                    "content": (
+                        "## Prior Reasoning\n"
+                        "The following analysis was produced about this task. "
+                        "Use it to inform your response.\n\n"
+                        + think_acc.reasoning
+                    ),
+                }
+                msgs = reply_payload.get("messages", [])
+                pos = 1 if msgs and msgs[0].get("role") == "system" else 0
+                msgs.insert(pos, msg)
         except Exception as exc:
             log.exception("ThinkGraph prepare (reply) error")
             yield self._error_event(

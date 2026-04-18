@@ -30,12 +30,13 @@ from assai.orchestrator.agent_store import AgentDef, AgentStore, hydrate_task, r
 from assai.orchestrator.load_balancer import LoadBalancer
 from assai.orchestrator.stream import StreamTracker
 from assai.orchestrator.chat import ChatStore
+from assai.orchestrator.knowledge import KnowledgeStore
 from assai.orchestrator.config import (
     AssaiConfig, ProviderConfig, load_config, load_providers, save_providers,
 )
 from assai.orchestrator.projects import Project, ProjectStore, scaffold, clone
 from assai.scheduler import ProviderScheduler
-from assai.tasks import ConverseGraph, ThinkGraph, UberGraph, DynamicGraph
+from assai.tasks import ConverseGraph, ConverseScribeGraph, ThinkGraph, UberGraph, DynamicGraph, get_graph, list_graphs
 from assai.events import EventBus
 from assai.queue.work import TaskStatus, WorkQueue
 from assai.tracker.git import GitTracker
@@ -236,6 +237,9 @@ def create_router(config: AssaiConfig | None = None,
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
 
+    knowledge_dir = os.path.join(config.workspace, "knowledge")
+    knowledge = KnowledgeStore(knowledge_dir)
+
     from assai.orchestrator.tools import discover_tools
     tool_registry = discover_tools()
     from assai.tools.meta import _configure as configure_meta_tools
@@ -316,17 +320,21 @@ def create_router(config: AssaiConfig | None = None,
         return out
 
     @router.get("/conversations")
-    def list_conversations():
-        return [_enrich_conversation_dict(m) for m in chat.list()]
+    def list_conversations(request: Request):
+        project = request.query_params.get("project", "")
+        task_id = request.query_params.get("task_id", "")
+        return [_enrich_conversation_dict(m) for m in chat.list(project=project, task_id=task_id)]
 
     @router.post("/conversations", status_code=201)
     async def create_conversation(request: Request):
         data = await _json_body(request)
         proj = data.get("project", "")
+        task_id = data.get("task_id", "")
         default_agent = _default_agent_for_project(proj)
         meta = chat.create(
             title=data.get("title", ""),
             project=proj,
+            task_id=task_id,
             provider=data.get("provider", "auto"),
             agent=data.get("agent", "") or default_agent,
         )
@@ -362,6 +370,11 @@ def create_router(config: AssaiConfig | None = None,
     # Converse (SSE streaming via TaskGraph)
     # ==================================================================
 
+    @router.get("/graphs")
+    def get_graphs():
+        """Return the list of user-facing task graphs."""
+        return list_graphs(user_facing_only=True)
+
     @router.post("/converse")
     async def agent_converse(request: Request):
         import traceback as _tb
@@ -370,8 +383,10 @@ def create_router(config: AssaiConfig | None = None,
         message = data.get("message", "")
         conversation = data.get("conversation", "")
         project = data.get("project", "")
+        task_id = data.get("task_id", "")
         provider_name = data.get("provider", "auto")
         agent_name = data.get("agent", "") or _default_agent_for_project(project)
+        graph_kind = data.get("graph", "converse")
 
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
@@ -379,6 +394,7 @@ def create_router(config: AssaiConfig | None = None,
         if not conversation:
             meta = chat.create(
                 title=message[:80], project=project,
+                task_id=task_id,
                 provider=provider_name, agent=agent_name,
             )
             conversation = meta.id
@@ -410,6 +426,7 @@ def create_router(config: AssaiConfig | None = None,
         audit = _make_audit(
             "converse", conversation=conversation,
             agent=agent_name, project=project,
+            graph=graph_kind,
         )
 
         async def generate():
@@ -417,8 +434,8 @@ def create_router(config: AssaiConfig | None = None,
             try:
                 async with lb.acquire() as worker:
                     audit.record("worker.acquired", phase="server", worker=worker.url)
-                    graph = ConverseGraph.from_work(
-                        worker, work,
+                    graph = get_graph(
+                        graph_kind, worker, work,
                         agent_store=agent_store,
                         chat=chat,
                         config=config,
@@ -763,6 +780,7 @@ def create_router(config: AssaiConfig | None = None,
         message = data.get("message", "")
         conversation = data.get("conversation", "")
         project = data.get("project", "")
+        task_id = data.get("task_id", "")
         provider_name = data.get("provider", "")
         agent_name = data.get("agent", "")
         if not message:
@@ -772,6 +790,7 @@ def create_router(config: AssaiConfig | None = None,
             default_agent = _default_agent_for_project(project)
             meta = chat.create(
                 title=message[:80], project=project,
+                task_id=task_id,
                 provider=provider_name or "auto",
                 agent=agent_name or default_agent,
             )
@@ -845,6 +864,116 @@ def create_router(config: AssaiConfig | None = None,
                 yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
             except Exception as exc:
                 log.exception("think/converse stream error")
+                audit.record("error", phase="server", error=str(exc))
+                yield _sse("error", {
+                    "message": f"{type(exc).__name__}: {exc}",
+                    "traceback": _tb.format_exc(),
+                })
+            finally:
+                audit.finalize()
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"X-Conversation": conversation},
+        )
+
+    # ==================================================================
+    # Scribe conversation (converse + silent knowledge update)
+    # ==================================================================
+
+    @router.post("/scribe/converse")
+    async def scribe_converse(request: Request):
+        import traceback as _tb
+
+        data = await _json_body(request)
+        message = data.get("message", "")
+        conversation = data.get("conversation", "")
+        project = data.get("project", "")
+        task_id = data.get("task_id", "")
+        provider_name = data.get("provider", "")
+        agent_name = data.get("agent", "")
+        if not message:
+            return JSONResponse({"error": "message is required"}, status_code=400)
+
+        if not conversation:
+            default_agent = _default_agent_for_project(project)
+            meta = chat.create(
+                title=message[:80], project=project,
+                task_id=task_id,
+                provider=provider_name or "auto",
+                agent=agent_name or default_agent,
+            )
+            conversation = meta.id
+        else:
+            updates: dict = {}
+            if provider_name:
+                updates["provider"] = provider_name
+            if agent_name:
+                updates["agent"] = agent_name
+            if updates:
+                chat.update_meta(conversation, **updates)
+
+        chat.append(conversation, {"role": "user", "content": message})
+
+        conv_meta = chat.get_meta(conversation) or {}
+        proj = (project or conv_meta.get("project") or "").strip()
+        default_agent = _default_agent_for_project(proj)
+        meta_agent = (conv_meta.get("agent") or "").strip()
+        effective_agent = agent_name or meta_agent or default_agent
+
+        provider_override = None
+        if provider_name and provider_name != "auto":
+            prov = config.get_provider(provider_name)
+            if prov:
+                from dataclasses import asdict as _asdict
+                active = config.active_provider()
+                if prov.name != active.name:
+                    provider_override = _asdict(prov)
+
+        work = {
+            "message": message,
+            "conversation": conversation,
+            "agent": effective_agent,
+            "project": project or proj,
+            "spec_path": chat._msg_path(conversation),
+            "stream_id": conversation,
+            "provider_override": provider_override,
+        }
+
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        audit = _make_audit(
+            "scribe/converse", conversation=conversation,
+            agent=effective_agent, project=project or proj,
+        )
+
+        async def generate():
+            yield _sse("meta", {"conversation": conversation})
+            try:
+                async with lb.acquire() as worker:
+                    audit.record("worker.acquired", phase="server", worker=worker.url)
+                    graph = ConverseScribeGraph.from_work(
+                        worker, work,
+                        agent_store=agent_store,
+                        chat=chat,
+                        config=config,
+                        tracker=tracker,
+                        projects=projects,
+                        tool_registry=tool_registry,
+                        audit=audit,
+                    )
+                    async for event in graph.run(work):
+                        yield _sse(
+                            event.get("event_type", "message"),
+                            event.get("data", {}),
+                        )
+            except TimeoutError:
+                audit.record("error", phase="server", error="worker timeout")
+                yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
+            except Exception as exc:
+                log.exception("scribe/converse stream error")
                 audit.record("error", phase="server", error=str(exc))
                 yield _sse("error", {
                     "message": f"{type(exc).__name__}: {exc}",
@@ -1114,6 +1243,84 @@ def create_router(config: AssaiConfig | None = None,
         if task is None:
             return JSONResponse({"error": "not found"}, status_code=404)
         return _task_json(task)
+
+    # ==================================================================
+    # Knowledge documents
+    # ==================================================================
+
+    @router.get("/knowledge")
+    def list_knowledge(request: Request):
+        subject = request.query_params.get("subject", "")
+        subsubject = request.query_params.get("subsubject", "")
+        if not subject and not subsubject:
+            return knowledge.tree()
+        docs = knowledge.list(subject=subject, subsubject=subsubject)
+        return [d.summary() for d in docs]
+
+    @router.get("/knowledge/search")
+    def search_knowledge(request: Request):
+        query = request.query_params.get("q", "")
+        subject = request.query_params.get("subject", "")
+        subsubject = request.query_params.get("subsubject", "")
+        if not query:
+            return JSONResponse({"error": "q parameter is required"}, status_code=400)
+        docs = knowledge.search(query, subject=subject, subsubject=subsubject)
+        return [d.to_dict() for d in docs]
+
+    @router.post("/knowledge", status_code=201)
+    async def create_knowledge(request: Request):
+        data = await _json_body(request)
+        subject = data.get("subject", "")
+        subsubject = data.get("subsubject", "")
+        title = data.get("title", "")
+        if not subject or not subsubject or not title:
+            return JSONResponse(
+                {"error": "subject, subsubject, and title are required"},
+                status_code=400,
+            )
+        doc = knowledge.create(
+            subject=subject,
+            subsubject=subsubject,
+            title=title,
+            content=data.get("content", ""),
+        )
+        return doc.to_dict()
+
+    @router.get("/knowledge/{subject}/{subsubject}/{title}")
+    def get_knowledge(subject: str, subsubject: str, title: str):
+        doc = knowledge.get(subject, subsubject, title)
+        if doc is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return doc.to_dict()
+
+    @router.patch("/knowledge/{subject}/{subsubject}/{title}")
+    async def update_knowledge(subject: str, subsubject: str, title: str, request: Request):
+        data = await _json_body(request)
+        content = data.get("content", "")
+        if not content:
+            return JSONResponse({"error": "content is required"}, status_code=400)
+        doc = knowledge.update(subject, subsubject, title, content)
+        if doc is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return doc.to_dict()
+
+    @router.post("/knowledge/{subject}/{subsubject}/{title}/append")
+    async def append_knowledge(subject: str, subsubject: str, title: str, request: Request):
+        data = await _json_body(request)
+        content = data.get("content", "")
+        if not content:
+            return JSONResponse({"error": "content is required"}, status_code=400)
+        doc = knowledge.append_content(subject, subsubject, title, content)
+        if doc is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return doc.to_dict()
+
+    @router.post("/knowledge/{subject}/{subsubject}/{title}/delete")
+    async def delete_knowledge(subject: str, subsubject: str, title: str):
+        deleted = knowledge.delete(subject, subsubject, title)
+        if not deleted:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return {"deleted": True}
 
     # ==================================================================
     # Specs

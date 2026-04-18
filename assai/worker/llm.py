@@ -466,7 +466,16 @@ class OpenAICompatibleLLM(LLM):
             stream=True,
             timeout=self.timeout,
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            try:
+                body = resp.json()
+            except Exception:
+                body = resp.text[:2000]
+            log.error(
+                "LLM request failed  status=%s  body=%s",
+                resp.status_code, body,
+            )
+            resp.raise_for_status()
 
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):

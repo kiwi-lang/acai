@@ -32,7 +32,7 @@ def _require_client():
     return client
 
 
-@tool(permissions=("write",))
+@tool(permissions=("read",))
 def create(
     title: str,
     description: str = "",
@@ -70,7 +70,7 @@ def create(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("read",))
 def update(
     task_id: str,
     title: str = "",
@@ -154,7 +154,7 @@ def get(task_id: str) -> str:
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("read",))
 def mark_ready(task_id: str) -> str:
     """Mark a task as ready to be picked up by a worker.
 

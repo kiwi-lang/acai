@@ -1,10 +1,14 @@
 // Type definitions for ASSAI Agent Swarm
 
 export interface AgentMessage {
-    role: 'user' | 'assistant' | 'tool_call' | 'tool_result';
+    role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'phase';
     content: string;
     reasoning?: string;
     name?: string;
+    /** Phase name for role='phase' messages (e.g. "curator", "scribe"). */
+    phase?: string;
+    /** Phase status: "start", "end", "tool_start", "tool_end". */
+    phaseStatus?: string;
     isStreaming?: boolean;
     taskId?: string;
     error?: string;
@@ -168,6 +172,7 @@ export interface ConversationMeta {
     title: string;
     description: string;
     project: string;
+    task_id?: string;
     provider: string;
     agent: string;
     tags: string[];

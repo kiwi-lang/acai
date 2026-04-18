@@ -1,0 +1,288 @@
+{
+  "id": "converse-scribe",
+  "name": "Converse + Knowledge",
+  "description": "Curates knowledge before replying, then updates the knowledge base after.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": {
+        "x": -1468.4538626094272,
+        "y": 2.490026697347332
+      },
+      "data": {
+        "label": "Start"
+      }
+    },
+    {
+      "id": "converse",
+      "type": "agent_call",
+      "position": {
+        "x": -385.99581141537413,
+        "y": -153.21435965248833
+      },
+      "data": {
+        "label": "Converse",
+        "agent": "default"
+      }
+    },
+    {
+      "id": "n_1_mo4ugniq",
+      "type": "agent_call",
+      "position": {
+        "x": -1063.1849939513781,
+        "y": -137.56662349001405
+      },
+      "data": {
+        "label": "Agent Call",
+        "agent": "curator",
+        "stream_mode": "token"
+      }
+    },
+    {
+      "id": "n_5_mo4uhk9u",
+      "type": "tool_loop",
+      "position": {
+        "x": -849.1044898132681,
+        "y": -140.41626032168864
+      },
+      "data": {
+        "label": "Tool Loop"
+      }
+    },
+    {
+      "id": "n_11_mo4uiueu",
+      "type": "append",
+      "position": {
+        "x": -1300.4763616892167,
+        "y": 2.983931823656416
+      },
+      "data": {
+        "label": "Append"
+      }
+    },
+    {
+      "id": "n_15_mo4ujmap",
+      "type": "agent_call",
+      "position": {
+        "x": 102.96291489674246,
+        "y": -155.48641265788245
+      },
+      "data": {
+        "label": "Agent Call",
+        "agent": "scribe"
+      }
+    },
+    {
+      "id": "n_17_mo4ukej5",
+      "type": "tool_loop",
+      "position": {
+        "x": 341.97662442841084,
+        "y": -153.89938430060585
+      },
+      "data": {
+        "label": "Tool Loop"
+      }
+    },
+    {
+      "id": "n_5_mo4w92ud",
+      "type": "parse_knowledge",
+      "position": {
+        "x": -671.1227250591376,
+        "y": -141.8712518150798
+      },
+      "data": {
+        "label": "Parse Knowledge"
+      }
+    },
+    {
+      "id": "n_5_mo4x3s85",
+      "type": "tool_loop",
+      "position": {
+        "x": -126.3176936775561,
+        "y": -160.38136017947014
+      },
+      "data": {
+        "label": "Tool Loop"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "xy-edge__startexec_out-n_11_mo4uiueuexec_in",
+      "source": "start",
+      "target": "n_11_mo4uiueu",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__startdata_conversation-n_11_mo4uiueudata_a",
+      "source": "start",
+      "target": "n_11_mo4uiueu",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_a",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_mo4ugniqdata_stream-n_5_mo4uhk9udata_stream",
+      "source": "n_1_mo4ugniq",
+      "target": "n_5_mo4uhk9u",
+      "sourceHandle": "data_stream",
+      "targetHandle": "data_stream",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_mo4ugniqexec_out-n_5_mo4uhk9uexec_in",
+      "source": "n_1_mo4ugniq",
+      "target": "n_5_mo4uhk9u",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__startdata_message-n_11_mo4uiueudata_b",
+      "source": "start",
+      "target": "n_11_mo4uiueu",
+      "sourceHandle": "data_message",
+      "targetHandle": "data_b",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_11_mo4uiueudata_result-n_1_mo4ugniqdata_context",
+      "source": "n_11_mo4uiueu",
+      "target": "n_1_mo4ugniq",
+      "sourceHandle": "data_result",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_15_mo4ujmapdata_stream-n_17_mo4ukej5data_stream",
+      "source": "n_15_mo4ujmap",
+      "target": "n_17_mo4ukej5",
+      "sourceHandle": "data_stream",
+      "targetHandle": "data_stream",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_15_mo4ujmapexec_out-n_17_mo4ukej5exec_in",
+      "source": "n_15_mo4ujmap",
+      "target": "n_17_mo4ukej5",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_11_mo4uiueuexec_out-n_1_mo4ugniqexec_in",
+      "source": "n_11_mo4uiueu",
+      "target": "n_1_mo4ugniq",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_1_mo4ugniqdata_payload-n_5_mo4uhk9udata_payload",
+      "source": "n_1_mo4ugniq",
+      "target": "n_5_mo4uhk9u",
+      "sourceHandle": "data_payload",
+      "targetHandle": "data_payload",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_15_mo4ujmapdata_payload-n_17_mo4ukej5data_payload",
+      "source": "n_15_mo4ujmap",
+      "target": "n_17_mo4ukej5",
+      "sourceHandle": "data_payload",
+      "targetHandle": "data_payload",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_11_mo4uiueudata_result-conversedata_context",
+      "source": "n_11_mo4uiueu",
+      "target": "converse",
+      "sourceHandle": "data_result",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_11_mo4uiueudata_result-n_15_mo4ujmapdata_context",
+      "source": "n_11_mo4uiueu",
+      "target": "n_15_mo4ujmap",
+      "sourceHandle": "data_result",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_5_mo4w92uddata_knowledge_context-conversedata_knowledge_context",
+      "source": "n_5_mo4w92ud",
+      "target": "converse",
+      "sourceHandle": "data_knowledge_context",
+      "targetHandle": "data_knowledge_context",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_5_mo4uhk9uexec_out-n_5_mo4w92udexec_in",
+      "source": "n_5_mo4uhk9u",
+      "target": "n_5_mo4w92ud",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_5_mo4uhk9udata_text-n_5_mo4w92uddata_text",
+      "source": "n_5_mo4uhk9u",
+      "target": "n_5_mo4w92ud",
+      "sourceHandle": "data_text",
+      "targetHandle": "data_text",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_5_mo4w92udexec_out-converseexec_in",
+      "source": "n_5_mo4w92ud",
+      "target": "converse",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__converseexec_out-n_5_mo4x3s85exec_in",
+      "source": "converse",
+      "target": "n_5_mo4x3s85",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__conversedata_stream-n_5_mo4x3s85data_stream",
+      "source": "converse",
+      "target": "n_5_mo4x3s85",
+      "sourceHandle": "data_stream",
+      "targetHandle": "data_stream",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__conversedata_payload-n_5_mo4x3s85data_payload",
+      "source": "converse",
+      "target": "n_5_mo4x3s85",
+      "sourceHandle": "data_payload",
+      "targetHandle": "data_payload",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_5_mo4x3s85exec_out-n_15_mo4ujmapexec_in",
+      "source": "n_5_mo4x3s85",
+      "target": "n_15_mo4ujmap",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_5_mo4x3s85data_text-n_15_mo4ujmapdata_assistant_response",
+      "source": "n_5_mo4x3s85",
+      "target": "n_15_mo4ujmap",
+      "sourceHandle": "data_text",
+      "targetHandle": "data_assistant_response",
+      "type": "data"
+    }
+  ]
+}

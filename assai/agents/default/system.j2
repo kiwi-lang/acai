@@ -9,6 +9,16 @@ You are working on project **{{ task.project_obj.name }}** ({{ task.project_obj.
 {{ task.project_spec }}
 {% endif %}
 {% endif %}
+{% if knowledge_context %}
+
+## Knowledge Base
+
+The following documents have been retrieved from the knowledge base
+because they are relevant to the current conversation. Use them to
+inform your response.
+
+{{ knowledge_context }}
+{% endif %}
 
 Answer questions, suggest plans, and create tasks when asked.
 {%- endset -%}

@@ -192,6 +192,14 @@ def create_worker_router(
             except Exception as exc:
                 log.exception("[%s] llm/complete failed", task_id)
                 err_msg = str(exc)
+                resp = getattr(exc, "response", None)
+                if resp is not None:
+                    try:
+                        detail = resp.json()
+                    except Exception:
+                        detail = resp.text[:2000] if hasattr(resp, "text") else ""
+                    if detail:
+                        err_msg = f"{err_msg} — {detail}"
                 if not extern_llm and llm_server.process is not None and llm_server.process.poll() is not None:
                     err_msg = f"LLM server crashed during inference. {llm_server.read_log(tail=30)}"
                 yield _sse_event("error", {"task_id": task_id, "error": err_msg})

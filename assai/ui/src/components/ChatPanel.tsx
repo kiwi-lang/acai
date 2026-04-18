@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
-import { converse, uberConverse, thinkConverse, getHistory, listProviders, listAgents, checkInflight, getContextStats, type SSEStream } from '../services/api';
+import { converse, uberConverse, thinkConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, type SSEStream, type GraphDef } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentDef, AgentMessage, Provider } from '../services/types';
 import Markdown from './Markdown';
@@ -222,6 +222,8 @@ const ChatPanel = ({
     const [selectedProvider, setSelectedProvider] = useState(initialProvider);
     const [agents, setAgents] = useState<AgentDef[]>([]);
     const [selectedAgent, setSelectedAgent] = useState(resolvedInitialAgent);
+    const [graphs, setGraphs] = useState<GraphDef[]>([]);
+    const [selectedGraph, setSelectedGraph] = useState('converse');
     const [contextStats, setContextStats] = useState<{ estimated_tokens: number; max_context: number } | null>(null);
     const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
         initialThinkingMode ?? (initialThinking === false ? 'off' : 'native'),
@@ -264,6 +266,7 @@ const ChatPanel = ({
     const onResponseCompleteRef = useRef(onResponseComplete);
     const onRouteRef = useRef(onRoute);
     const onConversationCreatedRef = useRef(onConversationCreated);
+    const handleSendRef = useRef<(text?: string) => void>(undefined);
     onProviderChangeRef.current = onProviderChange;
     onAgentChangeRef.current = onAgentChange;
     onResponseCompleteRef.current = onResponseComplete;
@@ -275,6 +278,7 @@ const ChatPanel = ({
     useEffect(() => {
         listProviders().then(setProviders).catch(() => {});
         listAgents().then(setAgents).catch(() => {});
+        listGraphs().then(setGraphs).catch(() => {});
     }, []);
 
     const closeEventSource = useCallback(() => {
@@ -381,6 +385,36 @@ const ChatPanel = ({
                 name: data.tool_name,
             }]);
         });
+
+        const phaseEvents = [
+            'curator_start', 'curator_end',
+            'curator_tool_start', 'curator_tool_end',
+            'scribe_start', 'scribe_end',
+            'scribe_tool_start', 'scribe_tool_end',
+        ];
+        for (const evt of phaseEvents) {
+            es.addEventListener(evt, (e: MessageEvent) => {
+                const data = JSON.parse(e.data);
+                const [phase, ...rest] = evt.split('_');
+                const status = rest.join('_');
+                const content = status === 'tool_start'
+                    ? `${data.tool_name}(${Object.keys(data.args || {}).join(', ')})`
+                    : status === 'tool_end'
+                        ? data.result_preview || '(done)'
+                        : status === 'start'
+                            ? `${data.agent || phase} starting...`
+                            : data.document_count !== undefined
+                                ? `Done — ${data.document_count} document${data.document_count !== 1 ? 's' : ''} selected`
+                                : data.status || 'done';
+                setMessages(prev => [...prev, {
+                    role: 'phase' as const,
+                    content,
+                    phase,
+                    phaseStatus: status,
+                    name: data.tool_name,
+                }]);
+            });
+        }
 
         es.addEventListener('done', () => {
             setMessages(prev =>
@@ -492,7 +526,7 @@ const ChatPanel = ({
             } else {
                 const r = await converse(pending, convId, project || '', '',
                     initialProviderRef.current, initialAgentRef.current,
-                    think === 'native' ? true : undefined);
+                    think === 'native' ? true : undefined, selectedGraph);
                 if (signal?.cancelled) { r.stream.close(); return; }
                 setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
                 attachListeners(r.stream);
@@ -528,7 +562,14 @@ const ChatPanel = ({
         activeTaskRef.current = null;
         closeEventSource();
 
-        if (!conversationId) return () => { signal.cancelled = true; };
+        if (!conversationId) {
+            if (autoSendRef.current) {
+                const pending = autoSendRef.current;
+                autoSendRef.current = undefined;
+                handleSendRef.current?.(pending);
+            }
+            return () => { signal.cancelled = true; };
+        }
 
         loadConversationRef.current(conversationId, autoSendRef.current, signal);
 
@@ -596,7 +637,7 @@ const ChatPanel = ({
         setIsLoading(true);
         try {
             const resp = await converse(text, targetConvId, project || '', '', selectedProvider, selectedAgent,
-                thinkingMode === 'native' ? true : undefined);
+                thinkingMode === 'native' ? true : undefined, selectedGraph);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -623,7 +664,7 @@ const ChatPanel = ({
         setIsLoading(true);
         try {
             const resp = await converse(text, '', project || '', '', selectedProvider, selectedAgent,
-                thinkingMode === 'native' ? true : undefined);
+                thinkingMode === 'native' ? true : undefined, selectedGraph);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -675,7 +716,7 @@ const ChatPanel = ({
                 attachListeners(resp.stream);
             } else {
                 const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
-                    thinkingMode === 'native' ? true : undefined);
+                    thinkingMode === 'native' ? true : undefined, selectedGraph);
                 setMessages(prev => [
                     ...prev,
                     { role: 'assistant', content: '', isStreaming: true },
@@ -728,7 +769,7 @@ const ChatPanel = ({
                 attachListeners(resp.stream);
             } else {
                 const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
-                    thinkingMode === 'native' ? true : undefined);
+                    thinkingMode === 'native' ? true : undefined, selectedGraph);
                 setMessages(prev => [
                     ...prev,
                     { role: 'assistant', content: '', isStreaming: true },
@@ -741,6 +782,8 @@ const ChatPanel = ({
             setIsLoading(false);
         }
     };
+
+    handleSendRef.current = handleSend;
 
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
@@ -806,6 +849,60 @@ const ChatPanel = ({
 
                             const isToolContinuation = msg.role === 'assistant' && i > 0 &&
                                 ['tool_call', 'tool_result'].includes(messages[i - 1]?.role);
+
+                            if (msg.role === 'phase') {
+                                const isStart = msg.phaseStatus === 'start';
+                                const isEnd = msg.phaseStatus === 'end';
+                                const isTool = msg.phaseStatus?.startsWith('tool');
+                                const phaseName = msg.phase === 'curator' ? 'Curator' : msg.phase === 'scribe' ? 'Scribe' : msg.phase;
+                                const color = msg.phase === 'curator' ? '#667eea' : '#e6a817';
+
+                                if (isStart) {
+                                    return (
+                                        <Box key={i} w="100%" py={1.5} px={compact ? 3 : 4}>
+                                            <HStack maxW={maxW} mx={mx} gap={2}>
+                                                <Box w="6px" h="6px" borderRadius="full" bg={color} flexShrink={0} />
+                                                <Spinner size="xs" color={color} />
+                                                <Text fontSize="xs" fontWeight="semibold" color={color}>
+                                                    {phaseName}
+                                                </Text>
+                                                <Text fontSize="xs" color="var(--text-muted)">{msg.content}</Text>
+                                            </HStack>
+                                        </Box>
+                                    );
+                                }
+
+                                if (isTool) {
+                                    const isToolEnd = msg.phaseStatus === 'tool_end';
+                                    return (
+                                        <Box key={i} w="100%" py={0.5} px={compact ? 3 : 4}>
+                                            <HStack maxW={maxW} mx={mx} gap={2} pl="14px">
+                                                <Box color={color}><ToolIcon /></Box>
+                                                <Text fontSize="xs" color="var(--text-muted)" fontFamily="mono" flex={1} truncate>
+                                                    {msg.content}
+                                                </Text>
+                                                {!isToolEnd && <Spinner size="xs" color={color} />}
+                                            </HStack>
+                                        </Box>
+                                    );
+                                }
+
+                                if (isEnd) {
+                                    return (
+                                        <Box key={i} w="100%" py={1.5} px={compact ? 3 : 4}>
+                                            <HStack maxW={maxW} mx={mx} gap={2}>
+                                                <Box w="6px" h="6px" borderRadius="full" bg={color} flexShrink={0} />
+                                                <Text fontSize="xs" fontWeight="semibold" color={color}>
+                                                    {phaseName}
+                                                </Text>
+                                                <Text fontSize="xs" color="var(--text-muted)">{msg.content}</Text>
+                                            </HStack>
+                                        </Box>
+                                    );
+                                }
+
+                                return null;
+                            }
 
                             if (msg.role === 'tool_call') {
                                 const result = messages.slice(i + 1)
@@ -1000,6 +1097,24 @@ const ChatPanel = ({
                             <option value="emulated" style={{ background: 'var(--option-bg)' }}>Think: Emulated</option>
                         </NativeSelect.Field>
                     </NativeSelect.Root>
+                    {graphs.length > 1 && (
+                        <NativeSelect.Root size="xs" w="auto">
+                            <NativeSelect.Field
+                                value={selectedGraph}
+                                onChange={e => setSelectedGraph(e.target.value)}
+                                bg="var(--bg-input)"
+                                color={selectedGraph === 'converse' ? 'var(--text-tertiary)' : 'var(--accent)'}
+                                borderColor="var(--border-input)"
+                                fontSize="xs" px={2} h={compact ? '24px' : '26px'} borderRadius="md"
+                                title={graphs.find(g => g.kind === selectedGraph)?.description || ''}>
+                                {graphs.map(g => (
+                                    <option key={g.kind} value={g.kind} style={{ background: 'var(--option-bg)' }}>
+                                        {g.label}
+                                    </option>
+                                ))}
+                            </NativeSelect.Field>
+                        </NativeSelect.Root>
+                    )}
                     {contextStats && convIdRef.current && (
                         <ContextRing tokens={contextStats.estimated_tokens} maxTokens={contextStats.max_context} />
                     )}

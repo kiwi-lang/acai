@@ -236,7 +236,6 @@ class TaskGraph:
 
         Extra keyword arguments:
 
-        * ``reasoning`` — injected as a prior-reasoning system message.
         * ``extra_context`` — dict of additional variables passed to the
           Jinja2 template via :func:`hydrate_task`.
         """
@@ -271,20 +270,6 @@ class TaskGraph:
                 tools_description=tools_desc,
                 extra_context=extra_context,
             )
-
-            reasoning = kwargs.get("reasoning", "")
-            if reasoning:
-                msg = {
-                    "role": "system",
-                    "content": (
-                        "## Prior Reasoning\n"
-                        "The following analysis was produced about this task. "
-                        "Use it to inform your response.\n\n"
-                        + reasoning
-                    ),
-                }
-                pos = 1 if messages and messages[0].get("role") == "system" else 0
-                messages.insert(pos, msg)
 
             payload: dict = {
                 "task_id": work.get("task_id", ""),

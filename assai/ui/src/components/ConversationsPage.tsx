@@ -80,7 +80,7 @@ const ConversationsPage = () => {
                 </Text>
                 <IconButton
                     aria-label="New conversation"
-                    onClick={() => navigate('/')}
+                    onClick={() => navigate('/conversations')}
                     variant="ghost" size="xs" color="var(--text-tertiary)"
                     _hover={{ color: 'var(--text-heading)', bg: 'var(--bg-hover)' }}
                 >

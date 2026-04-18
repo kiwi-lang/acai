@@ -10,6 +10,10 @@ Usage::
     assai mcp                # standalone tool server (for sandbox containers)
     assai server             # legacy model-serving server
     assai agent-server       # agent HTTP API server
+    assai knowledge list     # list knowledge documents
+    assai knowledge show ID  # show a knowledge document
+    assai knowledge search Q # search knowledge documents
+    assai knowledge tags     # list all tags
 """
 
 from __future__ import annotations
