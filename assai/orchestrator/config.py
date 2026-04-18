@@ -84,6 +84,39 @@ def defaultfield(name, etype, default=None):
     return field(default_factory=lambda: option(name, etype, default))
 
 
+# ---------------------------------------------------------------------------
+# sandboxfield — dataclass field annotated with backend affinity
+# ---------------------------------------------------------------------------
+
+_ALL_BACKENDS = frozenset({"container", "firecracker", "bubblewrap", "nsjail"})
+_CONTAINER = frozenset({"container"})
+_FIRECRACKER = frozenset({"firecracker"})
+_BUBBLEWRAP = frozenset({"bubblewrap"})
+_NSJAIL = frozenset({"nsjail"})
+
+
+def sandboxfield(default, *, backends: frozenset[str] = _ALL_BACKENDS):
+    """Dataclass field with ``metadata["backends"]`` indicating which sandbox backends use it.
+
+    Usage::
+
+        @dataclass
+        class SandboxConfig:
+            network: bool = sandboxfield(True)                           # all backends
+            image:   str  = sandboxfield("assai-sandbox", backends=_CONTAINER)  # docker/podman only
+
+    Introspection::
+
+        from dataclasses import fields
+        for f in fields(SandboxConfig):
+            print(f.name, f.metadata.get("backends", set()))
+    """
+    md: dict = {"backends": backends}
+    if isinstance(default, list):
+        return field(default_factory=list, metadata=md)
+    return field(default=default, metadata=md)
+
+
 @contextmanager
 def apply_config(overrides: dict):
     """Temporarily overlay config values."""
@@ -140,6 +173,107 @@ def show_config(config_obj, depth=0):
 
 
 # ---------------------------------------------------------------------------
+# SandboxConfig
+# ---------------------------------------------------------------------------
+
+@dataclass
+class SandboxConfig:
+    """System-wide sandbox configuration.
+
+    Each field is annotated with the set of backends that use it
+    (accessible via ``field.metadata["backends"]``).  A single flat
+    config works for all backends — irrelevant fields are ignored.
+
+    Resolving order (for the system-wide default built by
+    :meth:`from_global_config`):
+
+    1. Env var  — ``ASSAI_SANDBOX_<FIELD>``
+    2. YAML     — ``sandbox.<field>``
+    3. Default  — the value passed to ``sandboxfield()``.
+    """
+
+    # -- Common (all backends) ----------------------------------------------
+    type: str = sandboxfield("podman")
+    network: bool = sandboxfield(True)
+    gpu: bool = sandboxfield(False, backends=_CONTAINER)
+    timeout: int = sandboxfield(120)
+    memory_limit: str = sandboxfield("4G", backends=_CONTAINER | _FIRECRACKER | _NSJAIL)
+    writable_paths: list[str] = sandboxfield([], backends=_CONTAINER | _BUBBLEWRAP | _NSJAIL)
+    readonly_paths: list[str] = sandboxfield([], backends=_CONTAINER | _BUBBLEWRAP | _NSJAIL)
+
+    # -- Container (docker / podman) ----------------------------------------
+    image: str = sandboxfield("assai-sandbox", backends=_CONTAINER)
+    runtime: str = sandboxfield("podman", backends=_CONTAINER)
+
+    # -- Firecracker (microVM) ----------------------------------------------
+    kernel: str = sandboxfield("", backends=_FIRECRACKER)
+    rootfs: str = sandboxfield("", backends=_FIRECRACKER)
+    vcpu_count: int = sandboxfield(2, backends=_FIRECRACKER)
+    firecracker_bin: str = sandboxfield("", backends=_FIRECRACKER)
+
+    # -- Bubblewrap ---------------------------------------------------------
+    unshare_user: bool = sandboxfield(True, backends=_BUBBLEWRAP)
+    unshare_pid: bool = sandboxfield(True, backends=_BUBBLEWRAP)
+    unshare_ipc: bool = sandboxfield(True, backends=_BUBBLEWRAP)
+    dev_mode: str = sandboxfield("minimal", backends=_BUBBLEWRAP)
+
+    # -- Nsjail -------------------------------------------------------------
+    nsjail_config: str = sandboxfield("", backends=_NSJAIL)
+    cgroup_pids_max: int = sandboxfield(64, backends=_NSJAIL)
+    rlimit_as: str = sandboxfield("max", backends=_NSJAIL)
+    seccomp_policy: str = sandboxfield("", backends=_NSJAIL)
+
+    # -- System-level -------------------------------------------------------
+    mcp_port: int = sandboxfield(9200)
+
+    # -- Helpers ------------------------------------------------------------
+
+    @classmethod
+    def from_dict(cls, d: dict) -> SandboxConfig:
+        """Create from a dict, silently ignoring unknown keys."""
+        import dataclasses as _dc
+        known = {f.name for f in _dc.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+    @classmethod
+    def from_global_config(cls) -> SandboxConfig:
+        """Build from the global config / env vars.
+
+        Maps each field to ``option("sandbox.<name>", ...)``.
+        """
+        import dataclasses as _dc
+
+        prefix = "sandbox"
+        kwargs: dict = {}
+        base = cls()
+        for f in _dc.fields(cls):
+            base_val = getattr(base, f.name)
+            etype = type(base_val)
+            if etype is list:
+                kwargs[f.name] = base_val
+                continue
+            val = option(f"{prefix}.{f.name}", etype, base_val)
+            kwargs[f.name] = val if val is not None else base_val
+        return cls(**kwargs)
+
+    @classmethod
+    def fields_for_backend(cls, backend: str) -> list[str]:
+        """Return the field names relevant to *backend*.
+
+        Useful for UIs that want to show/hide options dynamically.
+        """
+        import dataclasses as _dc
+        from assai.worker.sandbox.base import _BACKEND_ALIASES
+
+        canonical = _BACKEND_ALIASES.get(backend, backend)
+        return [
+            f.name
+            for f in _dc.fields(cls)
+            if canonical in f.metadata.get("backends", set())
+        ]
+
+
+# ---------------------------------------------------------------------------
 # Config dataclasses
 # ---------------------------------------------------------------------------
 
@@ -157,9 +291,6 @@ class CuratorConfig:
 @dataclass
 class WorkerConfig:
     max_retries: int = defaultfield("worker.max_retries", int, 3)
-    sandbox: str = defaultfield("worker.sandbox", str, "container")
-    sandbox_image: str = defaultfield("worker.sandbox_image", str, "assai-sandbox")
-    sandbox_port: int = defaultfield("worker.sandbox_port", int, 9200)
     timeout: int = defaultfield("worker.timeout", int, 300)
     tasks_dir: str = defaultfield("worker.tasks_dir", str, "tasks")
     host: str = defaultfield("worker.host", str, "0.0.0.0")
@@ -387,6 +518,7 @@ class AssaiConfig:
     scribe: ScribeConfig = field(default_factory=ScribeConfig)
     curator: CuratorConfig = field(default_factory=CuratorConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
+    sandbox: SandboxConfig = field(default_factory=SandboxConfig.from_global_config)
     git: GitConfig = field(default_factory=GitConfig)
     queue: QueueConfig = field(default_factory=QueueConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
@@ -468,6 +600,46 @@ def load_providers(workspace: str) -> list[ProviderConfig]:
     if not isinstance(raw, list):
         return []
     return [ProviderConfig.from_dict(d) for d in raw if isinstance(d, dict)]
+
+
+_PERSISTABLE_SECTIONS = ("sandbox", "worker", "git", "queue", "audit")
+
+
+def config_to_dict(config: AssaiConfig) -> dict:
+    """Serialise the mutable sections of *config* to a plain dict.
+
+    Only sections that are safe for the settings UI are included.
+    """
+    out: dict = {"workspace": config.workspace}
+    for section in _PERSISTABLE_SECTIONS:
+        out[section] = asdict(getattr(config, section))
+    return out
+
+
+def save_config(workspace: str, config: AssaiConfig) -> None:
+    """Persist the mutable config sections to ``workspace/assai.yaml``.
+
+    Follows the same atomic-write pattern as :func:`save_providers`:
+    reads the existing YAML, merges in updated sections, writes back.
+    The ``providers`` key is left untouched.
+    """
+    import yaml
+
+    path = _yaml_path(workspace)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    existing: dict = {}
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            existing = yaml.safe_load(f) or {}
+
+    for section in _PERSISTABLE_SECTIONS:
+        existing[section] = asdict(getattr(config, section))
+
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False)
+    os.replace(tmp, path)
 
 
 def save_providers(workspace: str, providers: list[ProviderConfig]) -> None:

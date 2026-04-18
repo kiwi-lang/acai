@@ -45,7 +45,7 @@ def search(pattern: str, cwd: str = ".", file_glob: str = "", max_results: int =
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("execute",))
+@tool(permissions=("execute",), sandbox=True)
 def run_tests(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     """Run the project test suite.
 
@@ -70,7 +70,7 @@ def run_tests(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     return _run(command, cwd, timeout)
 
 
-@tool(permissions=("execute",))
+@tool(permissions=("execute",), sandbox=True)
 def lint(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     """Run the project linter.
 
@@ -92,7 +92,7 @@ def lint(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     return _run(command, cwd, timeout)
 
 
-@tool(permissions=("execute",))
+@tool(permissions=("execute",), sandbox=True)
 def typecheck(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     """Run the project type checker.
 
@@ -114,7 +114,7 @@ def typecheck(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     return _run(command, cwd, timeout)
 
 
-@tool(permissions=("execute",))
+@tool(permissions=("execute",), sandbox=True)
 def build(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     """Build the project.
 

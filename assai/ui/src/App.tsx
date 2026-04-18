@@ -12,6 +12,7 @@ import ProjectView from './components/ProjectView';
 import AgentsPage from './components/AgentsPage';
 import TasksPage from './components/TasksPage';
 import StatusPage from './components/StatusPage';
+import SettingsPage from './components/SettingsPage';
 import UberChat from './components/UberChat';
 import WorkflowEditor from './components/WorkflowEditor';
 import { ColorModeProvider } from './components/ui/color-mode';
@@ -40,6 +41,7 @@ function App() {
               <Route path="/workflows/:workflowIdParam" element={<WorkflowEditor />} />
               <Route path="/uber" element={<UberChat />} />
               <Route path="/status" element={<StatusPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </Layout>
           </Router>

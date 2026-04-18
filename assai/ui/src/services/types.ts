@@ -178,13 +178,74 @@ export interface ConversationMeta {
 }
 
 export interface SandboxConfig {
+    // Common — all backends
     type: string;
     network: boolean;
-    writable_paths: string[];
-    readonly_paths: string[];
     gpu: boolean;
     timeout: number;
     memory_limit: string;
+    writable_paths: string[];
+    readonly_paths: string[];
+
+    // Container (docker / podman)
+    image: string;
+    runtime: string;
+
+    // Firecracker (microVM)
+    kernel: string;
+    rootfs: string;
+    vcpu_count: number;
+    firecracker_bin: string;
+
+    // Bubblewrap
+    unshare_user: boolean;
+    unshare_pid: boolean;
+    unshare_ipc: boolean;
+    dev_mode: string;
+
+    // Nsjail
+    nsjail_config: string;
+    cgroup_pids_max: number;
+    rlimit_as: string;
+    seccomp_policy: string;
+
+    // System-level
+    mcp_port: number;
+}
+
+export interface WorkerConfig {
+    max_retries: number;
+    timeout: number;
+    tasks_dir: string;
+    host: string;
+    port: number;
+    orchestrator_url: string;
+}
+
+export interface GitConfig {
+    repo_path: string;
+    worktree_dir: string;
+    auto_commit: boolean;
+}
+
+export interface QueueConfig {
+    url: string;
+    poll_interval: number;
+    task_timeout: number;
+}
+
+export interface AuditConfig {
+    enabled: boolean;
+    dir: string;
+}
+
+export interface SystemConfig {
+    workspace: string;
+    sandbox: SandboxConfig;
+    worker: WorkerConfig;
+    git: GitConfig;
+    queue: QueueConfig;
+    audit: AuditConfig;
 }
 
 export interface AgentDef {
@@ -200,7 +261,7 @@ export interface AgentDef {
     context_sources: string[];
     tools: string[];
     tool_permissions: string[];
-    sandbox: SandboxConfig;
+    uses_sandbox: boolean;
     max_iterations: number;
     approval_required: boolean;
     created_at: string;

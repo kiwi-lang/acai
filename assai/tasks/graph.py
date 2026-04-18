@@ -172,6 +172,8 @@ class TaskGraph:
         self.stream_id = stream_id
         self.conversation = conversation
         self._allowed_tools: set[str] | None = None
+        self._last_work: dict | None = None
+        self._agent_uses_sandbox: bool = False
 
     @classmethod
     def from_work(
@@ -241,8 +243,13 @@ class TaskGraph:
         from assai.orchestrator.agent_store import hydrate_task, resolve_task
 
         with self.audit.span("prepare", phase="prepare", agent=agent_name):
+            self._last_work = work
             agent_def = self.agent(agent_name) or self.agent("default")
             tool_defs, tools_desc = self._resolve_tools(agent_def)
+
+            self._agent_uses_sandbox = bool(
+                agent_def and agent_def.uses_sandbox
+            )
 
             task_proxy = _TaskProxy(
                 id=work.get("task_id", ""),
@@ -402,7 +409,13 @@ class TaskGraph:
     # ------------------------------------------------------------------
 
     async def dispatch_tool(self, tool_name: str, args: dict) -> str:
-        """Dispatch a tool call to the worker and return the result text."""
+        """Dispatch a tool call to the worker and return the result text.
+
+        The worker handles sandbox proxying internally — the
+        orchestrator always sends every tool call to the same worker
+        endpoint.  Sandbox configuration is passed inside the
+        ``context`` dict so the worker can start a sandbox lazily.
+        """
         if self._allowed_tools is not None and tool_name not in self._allowed_tools:
             log.warning("blocked disallowed tool call: %s", tool_name)
             return (
@@ -410,12 +423,17 @@ class TaskGraph:
                 "Check the agent's tool namespaces and permissions."
             )
         from assai.orchestrator.dispatcher import dispatch_tool
+
         base_url = self.worker.url.rsplit("/worker", 1)[0]
         ctx: dict = {
             "conversation": self.conversation,
             "orchestrator_url": self.config.worker.orchestrator_url,
         }
+        if self._agent_uses_sandbox:
+            ctx["uses_sandbox"] = True
         result = await dispatch_tool(base_url, tool_name, args, context=ctx)
+        if result.error:
+            return f"[Tool error] {result.error}"
         return result.text or ""
 
     # ------------------------------------------------------------------

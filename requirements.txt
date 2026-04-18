@@ -21,3 +21,4 @@ torchvision
 torch==2.10+cu130
 vllm==0.18.1+cu130
 websocket-client
+jinja2

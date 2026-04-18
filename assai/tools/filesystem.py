@@ -37,7 +37,7 @@ def read_file(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), sandbox=True)
 def edit_file(
     path: str,
     old_string: str,
@@ -73,7 +73,7 @@ def edit_file(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), sandbox=True)
 def write_file(path: str, content: str, encoding: str = "utf-8") -> str:
     """Write content to a file, creating parent directories as needed.
 
@@ -119,7 +119,7 @@ def list_directory(path: str = ".", recursive: bool = False) -> str:
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), sandbox=True)
 def make_directory(path: str) -> str:
     """Create a directory (and parents) if it does not exist.
 
@@ -133,7 +133,7 @@ def make_directory(path: str) -> str:
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), sandbox=True)
 def delete_file(path: str) -> str:
     """Delete a file.
 

@@ -1235,6 +1235,34 @@ def create_router(config: AssaiConfig | None = None,
         return _provider_json(prov, name)
 
     # ==================================================================
+    # System config
+    # ==================================================================
+
+    @router.get("/config")
+    def get_config():
+        from assai.orchestrator.config import config_to_dict
+        return config_to_dict(config)
+
+    @router.patch("/config")
+    async def patch_config(request: Request):
+        from dataclasses import fields as dc_fields
+        from assai.orchestrator.config import config_to_dict, save_config
+
+        data = await _json_body(request)
+        for section_name in ("sandbox", "worker", "git", "queue", "audit"):
+            patch = data.get(section_name)
+            if not isinstance(patch, dict):
+                continue
+            obj = getattr(config, section_name)
+            known = {f.name for f in dc_fields(type(obj))}
+            for k, v in patch.items():
+                if k in known:
+                    setattr(obj, k, v)
+
+        save_config(config.workspace, config)
+        return config_to_dict(config)
+
+    # ==================================================================
     # Status
     # ==================================================================
 
@@ -1389,14 +1417,13 @@ def create_router(config: AssaiConfig | None = None,
         updatable = (
             "description", "role", "avatar", "provider", "output_format",
             "model_overrides", "system_template", "context_sources",
-            "tools", "sandbox", "max_iterations", "approval_required", "tags",
+            "tools", "uses_sandbox", "max_iterations", "approval_required", "tags",
         )
         for key in updatable:
             if key in data:
                 val = data[key]
-                if key == "sandbox" and isinstance(val, dict):
-                    from assai.orchestrator.agent_store import SandboxConfig
-                    val = SandboxConfig(**val)
+                if key == "uses_sandbox":
+                    val = bool(val)
                 if key == "max_iterations":
                     val = int(val)
                 if key == "approval_required":

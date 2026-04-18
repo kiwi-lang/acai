@@ -9,7 +9,7 @@ from typing import Optional
 from assai.orchestrator.tools import tool
 
 
-@tool(permissions=("execute",))
+@tool(permissions=("execute",), sandbox=True)
 def run(command: str, cwd: Optional[str] = None, timeout: int = 300) -> str:
     """Execute a shell command and return its output.
 

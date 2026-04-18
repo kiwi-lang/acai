@@ -60,6 +60,7 @@ def tool(
     gpu: bool = False,
     name: str | None = None,
     permissions: tuple[str, ...] | list[str] = ("read",),
+    sandbox: bool = False,
 ):
     """Mark a function with tool constraints.
 
@@ -71,11 +72,14 @@ def tool(
         read    — inspects state without side effects
         write   — creates, modifies or deletes persistent state
         execute — runs arbitrary commands / subprocesses
+
+    When ``sandbox=True`` the tool must run inside an isolated sandbox
+    when the agent has ``uses_sandbox`` enabled.
     """
     perms = tuple(p for p in permissions if p in VALID_PERMISSIONS) or ("read",)
 
     def decorator(fn: Callable) -> Callable:
-        fn._tool_meta = {"gpu": gpu, "name": name, "permissions": perms}
+        fn._tool_meta = {"gpu": gpu, "name": name, "permissions": perms, "sandbox": sandbox}
         return fn
     return decorator
 
@@ -153,6 +157,7 @@ class ToolDef:
     fn: Callable
     gpu: bool = False
     permissions: tuple[str, ...] = ("read",)
+    sandbox: bool = False
 
 
 def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
@@ -161,6 +166,7 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
     tool_name = meta.get("name") or fn.__name__
     gpu = meta.get("gpu", False)
     permissions = tuple(meta.get("permissions", ("read",)))
+    sandbox_required = meta.get("sandbox", False)
     qualified = f"{namespace}.{tool_name}"
 
     hints = get_type_hints(fn)
@@ -203,6 +209,7 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
         fn=fn,
         gpu=gpu,
         permissions=permissions,
+        sandbox=sandbox_required,
     )
 
 
@@ -265,6 +272,11 @@ class ToolRegistry:
     def tools_in(self, namespace: str) -> list[ToolDef]:
         return [self._tools[qn] for qn in self._namespaces.get(namespace, [])]
 
+    def is_sandboxed(self, tool_name: str) -> bool:
+        """Return ``True`` if *tool_name* is annotated with ``sandbox=True``."""
+        td = self._tools.get(tool_name)
+        return td is not None and td.sandbox
+
     def all_tools(self) -> list[ToolDef]:
         return list(self._tools.values())
 
@@ -326,6 +338,7 @@ class ToolRegistry:
         self,
         namespaces: list[str] | None = None,
         url_prefix: str = "/tools",
+        sandbox_proxy: "SandboxProxy | None" = None,
     ) -> APIRouter:
         """Create a router that exposes each tool as a POST endpoint.
 
@@ -334,6 +347,14 @@ class ToolRegistry:
             {"tool": "namespace.function_name", "args": { … }}
 
         ``GET <url_prefix>/list`` returns the MCP definitions.
+
+        Parameters
+        ----------
+        sandbox_proxy:
+            Optional :class:`SandboxProxy` that intercepts calls to
+            tools annotated with ``sandbox=True`` and forwards them
+            to the sandbox endpoint.  When ``None``, all tools run
+            in-process.
         """
         rt = APIRouter(prefix=url_prefix, tags=["tools"])
         registry = self
@@ -364,11 +385,25 @@ class ToolRegistry:
             if namespaces is not None and td.namespace not in namespaces:
                 return JSONResponse({"error": f"tool not exposed: {tool_name}"}, status_code=403)
 
+            # If the tool requires sandboxing and the agent has it enabled,
+            # proxy the call (starting the sandbox lazily if needed).
+            if sandbox_proxy is not None and sandbox_proxy.should_proxy(tool_name, ctx_data):
+                try:
+                    return await sandbox_proxy.proxy_call(tool_name, args, ctx_data)
+                except Exception as exc:
+                    log.error("sandbox proxy failed for %s: %s", tool_name, exc)
+                    def _sse_err(event: str, data: dict) -> str:
+                        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+                    async def _error_stream():
+                        yield _sse_err("error", {"tool": tool_name, "error": str(exc)})
+                        yield _sse_err("done", {})
+                    return StreamingResponse(_error_stream(), media_type="text/event-stream")
+
             ctx = None
             if ctx_data and isinstance(ctx_data, dict):
                 orch_url = ctx_data.pop("orchestrator_url", "")
                 client = OrchestratorClient(orch_url) if orch_url else None
-                ctx = WorkerContext(client=client, **ctx_data)
+                ctx = WorkerContext.from_work(ctx_data, client=client)
 
             import asyncio
 

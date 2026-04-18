@@ -1,12 +1,12 @@
-# assai-sandbox — lightweight container for running agent tools.
+# assai-sandbox — generic container for running agent tools in isolation.
 #
-# Build:
-#   podman build -t assai-sandbox -f Containerfile .
+# Build (auto-built on first sandbox use if missing):
+#   docker build -t assai-sandbox -f Containerfile .
+#   podman build -t localhost/assai-sandbox -f Containerfile .
 #
-# For project-specific images:
-#   FROM assai-sandbox
-#   COPY requirements.txt /tmp/
-#   RUN pip install --no-cache-dir -r /tmp/requirements.txt
+# The agent sets up whatever project it needs at runtime via tool
+# calls (pip install, git clone, etc.) — do NOT bake project-specific
+# dependencies here.
 
 FROM python:3.12-slim
 
@@ -14,21 +14,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         build-essential \
         curl \
-        nodejs \
-        npm \
     && rm -rf /var/lib/apt/lists/*
 
-RUN git config --global user.email "assai-agent@localhost" \
-    && git config --global user.name "assai-agent"
+# git identity is configured at runtime per-agent by the sandbox manager
+# so commits are attributable to the specific agent that produced them.
 
 WORKDIR /opt/assai
 COPY setup.py README.md ./
 COPY assai/ assai/
 
 RUN pip install --no-cache-dir \
-        flask \
+        fastapi \
+        "uvicorn[standard]" \
         requests \
         pyyaml \
+        jinja2 \
         argklass \
         importlib_resources \
     && pip install --no-cache-dir -e . --no-deps

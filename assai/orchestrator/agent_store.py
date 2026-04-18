@@ -35,17 +35,6 @@ _PACKAGE_AGENTS_DIR = str(Path(__file__).resolve().parent.parent / "agents")
 # ------------------------------------------------------------------
 
 @dataclass
-class SandboxConfig:
-    type: str = "none"
-    network: bool = True
-    writable_paths: list[str] = field(default_factory=list)
-    readonly_paths: list[str] = field(default_factory=list)
-    gpu: bool = False
-    timeout: int = 120
-    memory_limit: str = "4G"
-
-
-@dataclass
 class AgentDef:
     id: str = ""
     name: str = ""
@@ -59,7 +48,7 @@ class AgentDef:
     context_sources: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
     tool_permissions: list[str] = field(default_factory=lambda: ["read"])
-    sandbox: SandboxConfig = field(default_factory=SandboxConfig)
+    uses_sandbox: bool = False
     max_iterations: int = 20
     approval_required: bool = False
     compressor: str = "compressor"
@@ -72,8 +61,9 @@ class AgentDef:
             self.id = uuid.uuid4().hex[:12]
         if not self.created_at:
             self.created_at = datetime.now(timezone.utc).isoformat()
-        if isinstance(self.sandbox, dict):
-            self.sandbox = SandboxConfig(**self.sandbox)
+        # Migrate legacy per-agent sandbox dicts to boolean flag
+        if isinstance(self.uses_sandbox, dict):
+            self.uses_sandbox = self.uses_sandbox.get("type", "none") != "none"
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -84,8 +74,13 @@ class AgentDef:
     def from_dict(cls, d: dict) -> AgentDef:
         d = dict(d)
         d.pop("builtin", None)
-        if "sandbox" in d and isinstance(d["sandbox"], dict):
-            d["sandbox"] = SandboxConfig(**d["sandbox"])
+        # Migrate legacy "sandbox" dict to "uses_sandbox" bool
+        if "sandbox" in d and "uses_sandbox" not in d:
+            sb = d.pop("sandbox")
+            if isinstance(sb, dict):
+                d["uses_sandbox"] = sb.get("type", "none") != "none"
+            elif isinstance(sb, bool):
+                d["uses_sandbox"] = sb
         return cls(**d)
 
 

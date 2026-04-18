@@ -1,4 +1,4 @@
-import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, Task, Worktree } from './types';
+import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, SystemConfig, Task, Worktree } from './types';
 
 const API_BASE = '/api/agent';
 
@@ -521,4 +521,16 @@ export async function getContextStats(convId: string): Promise<{ estimated_token
 // Audit trail
 export async function getAudit(auditId: string): Promise<any> {
     return request(`/audit/${auditId}`);
+}
+
+// System config
+export async function getConfig(): Promise<SystemConfig> {
+    return request<SystemConfig>('/config');
+}
+
+export async function updateConfig(patch: Record<string, any>): Promise<SystemConfig> {
+    return request<SystemConfig>('/config', {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+    });
 }

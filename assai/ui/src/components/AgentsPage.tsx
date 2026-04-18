@@ -9,10 +9,9 @@ import {
     listToolNamespaces,
 } from '../services/api';
 import type { ToolNamespace } from '../services/api';
-import type { AgentDef, Provider, SandboxConfig } from '../services/types';
+import type { AgentDef, Provider } from '../services/types';
 
 const ROLES = ['worker', 'curator', 'manager'];
-const SANDBOX_TYPES = ['none', 'docker', 'bubblewrap', 'nsjail'];
 
 const DEFAULT_TEMPLATE = `{%- set system_prompt -%}
 You are {{ agent.name }}{% if agent.description %}, {{ agent.description }}{% endif %}.
@@ -61,18 +60,6 @@ const EditIcon = () => (
     </svg>
 );
 
-const ChevronDown = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polyline points="6 9 12 15 18 9" />
-    </svg>
-);
-
-const ChevronUp = () => (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polyline points="18 15 12 9 6 15" />
-    </svg>
-);
-
 const ResetIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <polyline points="1 4 1 10 7 10" />
@@ -99,13 +86,7 @@ interface AgentFormData {
     max_iterations: string;
     approval_required: boolean;
     tags: string;
-    sandbox_type: string;
-    sandbox_network: boolean;
-    sandbox_gpu: boolean;
-    sandbox_timeout: string;
-    sandbox_memory_limit: string;
-    sandbox_writable_paths: string;
-    sandbox_readonly_paths: string;
+    uses_sandbox: boolean;
 }
 
 const emptyForm: AgentFormData = {
@@ -115,9 +96,7 @@ const emptyForm: AgentFormData = {
     tools: '', tool_permissions_read: true, tool_permissions_write: false, tool_permissions_execute: false,
     context_sources: '', max_iterations: '20',
     approval_required: false, tags: '',
-    sandbox_type: 'none', sandbox_network: true, sandbox_gpu: false,
-    sandbox_timeout: '120', sandbox_memory_limit: '4G',
-    sandbox_writable_paths: '', sandbox_readonly_paths: '',
+    uses_sandbox: false,
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -136,7 +115,6 @@ const AgentsPage = () => {
     const [form, setForm] = useState<AgentFormData>(emptyForm);
     const [formError, setFormError] = useState('');
     const [busy, setBusy] = useState(false);
-    const [showSandbox, setShowSandbox] = useState(false);
     const [templateContent, setTemplateContent] = useState('');
     const [templateDirty, setTemplateDirty] = useState(false);
     const [savingTemplate, setSavingTemplate] = useState(false);
@@ -159,16 +137,6 @@ const AgentsPage = () => {
         const mt = parseInt(f.max_tokens);
         if (!isNaN(mt)) model_overrides.max_tokens = mt;
 
-        const sandbox: SandboxConfig = {
-            type: f.sandbox_type,
-            network: f.sandbox_network,
-            gpu: f.sandbox_gpu,
-            timeout: parseInt(f.sandbox_timeout) || 120,
-            memory_limit: f.sandbox_memory_limit || '4G',
-            writable_paths: f.sandbox_writable_paths ? f.sandbox_writable_paths.split(',').map(s => s.trim()).filter(Boolean) : [],
-            readonly_paths: f.sandbox_readonly_paths ? f.sandbox_readonly_paths.split(',').map(s => s.trim()).filter(Boolean) : [],
-        };
-
         return {
             name: f.name.trim(),
             description: f.description,
@@ -187,7 +155,7 @@ const AgentsPage = () => {
             max_iterations: parseInt(f.max_iterations) || 20,
             approval_required: f.approval_required,
             tags: f.tags ? f.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
-            sandbox,
+            uses_sandbox: f.uses_sandbox,
         };
     };
 
@@ -196,7 +164,6 @@ const AgentsPage = () => {
         setEditingName(null);
         setFormError('');
         setShowForm(true);
-        setShowSandbox(false);
         setTemplateContent(DEFAULT_TEMPLATE);
         setTemplateDirty(false);
     };
@@ -219,18 +186,11 @@ const AgentsPage = () => {
             max_iterations: String(a.max_iterations),
             approval_required: a.approval_required,
             tags: a.tags.join(', '),
-            sandbox_type: a.sandbox?.type ?? 'none',
-            sandbox_network: a.sandbox?.network ?? true,
-            sandbox_gpu: a.sandbox?.gpu ?? false,
-            sandbox_timeout: String(a.sandbox?.timeout ?? 120),
-            sandbox_memory_limit: a.sandbox?.memory_limit ?? '4G',
-            sandbox_writable_paths: (a.sandbox?.writable_paths ?? []).join(', '),
-            sandbox_readonly_paths: (a.sandbox?.readonly_paths ?? []).join(', '),
+            uses_sandbox: a.uses_sandbox ?? false,
         });
         setEditingName(a.name);
         setFormError('');
         setShowForm(true);
-        setShowSandbox(false);
 
         try {
             const { content } = await getAgentTemplate(a.name);
@@ -246,7 +206,7 @@ const AgentsPage = () => {
         setBusy(true);
         setFormError('');
         try {
-            const payload = formToPayload(form);
+            const payload = formToPayload(form) as Partial<AgentDef>;
             if (editingName) {
                 await updateAgent(editingName, payload);
                 if (templateDirty) {
@@ -254,7 +214,7 @@ const AgentsPage = () => {
                 }
             } else {
                 await createAgent(payload);
-                const slug = payload.name.replace(/\s+/g, '-').toLowerCase();
+                const slug = (payload.name ?? '').replace(/\s+/g, '-').toLowerCase();
                 await updateAgentTemplate(slug, templateContent);
             }
             setShowForm(false);
@@ -396,10 +356,10 @@ const AgentsPage = () => {
                                         {a.approval_required ? 'Required' : 'No'}
                                     </Text>
                                 </VStack>
-                                {a.sandbox?.type && a.sandbox.type !== 'none' && (
+                                {a.uses_sandbox && (
                                     <VStack align="flex-start" gap={0}>
                                         <Text fontSize="xs" color="var(--text-muted)">Sandbox</Text>
-                                        <Text fontSize="sm" color="var(--text-primary)">{a.sandbox.type}</Text>
+                                        <Text fontSize="sm" color="var(--text-primary)">Enabled</Text>
                                     </VStack>
                                 )}
                             </HStack>
@@ -698,118 +658,28 @@ const AgentsPage = () => {
                                 </Box>
                             </HStack>
 
-                            {/* Sandbox (collapsible) */}
-                            <Box>
-                                <HStack
+                            {/* Sandbox toggle */}
+                            <HStack gap={2}>
+                                <Box
                                     as="button"
-                                    gap={1}
+                                    px={3} py={1}
+                                    borderRadius="md"
+                                    fontSize="xs"
+                                    fontWeight="medium"
+                                    border="1px solid"
+                                    borderColor={form.uses_sandbox ? 'var(--accent)' : 'var(--border-primary)'}
+                                    bg={form.uses_sandbox ? 'var(--accent-subtle)' : 'transparent'}
+                                    color={form.uses_sandbox ? 'var(--accent)' : 'var(--text-tertiary)'}
                                     cursor="pointer"
-                                    onClick={() => setShowSandbox(!showSandbox)}
-                                    color="var(--text-tertiary)"
-                                    _hover={{ color: 'var(--text-primary)' }}
+                                    onClick={() => setField('uses_sandbox', !form.uses_sandbox)}
+                                    _hover={{ borderColor: 'var(--accent)' }}
                                 >
-                                    <Text fontSize="xs" fontWeight="medium">Sandbox Settings</Text>
-                                    {showSandbox ? <ChevronUp /> : <ChevronDown />}
-                                </HStack>
-
-                                {showSandbox && (
-                                    <Box mt={2} p={3} bg="var(--bg-card)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
-                                        <VStack gap={2} align="stretch">
-                                            <HStack gap={3}>
-                                                <Box flex={1}>
-                                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Type</Text>
-                                                    <NativeSelect.Root size="sm">
-                                                        <NativeSelect.Field
-                                                            value={form.sandbox_type}
-                                                            onChange={e => setField('sandbox_type', e.target.value)}
-                                                            bg="var(--bg-input)" color="var(--text-primary)"
-                                                            borderColor="var(--border-input)"
-                                                        >
-                                                            {SANDBOX_TYPES.map(t => (
-                                                                <option key={t} value={t} style={{ background: 'var(--option-bg)' }}>{t}</option>
-                                                            ))}
-                                                        </NativeSelect.Field>
-                                                    </NativeSelect.Root>
-                                                </Box>
-                                                <Box flex={1}>
-                                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Timeout (s)</Text>
-                                                    <Input
-                                                        size="sm" type="number" placeholder="120"
-                                                        value={form.sandbox_timeout}
-                                                        onChange={e => setField('sandbox_timeout', e.target.value)}
-                                                        bg="var(--bg-input)" color="var(--text-primary)"
-                                                        borderColor="var(--border-input)"
-                                                    />
-                                                </Box>
-                                                <Box flex={1}>
-                                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>Memory</Text>
-                                                    <Input
-                                                        size="sm" placeholder="4G"
-                                                        value={form.sandbox_memory_limit}
-                                                        onChange={e => setField('sandbox_memory_limit', e.target.value)}
-                                                        bg="var(--bg-input)" color="var(--text-primary)"
-                                                        borderColor="var(--border-input)"
-                                                    />
-                                                </Box>
-                                            </HStack>
-                                            <HStack gap={2}>
-                                                <Box
-                                                    as="button"
-                                                    px={3} py={1}
-                                                    borderRadius="md"
-                                                    fontSize="xs"
-                                                    fontWeight="medium"
-                                                    border="1px solid"
-                                                    borderColor={form.sandbox_network ? 'var(--accent)' : 'var(--border-primary)'}
-                                                    bg={form.sandbox_network ? 'var(--accent-subtle)' : 'transparent'}
-                                                    color={form.sandbox_network ? 'var(--accent)' : 'var(--text-tertiary)'}
-                                                    cursor="pointer"
-                                                    onClick={() => setField('sandbox_network', !form.sandbox_network)}
-                                                    _hover={{ borderColor: 'var(--accent)' }}
-                                                >
-                                                    {form.sandbox_network ? 'Network: ON' : 'Network: OFF'}
-                                                </Box>
-                                                <Box
-                                                    as="button"
-                                                    px={3} py={1}
-                                                    borderRadius="md"
-                                                    fontSize="xs"
-                                                    fontWeight="medium"
-                                                    border="1px solid"
-                                                    borderColor={form.sandbox_gpu ? 'var(--accent)' : 'var(--border-primary)'}
-                                                    bg={form.sandbox_gpu ? 'var(--accent-subtle)' : 'transparent'}
-                                                    color={form.sandbox_gpu ? 'var(--accent)' : 'var(--text-tertiary)'}
-                                                    cursor="pointer"
-                                                    onClick={() => setField('sandbox_gpu', !form.sandbox_gpu)}
-                                                    _hover={{ borderColor: 'var(--accent)' }}
-                                                >
-                                                    {form.sandbox_gpu ? 'GPU: ON' : 'GPU: OFF'}
-                                                </Box>
-                                            </HStack>
-                                            <Box>
-                                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Writable paths (comma-separated)</Text>
-                                                <Input
-                                                    size="sm" placeholder="/workspace/.worktrees"
-                                                    value={form.sandbox_writable_paths}
-                                                    onChange={e => setField('sandbox_writable_paths', e.target.value)}
-                                                    bg="var(--bg-input)" color="var(--text-primary)"
-                                                    borderColor="var(--border-input)"
-                                                />
-                                            </Box>
-                                            <Box>
-                                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Read-only paths (comma-separated)</Text>
-                                                <Input
-                                                    size="sm" placeholder="/workspace/docs"
-                                                    value={form.sandbox_readonly_paths}
-                                                    onChange={e => setField('sandbox_readonly_paths', e.target.value)}
-                                                    bg="var(--bg-input)" color="var(--text-primary)"
-                                                    borderColor="var(--border-input)"
-                                                />
-                                            </Box>
-                                        </VStack>
-                                    </Box>
-                                )}
-                            </Box>
+                                    {form.uses_sandbox ? 'Sandbox: Enabled' : 'Sandbox: Disabled'}
+                                </Box>
+                                <Text fontSize="2xs" color="var(--text-muted)">
+                                    Sandbox backend is configured in Settings
+                                </Text>
+                            </HStack>
 
                             {/* System template */}
                             <Box>

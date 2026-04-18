@@ -4,13 +4,15 @@ The worker exposes:
 
 * ``POST /llm/complete`` — call the LLM and stream results as SSE.
 * ``GET /worker/logs`` — read latest vLLM server log.
-* Tool registry blueprint at ``/tools`` (``GET /tools/list``, ``POST /tools/call``).
+* Tool registry at ``/tools`` (``GET /tools/list``, ``POST /tools/call``).
 * ``GET /worker/status`` — capabilities + LLM server status.
+* ``GET /worker/sandbox/status`` — check sandbox state.
 * Telemetry via SocketIO (``request_telemetry`` → ``telemetry``).
 
-On startup the worker registers itself with the orchestrator and
-maintains a WebSocket connection for periodic health telemetry.
-The orchestrator pushes work to the worker via HTTP — no polling.
+When a tool call's context carries ``"uses_sandbox": true``, the
+worker starts a sandbox lazily (using the system-wide
+``SandboxConfig``) and proxies tools annotated with
+``sandbox=True`` to the sandbox's ``assai mcp`` endpoint.
 """
 
 from __future__ import annotations
@@ -59,7 +61,7 @@ def create_worker_router(
     config: AssaiConfig,
     prefix: str = "/worker",
     extern_llm: bool = False,
-) -> tuple[APIRouter, LLMServer, ToolRegistry]:
+) -> tuple[APIRouter, LLMServer, ToolRegistry, "SandboxProxy"]:
     """Build the worker APIRouter.
 
     The ``/llm/complete`` endpoint streams results as SSE.
@@ -68,13 +70,17 @@ def create_worker_router(
     LLM server — it assumes an externally managed instance is running
     at the configured endpoint.
 
-    Returns ``(router, llm_server, registry)``.
+    Returns ``(router, llm_server, registry, sandbox_proxy)``.
     """
+    from assai.worker.sandbox_proxy import SandboxProxy
+
     router = APIRouter(prefix=prefix, tags=["worker"])
 
     provider = config.local_provider() or config.active_provider()
     llm_server = LLMServer(provider, workspace=config.workspace)
     registry = discover_tools()
+    sandbox_proxy = SandboxProxy(config.sandbox, sandbox_predicate=registry.is_sandboxed)
+
     from assai.tools.meta import _configure as configure_meta_tools
 
     configure_meta_tools(registry)
@@ -250,7 +256,18 @@ def create_worker_router(
             "log_path": llm_server.latest_log_path(),
         }
 
-    return router, llm_server, registry
+    # ------------------------------------------------------------------
+    # GET /worker/sandbox/status
+    # ------------------------------------------------------------------
+
+    @router.get("/sandbox/status")
+    def sandbox_status():
+        return {
+            "running": sandbox_proxy.running,
+            "endpoint": sandbox_proxy.endpoint,
+        }
+
+    return router, llm_server, registry, sandbox_proxy
 
 
 # Keep the old name as an alias for backward compat with CLI imports
@@ -414,10 +431,10 @@ def create_worker_app(config: AssaiConfig, socketio: SocketIO | None = None,
     else:
         socketio.init_app(app)
 
-    router, llm_server, registry = create_worker_router(
+    router, llm_server, registry, sandbox_proxy = create_worker_router(
         config, extern_llm=extern_llm,
     )
-    tool_router = registry.router(url_prefix="/tools")
+    tool_router = registry.router(url_prefix="/tools", sandbox_proxy=sandbox_proxy)
     app.include_router(router)
     app.include_router(tool_router)
 

@@ -17,11 +17,14 @@ import pkgutil
 import importlib
 import importlib_resources
 
-import torch
-from flask import request
-import torchcompat.core as accelerator
-from PIL import Image
-from cantilever.core.statstream import StatStream
+try:
+    import torch
+    import torchcompat.core as accelerator
+    from PIL import Image
+    from cantilever.core.statstream import StatStream
+    _HAS_HEAVY_DEPS = True
+except ImportError:
+    _HAS_HEAVY_DEPS = False
 
 
 class ModelModule:
@@ -145,6 +148,9 @@ def system_monitor():
     if _observe_util is not None:
         return _observe_util
 
+    if not _HAS_HEAVY_DEPS:
+        raise RuntimeError("system_monitor requires torch/voir (not installed)")
+
     import multiprocessing as mp
 
     from voir.instruments.cpu import cpu_monitor
@@ -168,6 +174,10 @@ def system_monitor():
     return observe
 
 
+def _make_stat():
+    return StatStream(drop_first_obs=0) if _HAS_HEAVY_DEPS else None
+
+
 @dataclass
 class ModelCacheEntry:
     model: any
@@ -178,9 +188,9 @@ class ModelCacheEntry:
     model_info: any = None
     last_inference_time: float = 0
 
-    load_time_stat: StatStream = field(default_factory=lambda: StatStream(drop_first_obs=0))
-    mem_stat: StatStream = field(default_factory=lambda: StatStream(drop_first_obs=0))
-    inference_stat: StatStream = field(default_factory=lambda: StatStream(drop_first_obs=0))
+    load_time_stat: any = field(default_factory=_make_stat)
+    mem_stat: any = field(default_factory=_make_stat)
+    inference_stat: any = field(default_factory=_make_stat)
 
     def load_state_dict(self, state):
         self.model_info = state["model_info"]
@@ -304,7 +314,8 @@ class ModelCache:
     def remove(self, item):
         self.cache.pop(item)
         gc.collect()
-        torch.cuda.empty_cache()
+        if _HAS_HEAVY_DEPS:
+            torch.cuda.empty_cache()
 
     def __json__(self):
         return {
@@ -317,7 +328,7 @@ class ModelCache:
         }
 
 
-live_models = ModelCache()
+live_models = ModelCache() if _HAS_HEAVY_DEPS else None
 
 
 def cached(*keys, **model_info):

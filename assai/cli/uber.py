@@ -67,11 +67,11 @@ def create_app():
         app, config, prefix=prefix, load_balancer=lb,
     )
 
-    router, llm_server, registry = create_worker_router(
+    router, llm_server, registry, sandbox_proxy = create_worker_router(
         config, prefix="/worker",
         extern_llm=extern_llm,
     )
-    tool_router = registry.router(url_prefix="/tools")
+    tool_router = registry.router(url_prefix="/tools", sandbox_proxy=sandbox_proxy)
     app.include_router(router)
     app.include_router(tool_router)
 
