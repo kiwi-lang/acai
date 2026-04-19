@@ -39,18 +39,19 @@ import {
   saveWorkflow,
   updateWorkflow,
   deleteWorkflow,
-  runWorkflow,
   saveBuiltinWorkflow,
   getNodeTypes,
   listConversations,
   listAgents,
   getAgentInputs,
-  getAudit,
+  validateWorkflow,
   type WorkflowSummary,
   type WorkflowSpec,
   type NodeTypeDef,
   type PinDef,
+  type ValidationError,
 } from '../services/api';
+import ChatPanel from './ChatPanel';
 
 /* ================================================================== */
 /*  Palette — Blender-inspired industrial colors                       */
@@ -93,6 +94,37 @@ function getPinDefs(nodeType: string): PinDef[] {
   return _nodeDefMap[nodeType]?.pins || [];
 }
 
+function pinTypesCompatible(srcType: string, tgtType: string): boolean {
+  if (srcType === 'any' || tgtType === 'any') return true;
+  return srcType === tgtType;
+}
+
+function getPinType(nodeType: string, handleId: string): string {
+  const pin = getPinDefs(nodeType).find(p => p.id === handleId);
+  return pin?.pin_type || 'any';
+}
+
+const PIN_TYPE_COLORS: Record<string, string> = {
+  string:       '#7fba55',  // green
+  message:      '#5b9bd5',  // blue
+  message_list: '#5b9bd5',  // blue (composed → same as message)
+  stream:       '#5cc6c6',  // cyan
+  json:         '#d4a44c',  // amber
+  bool:         '#e06090',  // pink
+  int:          '#cc7832',  // orange
+  float:        '#cc7832',  // orange (same as int)
+  any:          '#888888',  // grey
+};
+
+function pinTypeColor(pinType: string | undefined): string {
+  return PIN_TYPE_COLORS[pinType || 'string'] || PIN_TYPE_COLORS.string;
+}
+
+function isComposedType(pinType: string | undefined): boolean {
+  if (!pinType) return false;
+  return pinType.endsWith('_list') || pinType.startsWith('stream[');
+}
+
 /* ================================================================== */
 /*  Custom edge components                                             */
 /* ================================================================== */
@@ -121,16 +153,40 @@ function ExecEdge(props: EdgeProps) {
 
 function DataEdge(props: EdgeProps) {
   const color = (props.data as any)?.color || C.green;
-  const [path] = getBezierPath({
+  const invalid = (props.data as any)?._invalid === true;
+  const [path, labelX, labelY] = getBezierPath({
     sourceX: props.sourceX, sourceY: props.sourceY,
     targetX: props.targetX, targetY: props.targetY,
     sourcePosition: props.sourcePosition, targetPosition: props.targetPosition,
   });
-  return <BaseEdge path={path} style={{
-    stroke: props.selected ? '#ff6060' : color,
-    strokeWidth: props.selected ? 2.5 : 1.5,
-    opacity: props.selected ? 1 : 0.7,
-  }} />;
+  const stroke = props.selected ? '#ff6060' : invalid ? '#ff4444' : color;
+  return (
+    <>
+      <BaseEdge path={path} style={{
+        stroke,
+        strokeWidth: props.selected ? 2.5 : invalid ? 2 : 1.5,
+        strokeDasharray: invalid ? '6 3' : undefined,
+        opacity: props.selected ? 1 : invalid ? 0.9 : 0.7,
+      }} />
+      {invalid && (
+        <foreignObject
+          x={labelX - 8} y={labelY - 8}
+          width={16} height={16}
+          style={{ pointerEvents: 'none', overflow: 'visible' }}
+        >
+          <div style={{
+            width: 16, height: 16, borderRadius: '50%',
+            background: '#ff4444', color: '#fff',
+            fontSize: 11, fontWeight: 'bold',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            border: '1px solid #cc0000',
+          }}>
+            !
+          </div>
+        </foreignObject>
+      )}
+    </>
+  );
 }
 
 const edgeTypes: EdgeTypes = {
@@ -301,13 +357,26 @@ function PinFieldWidget({ pin, dataKey, data, onUpdate }: {
 
 function PinLabel({ pin }: { pin: PinDef }) {
   const isOptional = pin.optional !== false;
+  const color = pin.kind === 'data' ? pinTypeColor(pin.pin_type) : pin.color;
+  const hasType = pin.kind === 'data' && pin.pin_type;
   return (
-    <div style={{
+    <div className="pin-label-row" style={{
       fontSize: 10, lineHeight: '14px',
-      color: isOptional ? pin.color + '99' : pin.color,
+      color: isOptional ? color + '99' : color,
+      position: 'relative',
     }}>
-      {pin.label}
-      {!isOptional && <span style={{ color: C.red, marginLeft: 1, fontSize: 8 }}>*</span>}
+      <span className="pin-label-name" style={{ transition: 'opacity 0.15s' }}>
+        {pin.label}
+        {!isOptional && <span style={{ color: C.red, marginLeft: 1, fontSize: 8 }}>*</span>}
+      </span>
+      {hasType && (
+        <span className="pin-type-tooltip" style={{
+          position: 'absolute', left: 0, right: 0, top: 0,
+          color: color + 'aa', fontSize: 8,
+          opacity: 0, transition: 'opacity 0.15s',
+          whiteSpace: 'nowrap',
+        }}>{pin.pin_type}</span>
+      )}
     </div>
   );
 }
@@ -473,26 +542,29 @@ function PinHandle({ pin, side, top, isConnected }: {
   const handleType = side === 'left' ? 'target' : 'source';
 
   const isRequired = !isExec && pin.optional === false;
+  const color = isExec ? pin.color : pinTypeColor(pin.pin_type);
+  const composed = !isExec && isComposedType(pin.pin_type);
+
   const shapeStyle: CSSProperties = isExec ? {
     width: 0, height: 0,
     borderTop: '5px solid transparent',
     borderBottom: '5px solid transparent',
-    borderLeft: `7px solid ${isConnected ? pin.color : 'transparent'}`,
+    borderLeft: `7px solid ${isConnected ? color : 'transparent'}`,
     borderRight: 'none',
     background: 'transparent',
     borderRadius: 0,
   } : {
     width: 8, height: 8,
-    borderRadius: '50%',
-    background: isConnected ? pin.color : 'transparent',
-    border: `1.5px ${isRequired && !isConnected ? 'dashed' : 'solid'} ${pin.color}`,
+    borderRadius: composed ? 2 : '50%',
+    background: isConnected ? color : 'transparent',
+    border: `1.5px ${isRequired && !isConnected ? 'dashed' : 'solid'} ${color}`,
   };
 
   const execStroke: CSSProperties | null = isExec && !isConnected ? {
     width: 0, height: 0,
     borderTop: '5px solid transparent',
     borderBottom: '5px solid transparent',
-    borderLeft: `7px solid ${pin.color}`,
+    borderLeft: `7px solid ${color}`,
     borderRight: 'none',
     background: 'transparent',
     borderRadius: 0,
@@ -673,10 +745,6 @@ const ChatIcon = () => (
     <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
   </svg>
 );
-const SendIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg>
-);
-
 /* ================================================================== */
 /*  Context menu — right-click to add nodes                            */
 /* ================================================================== */
@@ -723,110 +791,6 @@ function ContextMenu({ x, y, flowX, flowY, onAddNode, onClose }: ContextMenuProp
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-/* ================================================================== */
-/*  Chat message                                                       */
-/* ================================================================== */
-
-interface ChatMessage {
-  role: 'user' | 'assistant' | 'system' | 'print';
-  content: string;
-  reasoning?: string;
-  nodeLabel?: string;
-  isStreaming?: boolean;
-}
-
-function CollapsibleBlock({ label, content, color, streaming, defaultOpen }: {
-  label: string; content: string; color: string; streaming?: boolean; defaultOpen?: boolean;
-}) {
-  const [expanded, setExpanded] = useState(defaultOpen ?? false);
-  if (!content) return null;
-  const chars = content.length;
-  const summary = chars > 1000
-    ? `${(chars / 1000).toFixed(1)}k chars`
-    : `${chars} chars`;
-  return (
-    <div style={{
-      borderRadius: 6, overflow: 'hidden', marginBottom: 4, width: '100%',
-      background: color + '14', border: `1px solid ${color}33`,
-    }}>
-      <div
-        onClick={() => !streaming && setExpanded(e => !e)}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          padding: '5px 8px', cursor: streaming ? 'default' : 'pointer',
-          userSelect: 'none',
-        }}
-      >
-        <span style={{
-          fontSize: 9, color, transition: 'transform .15s',
-          display: 'inline-block',
-          transform: expanded || streaming ? 'rotate(90deg)' : 'rotate(0deg)',
-        }}>&#9654;</span>
-        <span style={{ fontSize: 14, color, fontWeight: 500 }}>{label}</span>
-        <span style={{ fontSize: 13, color: C.muted, marginLeft: 'auto' }}>
-          {streaming ? '' : summary}
-        </span>
-      </div>
-      {(expanded || streaming) && (
-        <div style={{
-          padding: '4px 8px 6px 20px', borderTop: `1px solid ${color}22`,
-          fontSize: 14, lineHeight: '20px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-          color: color + 'bb',
-          maxHeight: 300, overflowY: 'auto',
-        }}>
-          {content}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function ChatBubble({ msg }: { msg: ChatMessage }) {
-  const isUser = msg.role === 'user';
-  const showCursor = msg.isStreaming && msg.role === 'assistant';
-
-  if (msg.role === 'print') {
-    return (
-      <div style={{ padding: '2px 0', maxWidth: '85%' }}>
-        <CollapsibleBlock
-          label={msg.nodeLabel || 'Print'}
-          content={msg.content}
-          color={C.cyan}
-        />
-      </div>
-    );
-  }
-
-  return (
-    <div style={{
-      display: 'flex', justifyContent: isUser ? 'flex-end' : 'flex-start',
-      padding: '2px 0',
-    }}>
-      <div style={{
-        maxWidth: '85%', padding: '8px 12px', borderRadius: 6,
-        fontSize: 15, lineHeight: '22px', whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-        background: isUser ? C.blue + '33' : '#333',
-        color: C.text,
-        border: `1px solid ${isUser ? C.blue + '44' : C.border}`,
-      }}>
-        {msg.role === 'system' && <div style={{ fontSize: 13, color: C.muted, marginBottom: 2 }}>system</div>}
-        {msg.role === 'assistant' && msg.nodeLabel && (
-          <div style={{ fontSize: 13, color: C.muted, marginBottom: 2 }}>{msg.nodeLabel}</div>
-        )}
-        {msg.reasoning && (
-          <CollapsibleBlock
-            label="Reasoning"
-            content={msg.reasoning}
-            color={C.purple}
-            streaming={msg.isStreaming && !msg.content}
-          />
-        )}
-        {msg.content}{showCursor && '\u2588'}
-      </div>
     </div>
   );
 }
@@ -947,6 +911,7 @@ function edgeColorFromHandle(sourceHandle: string | null, nodeType: string | und
   if ((sourceHandle || '').startsWith('exec_')) return C.white;
   const pins = getPinDefs(nodeType || '');
   const pin = pins.find(p => p.id === sourceHandle);
+  if (pin && pin.kind === 'data') return pinTypeColor(pin.pin_type);
   return pin?.color || C.green;
 }
 
@@ -973,35 +938,6 @@ const DEFAULT_EDGES: Edge[] = [
 /* ================================================================== */
 /*  SSE parser helper                                                  */
 /* ================================================================== */
-
-async function parseSSE(
-  response: Response,
-  onEvent: (eventType: string, data: any) => void,
-) {
-  if (!response.body) return;
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const frames = buffer.split('\n\n');
-    buffer = frames.pop()!;
-    for (const frame of frames) {
-      if (!frame.trim()) continue;
-      let eventType = 'message';
-      const dataLines: string[] = [];
-      for (const line of frame.split('\n')) {
-        if (line.startsWith('event: ')) eventType = line.slice(7).trim();
-        else if (line.startsWith('data: ')) dataLines.push(line.slice(6));
-      }
-      let data: any = {};
-      try { data = JSON.parse(dataLines.join('\n')); } catch { /* skip */ }
-      onEvent(eventType, data);
-    }
-  }
-}
 
 /* ================================================================== */
 /*  Main editor                                                        */
@@ -1030,7 +966,6 @@ const WorkflowEditor: FC = () => {
     }
   }, [navigate]);
   const [savedWorkflows, setSavedWorkflows] = useState<WorkflowSummary[]>([]);
-  const [isRunning, setIsRunning] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
   const [devMode, setDevMode] = useState(false);
   const [isBuiltin, setIsBuiltin] = useState(false);
@@ -1040,9 +975,7 @@ const WorkflowEditor: FC = () => {
 
   /* Chat panel */
   const [showChat, setShowChat] = useState(false);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [chatInput, setChatInput] = useState('');
-  const chatEndRef = useRef<HTMLDivElement>(null);
+  const [testConvId, setTestConvId] = useState<string | null>(null);
   const [runLog, setRunLog] = useState<string[]>([]);
   const [nodeDefsVersion, setNodeDefsVersion] = useState(0);
 
@@ -1051,6 +984,10 @@ const WorkflowEditor: FC = () => {
   const [completedNodeIds, setCompletedNodeIds] = useState<Set<string>>(new Set());
   const [activeEdgeId, setActiveEdgeId] = useState<string | null>(null);
   const [lastAudit, setLastAudit] = useState<any>(null);
+
+  /* Validation */
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
+  const [showValidation, setShowValidation] = useState(false);
 
   useEffect(() => {
     getNodeTypes().then(defs => {
@@ -1061,10 +998,6 @@ const WorkflowEditor: FC = () => {
   }, []);
 
   const nodeTypes = useMemo(() => buildNodeTypes(), [nodeDefsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatMessages]);
 
   /* Compute connected handles set per node for hollow/filled pins */
   const connectedMap = useMemo(() => {
@@ -1120,11 +1053,23 @@ const WorkflowEditor: FC = () => {
   [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime]);
 
   const enrichedEdges = useMemo(() =>
-    edges.map(e => ({
-      ...e,
-      data: { ...(e.data || {}), _traversed: e.id === activeEdgeId },
-    })),
-  [edges, activeEdgeId]);
+    edges.map(e => {
+      let _invalid = false;
+      if (e.type === 'data' && e.sourceHandle && e.targetHandle) {
+        const srcNode = nodes.find(n => n.id === e.source);
+        const tgtNode = nodes.find(n => n.id === e.target);
+        if (srcNode && tgtNode) {
+          const srcType = getPinType(srcNode.type || '', e.sourceHandle);
+          const tgtType = getPinType(tgtNode.type || '', e.targetHandle);
+          _invalid = !pinTypesCompatible(srcType, tgtType);
+        }
+      }
+      return {
+        ...e,
+        data: { ...(e.data || {}), _traversed: e.id === activeEdgeId, _invalid },
+      };
+    }),
+  [edges, nodes, activeEdgeId]);
 
   const onConnect = useCallback((params: Connection) => {
     const etype = edgeTypeFromHandles(params.sourceHandle);
@@ -1212,6 +1157,46 @@ const WorkflowEditor: FC = () => {
     } catch (err) { console.error('Save failed', err); }
   }, [buildSpec, workflowId, savedWorkflows, devMode, isBuiltin]);
 
+  /* Validate */
+  const handleValidate = useCallback(async () => {
+    if (workflowId) {
+      try {
+        await handleSave();
+        const result = await validateWorkflow(workflowId);
+        setValidationErrors(result.errors);
+        setShowValidation(true);
+      } catch (err) { console.error('Validate failed', err); }
+    } else {
+      const clientErrors: ValidationError[] = [];
+      for (const e of edges) {
+        if (e.type !== 'data' || !e.sourceHandle || !e.targetHandle) continue;
+        const srcNode = nodes.find(n => n.id === e.source);
+        const tgtNode = nodes.find(n => n.id === e.target);
+        if (!srcNode || !tgtNode) continue;
+        const srcType = getPinType(srcNode.type || '', e.sourceHandle);
+        const tgtType = getPinType(tgtNode.type || '', e.targetHandle);
+        if (!pinTypesCompatible(srcType, tgtType)) {
+          const srcLabel = (srcNode.data as any)?.label || srcNode.id;
+          const tgtLabel = (tgtNode.data as any)?.label || tgtNode.id;
+          const srcPin = getPinDefs(srcNode.type || '').find(p => p.id === e.sourceHandle);
+          const tgtPin = getPinDefs(tgtNode.type || '').find(p => p.id === e.targetHandle);
+          clientErrors.push({
+            edge_id: e.id,
+            source_node: srcNode.id,
+            target_node: tgtNode.id,
+            source_pin: srcPin?.label || e.sourceHandle,
+            target_pin: tgtPin?.label || e.targetHandle,
+            source_type: srcType,
+            target_type: tgtType,
+            message: `${srcLabel}.${srcPin?.label || '?'} (${srcType}) \u2192 ${tgtLabel}.${tgtPin?.label || '?'} (${tgtType}): incompatible types`,
+          });
+        }
+      }
+      setValidationErrors(clientErrors);
+      setShowValidation(true);
+    }
+  }, [workflowId, edges, nodes, handleSave]);
+
   /* Load */
   const loadSpec = useCallback((spec: any) => {
     setWorkflowId(spec.id || '');
@@ -1262,134 +1247,18 @@ const WorkflowEditor: FC = () => {
     } catch (err) { console.error('Delete failed', err); }
   }, [workflowId, setNodes, setEdges]);
 
-  /* Run workflow from the chat panel */
-  const handleRunChat = useCallback(async (message: string) => {
-    if (!message.trim()) return;
+  /* Run button — save + open chat */
+  const handleRun = useCallback(async () => {
     const spec = buildSpec();
-    const specId = spec.id;
-
     if (!workflowId) {
-      try { await saveWorkflow(spec); setWorkflowId(specId); setSavedWorkflows(await listWorkflows()); }
+      try { await saveWorkflow(spec); setWorkflowId(spec.id); setSavedWorkflows(await listWorkflows()); }
+      catch { /* proceed */ }
+    } else {
+      try { await updateWorkflow(workflowId, spec); }
       catch { /* proceed */ }
     }
-
-    const priorMessages = chatMessages
-      .filter(m => !m.isStreaming && (m.role === 'user' || m.role === 'assistant'))
-      .map(m => ({ role: m.role, content: m.content }));
-
-    setChatMessages(prev => [...prev, { role: 'user', content: message }]);
-    setChatInput('');
-    setIsRunning(true);
-    setRunLog(['\u25b6 Starting workflow...']);
-
-    try {
-      const response = await runWorkflow(specId, message, '', true, priorMessages);
-
-      await parseSSE(response, (eventType, data) => {
-        if (eventType === 'workflow_start') {
-          setRunLog(p => [...p, `\u2699 ${data.name} (${data.node_count} nodes)`]);
-          setActiveNodeId(null);
-          setCompletedNodeIds(new Set());
-          setActiveEdgeId(null);
-          setLastAudit(null);
-
-        } else if (eventType === 'node_start') {
-          setRunLog(p => [...p, `  \u2192 ${data.label || data.node_id} [${data.type}]`]);
-          setActiveNodeId(data.node_id);
-
-        } else if (eventType === 'reasoning') {
-          const token = data.token || '';
-          setChatMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last?.isStreaming) {
-              copy[copy.length - 1] = { ...last, reasoning: (last.reasoning || '') + token };
-            } else {
-              copy.push({ role: 'assistant', content: '', reasoning: token, isStreaming: true });
-            }
-            return copy;
-          });
-
-        } else if (eventType === 'token') {
-          const token = data.token || '';
-          setChatMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last?.isStreaming) {
-              copy[copy.length - 1] = { ...last, content: last.content + token };
-            } else {
-              copy.push({ role: 'assistant', content: token, isStreaming: true });
-            }
-            return copy;
-          });
-
-        } else if (eventType === 'print') {
-          setChatMessages(prev => {
-            const copy = [...prev];
-            const last = copy[copy.length - 1];
-            if (last?.isStreaming) copy[copy.length - 1] = { ...last, isStreaming: false };
-            copy.push({
-              role: 'print',
-              content: data.text || '',
-              nodeLabel: data.label || 'Print',
-            });
-            return copy;
-          });
-
-        } else if (eventType === 'tool_start') {
-          setRunLog(p => [...p, `    \u26a1 ${data.tool_name}`]);
-
-        } else if (eventType === 'tool_end') {
-          setRunLog(p => [...p, `    \u2713 ${data.tool_name}: ${(data.result_preview || '').slice(0, 80)}`]);
-
-        } else if (eventType === 'edge_traversed') {
-          setActiveEdgeId(data.edge_id || null);
-
-        } else if (eventType === 'node_end') {
-          const pv = data.output_preview ? `: ${data.output_preview.slice(0, 120)}` : '';
-          setRunLog(p => [...p, `  \u2713 ${data.node_id}${pv}`]);
-          setActiveNodeId(null);
-          if (data.node_id) {
-            setCompletedNodeIds(prev => new Set(prev).add(data.node_id));
-          }
-
-        } else if (eventType === 'workflow_end') {
-          setRunLog(p => [...p, '\u2713 Finished']);
-          setActiveNodeId(null);
-          setActiveEdgeId(null);
-          setCompletedNodeIds(new Set());
-
-        } else if (eventType === 'error') {
-          setRunLog(p => [...p, `\u2717 ${data.message || 'Error'}`]);
-          setChatMessages(prev => [...prev, { role: 'system', content: `Error: ${data.message || 'Error'}` }]);
-
-        } else if (eventType === 'audit_complete') {
-          if (data.audit_id) {
-            getAudit(data.audit_id).then(setLastAudit).catch(() => {});
-          }
-
-        } else if (eventType === 'done') {
-          setRunLog(p => [...p, '\u2014 Done \u2014']);
-          setChatMessages(prev => prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
-        }
-      });
-
-      setChatMessages(prev => prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m));
-    } catch (err: any) {
-      setRunLog(p => [...p, `\u2717 ${err.message || 'Failed'}`]);
-      setChatMessages(prev => [...prev, { role: 'system', content: `Error: ${err.message || 'Failed'}` }]);
-    } finally {
-      setIsRunning(false);
-    }
-  }, [buildSpec, workflowId, chatMessages]);
-
-  /* Legacy Run button (uses preview inputs from Start node) */
-  const handleRun = useCallback(async () => {
-    const startNode = nodes.find(n => n.type === 'start');
-    const previewMsg = String(startNode?.data?.preview_message || 'Hello!');
     setShowChat(true);
-    await handleRunChat(previewMsg);
-  }, [nodes, handleRunChat]);
+  }, [buildSpec, workflowId]);
 
   const currentSelectedNode = useMemo(
     () => selectedNode ? nodes.find(n => n.id === selectedNode.id) || null : null,
@@ -1404,6 +1273,10 @@ const WorkflowEditor: FC = () => {
 
   return (
     <Box h="100%" w="100%" display="flex" bg={C.bg}>
+      <style>{`
+.pin-label-row:hover .pin-label-name { opacity: 0 !important; }
+.pin-label-row:hover .pin-type-tooltip { opacity: 1 !important; }
+`}</style>
       {/* Sidebar */}
       {showSidebar && (
         <Box w="220px" minW="220px" h="100%" bg="#242424" borderRight={`1px solid ${C.border}`}
@@ -1424,12 +1297,20 @@ const WorkflowEditor: FC = () => {
                   <Text>{devMode && isBuiltin ? 'Save\u00a0\u2699' : 'Save'}</Text>
                 </HStack>
               </Button>
-              <Button size="xs" onClick={handleRun} flex={1} disabled={isRunning}
+              <Button size="xs" onClick={handleRun} flex={1}
                 bg={C.green + '33'} color={C.green} borderColor={C.green + '55'} variant="outline"
                 _hover={{ bg: C.green + '55' }}>
-                <HStack gap={1}><PlayIcon /><Text>{isRunning ? 'Running' : 'Run'}</Text></HStack>
+                <HStack gap={1}><PlayIcon /><Text>Run</Text></HStack>
               </Button>
             </HStack>
+            <Button size="xs" onClick={handleValidate} variant="outline" w="100%" mt={1}
+              borderColor={validationErrors.length > 0 ? C.red + '88' : C.border}
+              color={validationErrors.length > 0 ? C.red : C.text}
+              _hover={{ bg: '#333' }}>
+              <HStack gap={1}>
+                <Text>{validationErrors.length > 0 ? `\u26a0 ${validationErrors.length} error${validationErrors.length > 1 ? 's' : ''}` : '\u2713 Validate'}</Text>
+              </HStack>
+            </Button>
           </Box>
 
           {/* Dev mode toggle */}
@@ -1623,78 +1504,77 @@ const WorkflowEditor: FC = () => {
             )}
           </Box>
         )}
-      </Box>
 
-      {/* Chat / Test panel */}
-      {showChat && (
-        <Box w="310px" minW="310px" h="100%" bg="#242424"
-          borderLeft={`1px solid ${C.border}`} display="flex" flexDirection="column">
-          {/* Header */}
-          <Box p={2} borderBottom={`1px solid ${C.border}`}>
-            <HStack justify="space-between">
-              <HStack gap={1}>
-                <ChatIcon />
-                <Text fontSize="15px" fontWeight="bold" color={C.text}>Test Chat</Text>
-              </HStack>
-              <HStack gap={1}>
-                <Button size="xs" variant="ghost" color={C.muted} onClick={() => { setChatMessages([]); setRunLog([]); }}
-                  _hover={{ bg: '#333' }} fontSize="13px">Clear</Button>
-                <Button size="xs" variant="ghost" color={C.muted} onClick={() => setShowChat(false)}
-                  _hover={{ bg: '#333' }} fontSize="14px">\u2715</Button>
-              </HStack>
+        {/* Validation errors */}
+        {showValidation && (
+          <Box position="absolute" bottom={(runLog.length > 0 || lastAudit) ? '210px' : '3px'} left={3}
+            right={currentSelectedNode ? '240px' : (showChat ? '320px' : '3px')}
+            maxH="180px" overflowY="auto"
+            bg={validationErrors.length > 0 ? '#2a1515ee' : '#1a2a1aee'}
+            border={`1px solid ${validationErrors.length > 0 ? C.red + '66' : C.green + '66'}`}
+            borderRadius="4px"
+            p={2} fontSize="14px" zIndex={11}>
+            <HStack justify="space-between" mb={1}>
+              <Text fontWeight="bold" color={validationErrors.length > 0 ? C.red : C.green} fontSize="14px">
+                {validationErrors.length > 0
+                  ? `${validationErrors.length} type error${validationErrors.length > 1 ? 's' : ''}`
+                  : '\u2713 All edges valid'}
+              </Text>
+              <Button size="xs" variant="ghost" onClick={() => setShowValidation(false)} color={C.muted}>Close</Button>
             </HStack>
-          </Box>
-
-          {/* Messages */}
-          <Box flex={1} overflowY="auto" p={2} display="flex" flexDirection="column" gap={1}>
-            {chatMessages.length === 0 && (
-              <Box textAlign="center" py={8}>
-                <Text fontSize="14px" color={C.muted}>Send a message to test the workflow</Text>
-                <Text fontSize="13px" color={C.muted} mt={1}>
-                  Your message is passed as the user input
+            {validationErrors.map((err, i) => (
+              <Box key={i} py={0.5} cursor="pointer" _hover={{ bg: '#ffffff08' }} borderRadius="2px" px={1}
+                onClick={() => {
+                  if (err.edge_id) {
+                    setEdges(eds => eds.map(e => ({
+                      ...e,
+                      selected: e.id === err.edge_id,
+                    })));
+                  }
+                }}>
+                <Text fontSize="13px" color={C.red}>
+                  {err.message}
                 </Text>
               </Box>
-            )}
-            {chatMessages.map((msg, i) => (
-              <ChatBubble key={i} msg={msg} />
             ))}
-            {isRunning && !chatMessages.some(m => m.isStreaming) && (
-              <div style={{
-                display: 'flex', justifyContent: 'flex-start', padding: '2px 0',
-              }}>
-                <div style={{
-                  padding: '6px 14px', borderRadius: 6, fontSize: 15,
-                  background: '#333', color: C.muted, border: `1px solid ${C.border}`,
-                }}>
-                  {'\u2026 starting'}
-                </div>
-              </div>
-            )}
-            <div ref={chatEndRef} />
           </Box>
+        )}
+      </Box>
 
-          {/* Input */}
-          <Box p={2} borderTop={`1px solid ${C.border}`}>
-            <HStack gap={1}>
-              <input
-                style={{
-                  flex: 1, fontSize: 15, padding: '8px 12px', height: 36,
-                  background: '#1a1a1a', border: `1px solid ${C.border}`, borderRadius: 4,
-                  color: C.text, outline: 'none',
-                }}
-                value={chatInput}
-                onChange={e => setChatInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !isRunning) { e.preventDefault(); handleRunChat(chatInput); } }}
-                placeholder="Type a message..."
-                disabled={isRunning}
-              />
-              <Button size="xs" h="32px" px={3} onClick={() => handleRunChat(chatInput)}
-                disabled={isRunning || !chatInput.trim()}
-                bg={C.cyan + '33'} color={C.cyan} borderColor={C.cyan + '55'} variant="outline"
-                _hover={{ bg: C.cyan + '55' }}>
-                <SendIcon />
-              </Button>
+      {/* Chat / Test panel — reuses the real ChatPanel */}
+      {showChat && (
+        <Box w="420px" minW="420px" h="100%"
+          borderLeft={`1px solid ${C.border}`} display="flex" flexDirection="column">
+          <Box p={1} borderBottom={`1px solid ${C.border}`} display="flex" justifyContent="space-between" alignItems="center">
+            <HStack gap={1} pl={2}>
+              <ChatIcon />
+              <Text fontSize="14px" fontWeight="bold" color={C.text}>
+                Test Chat
+              </Text>
+              {workflowId && (
+                <Text fontSize="12px" color={C.muted}>
+                  ({nodes.find(n => n.type === 'start')?.data?.label || workflowId})
+                </Text>
+              )}
             </HStack>
+            <HStack gap={1}>
+              <Button size="xs" variant="ghost" color={C.muted}
+                onClick={() => { setTestConvId(null); setRunLog([]); }}
+                _hover={{ bg: '#333' }} fontSize="13px">New</Button>
+              <Button size="xs" variant="ghost" color={C.muted}
+                onClick={() => setShowChat(false)}
+                _hover={{ bg: '#333' }} fontSize="14px">{'\u2715'}</Button>
+            </HStack>
+          </Box>
+          <Box flex={1} overflow="hidden">
+            <ChatPanel
+              key={testConvId ?? `new-${workflowId}`}
+              conversationId={testConvId}
+              onConversationCreated={id => setTestConvId(id)}
+              compact
+              initialGraph={workflowId ? `workflow:${workflowId}` : undefined}
+              placeholder="Send a message to test the workflow..."
+            />
           </Box>
         </Box>
       )}

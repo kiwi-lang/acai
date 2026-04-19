@@ -502,6 +502,26 @@ export async function runWorkflow(
     return response;
 }
 
+export interface ValidationError {
+    edge_id: string;
+    source_node: string;
+    target_node: string;
+    source_pin: string;
+    target_pin: string;
+    source_type: string;
+    target_type: string;
+    message: string;
+}
+
+export interface ValidationResult {
+    errors: ValidationError[];
+    valid: boolean;
+}
+
+export async function validateWorkflow(id: string): Promise<ValidationResult> {
+    return request<ValidationResult>(`/workflows/${id}/validate`, { method: 'POST' });
+}
+
 export async function saveBuiltinWorkflow(id: string, spec: WorkflowSpec): Promise<WorkflowSpec> {
     return request<WorkflowSpec>(`/workflows/builtin/${id}`, {
         method: 'PUT',
@@ -557,5 +577,43 @@ export async function updateConfig(patch: Record<string, any>): Promise<SystemCo
     return request<SystemConfig>('/config', {
         method: 'PATCH',
         body: JSON.stringify(patch),
+    });
+}
+
+// Knowledge
+export interface KnowledgeDocSummary {
+    path: string;
+    subject: string;
+    subsubject: string;
+    title: string;
+    updated_at: number;
+}
+
+export interface KnowledgeDoc extends KnowledgeDocSummary {
+    content: string;
+}
+
+export type KnowledgeTree = Record<string, Record<string, string[]>>;
+
+export async function getKnowledgeTree(): Promise<KnowledgeTree> {
+    return request<KnowledgeTree>('/knowledge');
+}
+
+export async function getKnowledgeDoc(subject: string, subsubject: string, title: string): Promise<KnowledgeDoc> {
+    return request<KnowledgeDoc>(`/knowledge/${encodeURIComponent(subject)}/${encodeURIComponent(subsubject)}/${encodeURIComponent(title)}`);
+}
+
+export async function searchKnowledge(q: string): Promise<KnowledgeDoc[]> {
+    return request<KnowledgeDoc[]>(`/knowledge/search?q=${encodeURIComponent(q)}`);
+}
+
+export async function deleteKnowledgeDoc(subject: string, subsubject: string, title: string): Promise<void> {
+    return request(`/knowledge/${encodeURIComponent(subject)}/${encodeURIComponent(subsubject)}/${encodeURIComponent(title)}/delete`, { method: 'POST' });
+}
+
+export async function updateKnowledgeDoc(subject: string, subsubject: string, title: string, content: string): Promise<KnowledgeDoc> {
+    return request<KnowledgeDoc>(`/knowledge/${encodeURIComponent(subject)}/${encodeURIComponent(subsubject)}/${encodeURIComponent(title)}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ content }),
     });
 }

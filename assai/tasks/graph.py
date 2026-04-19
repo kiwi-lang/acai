@@ -89,8 +89,10 @@ class Acc:
 
         if etype == "token":
             self.text += data.get("token", "")
+
         elif etype == "reasoning":
             self.reasoning += data.get("token", "")
+            
         elif etype == "tool_call_delta":
             idx = data.get("index", 0)
             if idx not in self._tc_buf:

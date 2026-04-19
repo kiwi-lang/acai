@@ -85,6 +85,13 @@ const HomeIcon = () => (
   </svg>
 );
 
+const KnowledgeIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+    <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+  </svg>
+);
+
 const SettingsIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <circle cx="12" cy="12" r="3" />
@@ -97,6 +104,7 @@ const navItems = [
   { id: 'conversations', name: 'Conversations', path: '/conversations', icon: ChatIcon, color: 'blue' },
   { id: 'projects', name: 'Projects', path: '/projects', icon: ProjectsIcon, color: 'orange' },
   { id: 'agents', name: 'Agents', path: '/agents', icon: AgentsIcon, color: 'teal' },
+  { id: 'knowledge', name: 'Knowledge', path: '/knowledge', icon: KnowledgeIcon, color: 'cyan' },
   { id: 'tasks', name: 'Work Queue', path: '/tasks', icon: TasksIcon, color: 'blue' },
   { id: 'status', name: 'Status', path: '/status', icon: StatusIcon, color: 'purple' },
   { id: 'settings', name: 'Settings', path: '/settings', icon: SettingsIcon, color: 'gray' },

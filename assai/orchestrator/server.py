@@ -372,8 +372,28 @@ def create_router(config: AssaiConfig | None = None,
 
     @router.get("/graphs")
     def get_graphs():
-        """Return the list of user-facing task graphs."""
-        return list_graphs(user_facing_only=True)
+        """Return the list of user-facing task graphs, plus saved workflows."""
+        graphs = list_graphs(user_facing_only=True)
+        for d in (workflows_dir, _builtin_wf_dir):
+            if not os.path.isdir(d):
+                continue
+            for fname in os.listdir(d):
+                if not fname.endswith(".json"):
+                    continue
+                wf_id = fname[:-5]
+                if any(g["kind"] == f"workflow:{wf_id}" for g in graphs):
+                    continue
+                try:
+                    with open(os.path.join(d, fname)) as f:
+                        spec = json.load(f)
+                    graphs.append({
+                        "kind": f"workflow:{wf_id}",
+                        "label": spec.get("name", wf_id),
+                        "description": spec.get("description", "Custom workflow"),
+                    })
+                except Exception:
+                    pass
+        return graphs
 
     @router.post("/converse")
     async def agent_converse(request: Request):
@@ -387,6 +407,19 @@ def create_router(config: AssaiConfig | None = None,
         provider_name = data.get("provider", "auto")
         agent_name = data.get("agent", "") or _default_agent_for_project(project)
         graph_kind = data.get("graph", "converse")
+
+        workflow_spec = None
+        if graph_kind.startswith("workflow:"):
+            wf_id = graph_kind[len("workflow:"):]
+            wf_path = os.path.join(workflows_dir, f"{wf_id}.json")
+            if not os.path.isfile(wf_path):
+                wf_path = os.path.join(_builtin_wf_dir, f"{wf_id}.json")
+            if os.path.isfile(wf_path):
+                with open(wf_path) as f:
+                    workflow_spec = json.load(f)
+                graph_kind = "workflow"
+            else:
+                return JSONResponse({"error": f"workflow '{wf_id}' not found"}, status_code=404)
 
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
@@ -419,6 +452,8 @@ def create_router(config: AssaiConfig | None = None,
             "stream_id": conversation,
             "provider_override": provider_override,
         }
+        if workflow_spec:
+            work["workflow_spec"] = workflow_spec
 
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -668,6 +703,21 @@ def create_router(config: AssaiConfig | None = None,
         if os.path.isfile(path):
             os.remove(path)
         return {"deleted": True}
+
+    @router.post("/workflows/{workflow_id}/validate")
+    def validate_workflow_endpoint(workflow_id: str):
+        """Validate pin-type compatibility for all data edges."""
+        from assai.tasks.nodes import validate_workflow
+
+        user_path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        builtin_path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
+        path = user_path if os.path.isfile(user_path) else builtin_path
+        if not os.path.isfile(path):
+            return JSONResponse({"error": "not found"}, status_code=404)
+        with open(path) as f:
+            spec = json.load(f)
+        errors = validate_workflow(spec)
+        return {"errors": errors, "valid": len(errors) == 0}
 
     @router.post("/workflows/{workflow_id}/run")
     async def run_workflow(workflow_id: str, request: Request):

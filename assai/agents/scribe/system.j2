@@ -30,6 +30,7 @@ Documents are stored as markdown files in a two-level hierarchy::
 
 ## Workflow
 
+0. DO NOT REPLY TO THE USER
 1. First, call ``knowledge.list_documents`` to see the current tree.
 2. If the conversation references a topic already documented, call
    ``knowledge.get`` to read it.
@@ -37,6 +38,8 @@ Documents are stored as markdown files in a two-level hierarchy::
    ``knowledge.append``, or do nothing.
 4. Respond with a brief internal note about what you did (this is not
    shown to the user).
+5. DO NOT REPLY TO THE USER
+
 {% if task.project_obj %}
 
 ## Project context

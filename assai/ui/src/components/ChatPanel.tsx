@@ -190,6 +190,8 @@ export interface ChatPanelProps {
     initialThinkingMode?: ThinkingMode;
     /** Auto-send this message on mount (used for pending messages from navigation). */
     autoSendMessage?: string;
+    /** Force a specific graph selection (e.g. "workflow:my-id"). Hides the graph dropdown when set. */
+    initialGraph?: string;
 }
 
 const ChatPanel = ({
@@ -211,6 +213,7 @@ const ChatPanel = ({
     initialThinking,
     initialThinkingMode,
     autoSendMessage,
+    initialGraph,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -219,14 +222,23 @@ const ChatPanel = ({
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [providers, setProviders] = useState<Provider[]>([]);
-    const [selectedProvider, setSelectedProvider] = useState(initialProvider);
+    const [selectedProvider, setSelectedProvider] = useState(
+        () => initialProvider || localStorage.getItem('assai.provider') || 'auto',
+    );
     const [agents, setAgents] = useState<AgentDef[]>([]);
-    const [selectedAgent, setSelectedAgent] = useState(resolvedInitialAgent);
+    const [selectedAgent, setSelectedAgent] = useState(
+        () => initialAgent ?? localStorage.getItem('assai.agent') ?? fallbackAgent,
+    );
     const [graphs, setGraphs] = useState<GraphDef[]>([]);
-    const [selectedGraph, setSelectedGraph] = useState('converse');
+    const [selectedGraph, setSelectedGraph] = useState(
+        () => initialGraph || localStorage.getItem('assai.graph') || 'converse',
+    );
     const [contextStats, setContextStats] = useState<{ estimated_tokens: number; max_context: number } | null>(null);
     const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
-        initialThinkingMode ?? (initialThinking === false ? 'off' : 'native'),
+        () => initialThinkingMode
+            ?? (initialThinking === false ? 'off' : undefined)
+            ?? (localStorage.getItem('assai.thinking') as ThinkingMode | null)
+            ?? 'native',
     );
 
     interface RoutePending {
@@ -252,6 +264,10 @@ const ChatPanel = ({
     const initialAgentRef = useRef(resolvedInitialAgent);
     initialProviderRef.current = initialProvider;
     initialAgentRef.current = resolvedInitialAgent;
+
+    useEffect(() => {
+        if (initialGraph) setSelectedGraph(initialGraph);
+    }, [initialGraph]);
 
     useEffect(() => {
         if (conversationId) return;
@@ -385,6 +401,26 @@ const ChatPanel = ({
                 name: data.tool_name,
             }]);
         });
+
+        for (const [evt, phase] of [['curator_token', 'curator'], ['scribe_token', 'scribe']] as const) {
+            es.addEventListener(evt, (e: MessageEvent) => {
+                const data = JSON.parse(e.data);
+                const token = data.token || '';
+                setMessages(prev => {
+                    const copy = [...prev];
+                    const last = copy[copy.length - 1];
+                    if (last && last.role === 'phase' && last.phase === phase && last.phaseStatus === 'streaming') {
+                        copy[copy.length - 1] = { ...last, content: last.content + token };
+                    } else {
+                        if (last && last.isStreaming) {
+                            copy[copy.length - 1] = { ...last, isStreaming: false };
+                        }
+                        copy.push({ role: 'phase' as const, content: token, phase, phaseStatus: 'streaming' });
+                    }
+                    return copy;
+                });
+            });
+        }
 
         const phaseEvents = [
             'curator_start', 'curator_end',
@@ -615,11 +651,13 @@ const ChatPanel = ({
 
     const handleProviderChangeInternal = useCallback((value: string) => {
         setSelectedProvider(value);
+        localStorage.setItem('assai.provider', value);
         onProviderChangeRef.current?.(value);
     }, []);
 
     const handleAgentChangeInternal = useCallback((value: string) => {
         setSelectedAgent(value);
+        localStorage.setItem('assai.agent', value);
         onAgentChangeRef.current?.(value);
     }, []);
 
@@ -901,6 +939,25 @@ const ChatPanel = ({
                                     );
                                 }
 
+                                if (msg.phaseStatus === 'streaming') {
+                                    return (
+                                        <Box key={i} w="100%" py={1.5} px={compact ? 3 : 4}>
+                                            <Box maxW={maxW} mx={mx}>
+                                                <HStack gap={2} mb={1}>
+                                                    <Box w="6px" h="6px" borderRadius="full" bg={color} flexShrink={0} />
+                                                    <Text fontSize="xs" fontWeight="semibold" color={color}>
+                                                        {phaseName}
+                                                    </Text>
+                                                </HStack>
+                                                <Box pl="14px" fontSize="xs" color={color + 'cc'} lineHeight="1.5"
+                                                     whiteSpace="pre-wrap" fontFamily="mono" maxH="120px" overflowY="auto">
+                                                    {msg.content}
+                                                </Box>
+                                            </Box>
+                                        </Box>
+                                    );
+                                }
+
                                 return null;
                             }
 
@@ -1087,7 +1144,7 @@ const ChatPanel = ({
                     <NativeSelect.Root size="xs" w="auto">
                         <NativeSelect.Field
                             value={thinkingMode}
-                            onChange={e => setThinkingMode(e.target.value as ThinkingMode)}
+                            onChange={e => { const v = e.target.value as ThinkingMode; setThinkingMode(v); localStorage.setItem('assai.thinking', v); }}
                             bg="var(--bg-input)"
                             color={thinkingMode === 'off' ? 'var(--text-tertiary)' : 'var(--accent)'}
                             borderColor="var(--border-input)"
@@ -1097,11 +1154,11 @@ const ChatPanel = ({
                             <option value="emulated" style={{ background: 'var(--option-bg)' }}>Think: Emulated</option>
                         </NativeSelect.Field>
                     </NativeSelect.Root>
-                    {graphs.length > 1 && (
+                    {graphs.length > 1 && !initialGraph && (
                         <NativeSelect.Root size="xs" w="auto">
                             <NativeSelect.Field
                                 value={selectedGraph}
-                                onChange={e => setSelectedGraph(e.target.value)}
+                                onChange={e => { const v = e.target.value; setSelectedGraph(v); localStorage.setItem('assai.graph', v); }}
                                 bg="var(--bg-input)"
                                 color={selectedGraph === 'converse' ? 'var(--text-tertiary)' : 'var(--accent)'}
                                 borderColor="var(--border-input)"

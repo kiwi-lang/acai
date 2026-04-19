@@ -27,9 +27,15 @@ const Home = () => {
     const [routePending, setRoutePending] = useState<RoutePending | null>(null);
     const [providers, setProviders] = useState<Provider[]>([]);
     const [agents, setAgents] = useState<AgentDef[]>([]);
-    const [selectedProvider, setSelectedProvider] = useState('auto');
-    const [selectedAgent, setSelectedAgent] = useState('default');
-    const [thinkingMode, setThinkingMode] = useState<ThinkingMode>('native');
+    const [selectedProvider, setSelectedProvider] = useState(
+        () => localStorage.getItem('assai.provider') || 'auto',
+    );
+    const [selectedAgent, setSelectedAgent] = useState(
+        () => localStorage.getItem('assai.agent') || 'default',
+    );
+    const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
+        () => (localStorage.getItem('assai.thinking') as ThinkingMode | null) || 'native',
+    );
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const routeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const streamRef = useRef<SSEStream | null>(null);
@@ -179,7 +185,7 @@ const Home = () => {
                         <NativeSelect.Root size="xs" w="auto">
                             <NativeSelect.Field
                                 value={selectedAgent}
-                                onChange={e => setSelectedAgent(e.target.value)}
+                                onChange={e => { const v = e.target.value; setSelectedAgent(v); localStorage.setItem('assai.agent', v); }}
                                 bg="var(--bg-input)" color="var(--text-tertiary)"
                                 borderColor="var(--border-input)"
                                 fontSize="xs" px={2} h="26px" borderRadius="md">
@@ -193,7 +199,7 @@ const Home = () => {
                         <NativeSelect.Root size="xs" w="auto">
                             <NativeSelect.Field
                                 value={selectedProvider}
-                                onChange={e => setSelectedProvider(e.target.value)}
+                                onChange={e => { const v = e.target.value; setSelectedProvider(v); localStorage.setItem('assai.provider', v); }}
                                 bg="var(--bg-input)" color="var(--text-tertiary)"
                                 borderColor="var(--border-input)"
                                 fontSize="xs" px={2} h="26px" borderRadius="md">
@@ -208,7 +214,7 @@ const Home = () => {
                         <NativeSelect.Root size="xs" w="auto">
                             <NativeSelect.Field
                                 value={thinkingMode}
-                                onChange={e => setThinkingMode(e.target.value as ThinkingMode)}
+                                onChange={e => { const v = e.target.value as ThinkingMode; setThinkingMode(v); localStorage.setItem('assai.thinking', v); }}
                                 bg="var(--bg-input)"
                                 color={thinkingMode === 'off' ? 'var(--text-tertiary)' : 'var(--accent)'}
                                 borderColor="var(--border-input)"

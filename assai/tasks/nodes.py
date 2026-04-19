@@ -143,6 +143,101 @@ class Pin:
 
 
 # ===================================================================
+# Pin-type compatibility
+# ===================================================================
+
+def pin_types_compatible(source_type: str, target_type: str) -> bool:
+    """Check whether two pin types are compatible for a data edge."""
+    if source_type == "any" or target_type == "any":
+        return True
+    return source_type == target_type
+
+
+def validate_workflow(spec: dict) -> list[dict]:
+    """Validate a workflow spec and return a list of type errors.
+
+    Each error is a dict with keys: ``edge_id``, ``source_node``,
+    ``target_node``, ``source_pin``, ``target_pin``, ``source_type``,
+    ``target_type``, ``message``.
+    """
+    nodes_by_id: dict[str, dict] = {n["id"]: n for n in spec.get("nodes", [])}
+    errors: list[dict] = []
+
+    for edge in spec.get("edges", []):
+        if edge.get("type") != "data":
+            continue
+
+        src_id = edge.get("source", "")
+        tgt_id = edge.get("target", "")
+        src_handle = edge.get("sourceHandle", "")
+        tgt_handle = edge.get("targetHandle", "")
+
+        src_node = nodes_by_id.get(src_id)
+        tgt_node = nodes_by_id.get(tgt_id)
+        if not src_node or not tgt_node:
+            continue
+
+        src_type_name = src_node.get("type", "")
+        tgt_type_name = tgt_node.get("type", "")
+        src_nt = get(src_type_name)
+        tgt_nt = get(tgt_type_name)
+        if not src_nt or not tgt_nt:
+            continue
+
+        src_pin = next((p for p in src_nt.pins if p.id == src_handle), None)
+        tgt_pin = next((p for p in tgt_nt.pins if p.id == tgt_handle), None)
+        if not src_pin or not tgt_pin:
+            continue
+
+        if not pin_types_compatible(src_pin.pin_type, tgt_pin.pin_type):
+            src_label = src_node.get("data", {}).get("label", src_id)
+            tgt_label = tgt_node.get("data", {}).get("label", tgt_id)
+            errors.append({
+                "edge_id": edge.get("id", ""),
+                "source_node": src_id,
+                "target_node": tgt_id,
+                "source_pin": src_pin.label or src_handle,
+                "target_pin": tgt_pin.label or tgt_handle,
+                "source_type": src_pin.pin_type,
+                "target_type": tgt_pin.pin_type,
+                "message": (
+                    f"{src_label}.{src_pin.label} ({src_pin.pin_type}) "
+                    f"\u2192 {tgt_label}.{tgt_pin.label} ({tgt_pin.pin_type}): "
+                    f"incompatible types"
+                ),
+            })
+
+    connected_inputs: set[tuple[str, str]] = set()
+    for edge in spec.get("edges", []):
+        if edge.get("type") == "data":
+            connected_inputs.add((edge.get("target", ""), edge.get("targetHandle", "")))
+
+    for node in spec.get("nodes", []):
+        nt = get(node.get("type", ""))
+        if not nt:
+            continue
+        for pin in nt.pins:
+            if pin.kind != "data" or pin.side != "left" or pin.optional:
+                continue
+            if (node["id"], pin.id) not in connected_inputs:
+                label = node.get("data", {}).get("label", node["id"])
+                errors.append({
+                    "edge_id": "",
+                    "source_node": "",
+                    "target_node": node["id"],
+                    "source_pin": "",
+                    "target_pin": pin.label or pin.id,
+                    "source_type": "",
+                    "target_type": pin.pin_type,
+                    "message": (
+                        f"{label}.{pin.label}: required input is not connected"
+                    ),
+                })
+
+    return errors
+
+
+# ===================================================================
 # NodeContext — passed to every node's execute method
 # ===================================================================
 
@@ -269,10 +364,10 @@ class StartNode(NodeType):
     description = "Entry point"
     pins = [
         Pin.exec_out(),
-        Pin.data("data_message", "message", Colors.amber, "right",
-                 pin_type="message"),
         Pin.data("data_conversation", "conversation", Colors.blue, "right",
                  pin_type="message_list"),
+        Pin.data("data_message", "message", Colors.amber, "right",
+                 pin_type="message"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -383,10 +478,16 @@ class AccumulateNode(NodeType):
         Pin.exec_out(),
         Pin.data("data_stream", "stream", Colors.green, "left",
                  pin_type="stream", optional=False),
+        Pin.data("data_event_mode", "event_mode", Colors.purple, "left",
+                 pin_type="string"),
         Pin.data("data_response", "response", Colors.amber, "right",
                  pin_type="message"),
+        Pin.data("data_text", "text", Colors.green, "right",
+                 pin_type="string"),
         Pin.data("data_reasoning", "reasoning", Colors.purple, "right",
                  pin_type="string"),
+        Pin.data("data_tool_calls", "tool_calls", Colors.amber, "right",
+                 pin_type="json"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -396,17 +497,28 @@ class AccumulateNode(NodeType):
         if stream is None:
             yield {"type": "output", "data": {
                 "response": {"role": "assistant", "content": ""},
+                "text": "",
                 "reasoning": "",
+                "tool_calls": [],
             }}
             return
 
+        event_mode = (ctx.inputs.get("event_mode")
+                      or ctx.data.get("event_mode", ""))
+
         acc = Acc(stream)
         async for event in acc:
+            if event_mode == "silent":
+                continue
+            if event_mode and event.get("event_type") in ("token", "reasoning"):
+                event = {**event, "event_type": event_mode}
             yield {"type": "event", "data": event}
 
         yield {"type": "output", "data": {
             "response": {"role": "assistant", "content": acc.text},
+            "text": acc.text,
             "reasoning": acc.reasoning,
+            "tool_calls": acc.tool_calls,
         }}
 
 
@@ -452,87 +564,61 @@ class StreamTransformNode(NodeType):
 
 
 @register
-class ForEachNode(NodeType):
-    """Iterate over an array, firing the body exec pin per item.
+class ToolFollowUpLoopNode(NodeType):
+    """Dispatch tool calls and re-call the agent until no tools remain.
 
-    Execution logic is handled by
-    :class:`~assai.tasks.dynamic.DynamicGraph` — see the call-stack
-    mechanism there.  This node only declares pins.
+    Receives the initial ``response`` message, ``tool_calls``, and
+    the original ``payload`` from an upstream :class:`AccumulateNode`.
+    If there are tool calls, dispatches them, appends results to the
+    conversation, and re-calls the LLM in a loop.  If there are no
+    tool calls, passes the response through unchanged.
     """
 
-    type = "for_each"
-    label = "For Each"
+    type = "tool_followup_loop"
+    label = "Tool Follow-Up"
     accent = Colors.amber
-    description = "Loop over array"
-    pins = [
-        Pin.exec_in(),
-        Pin.exec("exec_body", "body", Colors.green, "right"),
-        Pin.exec("exec_then", "then", Colors.white, "right"),
-        Pin.data("data_array", "array", Colors.blue, "left", pin_type="json",
-                 optional=False),
-        Pin.data("data_item", "item", Colors.green, "right", pin_type="any"),
-        Pin.data("data_index", "index", Colors.amber, "right", pin_type="int"),
-    ]
-
-    async def execute(self, ctx: NodeContext):
-        yield {"type": "output", "data": {}}
-        return  # noqa: B901
-
-
-@register
-class ToolLoopNode(NodeType):
-    """Stream-transformer: handle tool calls from an agent reply.
-
-    Takes the bundled output of :class:`AgentCallNode` on the
-    ``stream`` pin.  If there are tool calls, dispatches them and
-    re-calls the agent in a loop.  Follow-up tokens are pushed to
-    the user via ``dispatch()`` / tracker automatically.
-
-    Conceptually: **stream in -> (tool handling) -> stream out**.
-    """
-
-    type = "tool_loop"
-    label = "Tool Loop"
-    accent = Colors.amber
-    description = "Handle tool calls"
+    description = "Execute tools & re-call LLM"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_stream", "stream", Colors.green, "left",
-                 pin_type="stream", optional=False),
+        Pin.data("data_response_in", "response", Colors.blue, "left",
+                 pin_type="message"),
+        Pin.data("data_tool_calls", "tool_calls", Colors.amber, "left",
+                 pin_type="json"),
         Pin.data("data_payload", "payload", Colors.blue, "left",
                  pin_type="json", optional=False),
+        Pin.data("data_event_mode", "event_mode", Colors.purple, "left",
+                 pin_type="string"),
         Pin.data("data_response", "response", Colors.amber, "right",
                  pin_type="message"),
-        Pin.data("data_text", "text", Colors.green, "right",
-                 pin_type="string"),
     ]
 
     async def execute(self, ctx: NodeContext):  # noqa: C901
         from assai.tasks.graph import Acc
 
-        stream = ctx.inputs.get("stream")
-        if stream is None:
+        response = ctx.inputs.get("response", {"role": "assistant", "content": ""})
+        tool_calls = ctx.inputs.get("tool_calls", [])
+        payload = ctx.inputs.get("payload", {})
+        event_mode = (ctx.inputs.get("event_mode")
+                      or ctx.data.get("event_mode", ""))
+
+        if not tool_calls:
             yield {"type": "output", "data": {
-                "response": {"role": "assistant", "content": ""},
-                "text": "",
+                "response": response,
             }}
             return
 
-        acc = Acc(stream)
-        async for event in acc:
-            yield {"type": "event", "data": event}
+        text = response.get("content", "") if isinstance(response, dict) else ""
 
-        payload = ctx.inputs.get("payload", {})
-        while acc.tool_calls:
+        while tool_calls:
             followup = list(payload.get("messages", []))
             followup.append({
                 "role": "assistant",
-                "content": acc.text or None,
-                "tool_calls": acc.tool_calls,
+                "content": text or None,
+                "tool_calls": tool_calls,
             })
 
-            for call in acc.tool_calls:
+            for call in tool_calls:
                 fn = call.get("function", {})
                 tool_name = fn.get("name", "")
                 try:
@@ -572,11 +658,14 @@ class ToolLoopNode(NodeType):
             payload = dict(payload, messages=followup)
             acc = Acc(ctx.graph.dispatch(payload))
             async for event in acc:
+                if event_mode and event.get("event_type") in ("token", "reasoning"):
+                    event = {**event, "event_type": event_mode}
                 yield {"type": "event", "data": event}
+
+            tool_calls = acc.tool_calls
 
         yield {"type": "output", "data": {
             "response": {"role": "assistant", "content": acc.text},
-            "text": acc.text,
         }}
 
 
@@ -648,6 +737,52 @@ class ReasoningMessageNode(NodeType):
                 ),
             }
         yield {"type": "output", "data": message}
+
+
+@register
+class ContentNode(NodeType):
+    """Extract the content string from a message dict."""
+
+    type = "content"
+    label = "Content"
+    accent = Colors.green
+    description = "Extract content from a message"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_message", "message", Colors.blue, "left",
+                 pin_type="message", optional=False),
+        Pin.data("data_content", "content", Colors.green, "right",
+                 pin_type="string"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        msg = ctx.inputs.get("message", {})
+        content = msg.get("content", "") if isinstance(msg, dict) else str(msg)
+        yield {"type": "output", "data": {"content": content}}
+
+
+@register
+class RoleNode(NodeType):
+    """Extract the role string from a message dict."""
+
+    type = "role"
+    label = "Role"
+    accent = Colors.amber
+    description = "Extract role from a message"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_message", "message", Colors.blue, "left",
+                 pin_type="message", optional=False),
+        Pin.data("data_role", "role", Colors.amber, "right",
+                 pin_type="string"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        msg = ctx.inputs.get("message", {})
+        role = msg.get("role", "") if isinstance(msg, dict) else ""
+        yield {"type": "output", "data": {"role": role}}
 
 
 @register
@@ -735,147 +870,6 @@ class PrintNode(NodeType):
                      "text": text},
         }}
         yield {"type": "output", "data": {}}
-
-
-@register
-class BackgroundAgentNode(NodeType):
-    """Silent agent call with tool follow-ups.
-
-    Runs an agent in ``silent`` stream mode, handling tool calls
-    internally.  Emits ``{phase}_start``, ``{phase}_tool_start``,
-    ``{phase}_tool_end``, and ``{phase}_end`` events so the frontend
-    can show progress without streaming tokens.
-
-    Any data-pin input whose key is not ``agent``, ``phase``, ``label``,
-    or ``text`` is forwarded as Jinja2 ``extra_context`` to the agent
-    template (e.g. ``assistant_response`` for a scribe agent).
-    """
-
-    type = "background_agent"
-    label = "Background Agent"
-    accent = Colors.purple
-    description = "Silent agent with tool follow-ups"
-    pins = [
-        Pin.exec_in(),
-        Pin.exec_out(),
-        Pin.data("data_agent", "agent", Colors.cyan, "left", pin_type="string",
-                 dynamic_choices="agents"),
-        Pin.data("data_phase", "phase", Colors.amber, "left", pin_type="string"),
-        Pin.data("data_text", "text", Colors.green, "right", pin_type="string"),
-    ]
-
-    _SKIP_KEYS = frozenset({"agent", "phase", "label", "text"})
-
-    async def execute(self, ctx: NodeContext):  # noqa: C901
-        from assai.tasks.graph import Acc
-
-        agent_name = (ctx.inputs.get("agent", "")
-                      or ctx.data.get("agent", "default"))
-        phase = (ctx.inputs.get("phase", "")
-                 or ctx.data.get("phase", "background"))
-
-        extra: dict[str, Any] = {}
-        for key, value in ctx.data.items():
-            if key.startswith("_") or key in self._SKIP_KEYS:
-                continue
-            extra[key] = value
-        for key, value in ctx.inputs.items():
-            if key.startswith("_") or key in self._SKIP_KEYS:
-                continue
-            if isinstance(value, dict) and "content" in value:
-                extra[key] = value["content"]
-            else:
-                extra[key] = value
-
-        yield {"type": "event", "data": {
-            "event_type": f"{phase}_start",
-            "data": {"agent": agent_name},
-        }}
-
-        try:
-            payload = ctx.graph.prepare(
-                agent_name, ctx.work,
-                **({"extra_context": extra} if extra else {}),
-            )
-        except Exception as exc:
-            log.warning("%s prepare failed: %s", phase, exc)
-            yield {"type": "event", "data": {
-                "event_type": f"{phase}_end",
-                "data": {"status": "skipped", "reason": str(exc)},
-            }}
-            yield {"type": "output", "data": {"text": ""}}
-            return
-
-        acc = Acc(ctx.graph.dispatch(payload, stream_mode="silent"))
-        try:
-            async for _ in acc:
-                pass
-        except Exception as exc:
-            log.warning("%s dispatch failed: %s", phase, exc)
-            yield {"type": "event", "data": {
-                "event_type": f"{phase}_end",
-                "data": {"status": "error", "reason": str(exc)},
-            }}
-            yield {"type": "output", "data": {"text": ""}}
-            return
-
-        while acc.tool_calls:
-            followup = list(payload["messages"])
-            followup.append({
-                "role": "assistant",
-                "content": acc.text or None,
-                "tool_calls": acc.tool_calls,
-            })
-
-            for call in acc.tool_calls:
-                fn = call.get("function", {})
-                tool_name = fn.get("name", "")
-                try:
-                    tool_args = json.loads(fn.get("arguments", "{}"))
-                except (json.JSONDecodeError, TypeError):
-                    tool_args = {}
-
-                yield {"type": "event", "data": {
-                    "event_type": f"{phase}_tool_start",
-                    "data": {"tool_name": tool_name, "args": tool_args},
-                }}
-
-                try:
-                    result_text = await ctx.graph.dispatch_tool(
-                        tool_name, tool_args,
-                    )
-                except Exception as exc:
-                    log.warning("%s tool %s failed: %s", phase, tool_name, exc)
-                    result_text = f"[Tool error] {type(exc).__name__}: {exc}"
-
-                yield {"type": "event", "data": {
-                    "event_type": f"{phase}_tool_end",
-                    "data": {
-                        "tool_name": tool_name,
-                        "result_preview": result_text[:2000],
-                    },
-                }}
-
-                followup.append({
-                    "role": "tool",
-                    "tool_call_id": call.get("id", ""),
-                    "content": result_text,
-                })
-
-            payload = dict(payload, messages=followup)
-            acc = Acc(ctx.graph.dispatch(payload, stream_mode="silent"))
-            try:
-                async for _ in acc:
-                    pass
-            except Exception as exc:
-                log.warning("%s follow-up failed: %s", phase, exc)
-                break
-
-        yield {"type": "event", "data": {
-            "event_type": f"{phase}_end",
-            "data": {"status": "done"},
-        }}
-        yield {"type": "output", "data": {"text": acc.text}}
 
 
 def _parse_curator_output(text: str) -> list[dict]:
