@@ -3,7 +3,7 @@
   "description": "a knowledge curator that selects relevant documents to augment a conversation",
   "role": "system",
   "provider": "auto",
-  "output_format": "text",
+  "output_format": "messages",
   "tools": ["knowledge"],
   "tool_permissions": ["read"],
   "compressor": ""

@@ -975,7 +975,7 @@ const WorkflowEditor: FC = () => {
 
   /* Chat panel */
   const [showChat, setShowChat] = useState(false);
-  const [testConvId, setTestConvId] = useState<string | null>(null);
+  const [testChatKey, setTestChatKey] = useState(0);
   const [runLog, setRunLog] = useState<string[]>([]);
   const [nodeDefsVersion, setNodeDefsVersion] = useState(0);
 
@@ -1559,7 +1559,7 @@ const WorkflowEditor: FC = () => {
             </HStack>
             <HStack gap={1}>
               <Button size="xs" variant="ghost" color={C.muted}
-                onClick={() => { setTestConvId(null); setRunLog([]); }}
+                onClick={() => { setTestChatKey(k => k + 1); setRunLog([]); }}
                 _hover={{ bg: '#333' }} fontSize="13px">New</Button>
               <Button size="xs" variant="ghost" color={C.muted}
                 onClick={() => setShowChat(false)}
@@ -1568,10 +1568,10 @@ const WorkflowEditor: FC = () => {
           </Box>
           <Box flex={1} overflow="hidden">
             <ChatPanel
-              key={testConvId ?? `new-${workflowId}`}
-              conversationId={testConvId}
-              onConversationCreated={id => setTestConvId(id)}
+              key={`test-${workflowId}-${testChatKey}`}
+              conversationId={null}
               compact
+              ephemeral
               initialGraph={workflowId ? `workflow:${workflowId}` : undefined}
               placeholder="Send a message to test the workflow..."
             />

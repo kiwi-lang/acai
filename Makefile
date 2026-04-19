@@ -21,7 +21,7 @@ install: virtual-env
 # back-dev: install
 # 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) python -m assai.server.run)
 
-back-dev: install
+back-dev: # install
 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) assai uber --debug 1 --extern_llm 1)
 
 vllm:

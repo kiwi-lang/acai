@@ -421,10 +421,15 @@ def create_router(config: AssaiConfig | None = None,
             else:
                 return JSONResponse({"error": f"workflow '{wf_id}' not found"}, status_code=404)
 
+        ephemeral = data.get("ephemeral", False)
+
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
-        if not conversation:
+        if ephemeral:
+            import uuid as _uuid
+            conversation = conversation or f"ephemeral-{_uuid.uuid4().hex[:12]}"
+        elif not conversation:
             meta = chat.create(
                 title=message[:80], project=project,
                 task_id=task_id,
@@ -432,7 +437,8 @@ def create_router(config: AssaiConfig | None = None,
             )
             conversation = meta.id
 
-        chat.append(conversation, {"role": "user", "content": message})
+        if not ephemeral:
+            chat.append(conversation, {"role": "user", "content": message})
 
         provider_override = None
         if provider_name and provider_name != "auto":
@@ -445,10 +451,10 @@ def create_router(config: AssaiConfig | None = None,
 
         work = {
             "message": message,
-            "conversation": conversation,
+            "conversation": "" if ephemeral else conversation,
             "agent": agent_name,
             "project": project,
-            "spec_path": chat._msg_path(conversation),
+            "spec_path": "" if ephemeral else chat._msg_path(conversation),
             "stream_id": conversation,
             "provider_override": provider_override,
         }

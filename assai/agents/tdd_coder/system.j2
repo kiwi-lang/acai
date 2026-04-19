@@ -53,6 +53,6 @@ Use this as ``cwd`` for all code and git tool calls.
 [
   {"role": "system", "content": {{ system_prompt | tojson }}}
 {% for msg in messages %},
-  {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
+  {{ msg | tojson }}
 {% endfor %}
 ]

@@ -141,10 +141,12 @@ export async function converse(
     agent = '',
     enable_thinking?: boolean,
     graph?: string,
+    ephemeral?: boolean,
 ): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
     if (enable_thinking !== undefined) body.enable_thinking = enable_thinking;
     if (graph) body.graph = graph;
+    if (ephemeral) body.ephemeral = true;
 
     const response = await fetch(`${API_BASE}/converse`, {
         method: 'POST',

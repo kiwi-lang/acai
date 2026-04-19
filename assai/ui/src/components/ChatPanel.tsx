@@ -192,6 +192,8 @@ export interface ChatPanelProps {
     autoSendMessage?: string;
     /** Force a specific graph selection (e.g. "workflow:my-id"). Hides the graph dropdown when set. */
     initialGraph?: string;
+    /** Ephemeral mode — don't create or persist conversations (for test/preview chat). */
+    ephemeral?: boolean;
 }
 
 const ChatPanel = ({
@@ -214,6 +216,7 @@ const ChatPanel = ({
     initialThinkingMode,
     autoSendMessage,
     initialGraph,
+    ephemeral = false,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -288,6 +291,8 @@ const ChatPanel = ({
     onResponseCompleteRef.current = onResponseComplete;
     onRouteRef.current = onRoute;
     onConversationCreatedRef.current = onConversationCreated;
+    const ephemeralRef = useRef(ephemeral);
+    ephemeralRef.current = ephemeral;
 
     const { joinConversation, leaveConversation } = useAgentSocket();
 
@@ -321,10 +326,12 @@ const ChatPanel = ({
             if (newConvId && newConvId !== convIdRef.current) {
                 const prevId = convIdRef.current;
                 convIdRef.current = newConvId;
-                joinConversation(newConvId);
-                if (prevId) leaveConversation(prevId);
-                justCreatedRef.current = true;
-                onConversationCreatedRef.current?.(newConvId);
+                if (!ephemeralRef.current) {
+                    joinConversation(newConvId);
+                    if (prevId) leaveConversation(prevId);
+                    justCreatedRef.current = true;
+                    onConversationCreatedRef.current?.(newConvId);
+                }
             }
         };
 
@@ -577,7 +584,8 @@ const ChatPanel = ({
             } else {
                 const r = await converse(pending, convId, project || '', '',
                     initialProviderRef.current, initialAgentRef.current,
-                    think === 'native' ? true : undefined, selectedGraph);
+                    think === 'native' ? true : undefined, selectedGraph,
+                    ephemeral || undefined);
                 if (signal?.cancelled) { r.stream.close(); return; }
                 setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
                 attachListeners(r.stream);
@@ -690,7 +698,8 @@ const ChatPanel = ({
         setIsLoading(true);
         try {
             const resp = await converse(text, targetConvId, project || '', '', selectedProvider, selectedAgent,
-                thinkingMode === 'native' ? true : undefined, selectedGraph);
+                thinkingMode === 'native' ? true : undefined, selectedGraph,
+                ephemeral || undefined);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -701,7 +710,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
-    }, [project, selectedProvider, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer]);
+    }, [project, selectedProvider, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer, ephemeral]);
 
     const acceptRoute = useCallback(() => {
         if (!routePending) return;
@@ -717,7 +726,8 @@ const ChatPanel = ({
         setIsLoading(true);
         try {
             const resp = await converse(text, '', project || '', '', selectedProvider, selectedAgent,
-                thinkingMode === 'native' ? true : undefined, selectedGraph);
+                thinkingMode === 'native' ? true : undefined, selectedGraph,
+                ephemeral || undefined);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -769,7 +779,8 @@ const ChatPanel = ({
                 attachListeners(resp.stream);
             } else {
                 const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
-                    thinkingMode === 'native' ? true : undefined, selectedGraph);
+                    thinkingMode === 'native' ? true : undefined, selectedGraph,
+                    ephemeral || undefined);
                 setMessages(prev => [
                     ...prev,
                     { role: 'assistant', content: '', isStreaming: true },
@@ -822,7 +833,18 @@ const ChatPanel = ({
                 attachListeners(resp.stream);
             } else {
                 const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
-                    thinkingMode === 'native' ? true : undefined, selectedGraph);
+                    thinkingMode === 'native' ? true : undefined, selectedGraph,
+                    ephemeral || undefined);
+                convIdRef.current = resp.conversation;
+                if (!ephemeral) {
+                    joinConversation(resp.conversation);
+                    const convChanged = resp.conversation !== (prevConvId || '');
+                    if (convChanged) {
+                        if (prevConvId) leaveConversation(prevConvId);
+                        justCreatedRef.current = true;
+                        onConversationCreated?.(resp.conversation);
+                    }
+                }
                 setMessages(prev => [
                     ...prev,
                     { role: 'assistant', content: '', isStreaming: true },
@@ -909,13 +931,16 @@ const ChatPanel = ({
                                 const isTool = msg.phaseStatus?.startsWith('tool');
                                 const phaseName = msg.phase === 'curator' ? 'Curator' : msg.phase === 'scribe' ? 'Scribe' : msg.phase;
                                 const color = msg.phase === 'curator' ? '#667eea' : '#e6a817';
+                                const phaseEnded = messages.slice(i + 1).some(
+                                    m => m.role === 'phase' && m.phase === msg.phase && m.phaseStatus === 'end',
+                                );
 
                                 if (isStart) {
                                     return (
                                         <Box key={i} w="100%" py={1.5} px={compact ? 3 : 4}>
                                             <HStack maxW={maxW} mx={mx} gap={2}>
                                                 <Box w="6px" h="6px" borderRadius="full" bg={color} flexShrink={0} />
-                                                <Spinner size="xs" color={color} />
+                                                {!phaseEnded && <Spinner size="xs" color={color} />}
                                                 <Text fontSize="xs" fontWeight="semibold" color={color}>
                                                     {phaseName}
                                                 </Text>
@@ -934,7 +959,7 @@ const ChatPanel = ({
                                                 <Text fontSize="xs" color="var(--text-muted)" fontFamily="mono" flex={1} truncate>
                                                     {msg.content}
                                                 </Text>
-                                                {!isToolEnd && <Spinner size="xs" color={color} />}
+                                                {!isToolEnd && !phaseEnded && <Spinner size="xs" color={color} />}
                                             </HStack>
                                         </Box>
                                     );
@@ -960,6 +985,7 @@ const ChatPanel = ({
                                             <Box maxW={maxW} mx={mx}>
                                                 <HStack gap={2} mb={1}>
                                                     <Box w="6px" h="6px" borderRadius="full" bg={color} flexShrink={0} />
+                                                    {!phaseEnded && <Spinner size="xs" color={color} />}
                                                     <Text fontSize="xs" fontWeight="semibold" color={color}>
                                                         {phaseName}
                                                     </Text>

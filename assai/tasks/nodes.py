@@ -7,7 +7,7 @@ Built-in types
 --------------
 start, agent, agent_call, accumulate, stream_transform,
 for_each, tool_loop, tool, append, reasoning_message, print,
-condition, output, fetch_conversation
+condition, output, fetch_conversation, background_agent
 
 Creating a custom node
 ----------------------
@@ -347,7 +347,7 @@ def _extra_context(ctx: NodeContext) -> dict[str, Any] | None:
     for key, value in ctx.inputs.items():
         if key.startswith("_") or key in _AGENT_NODE_KEYS:
             continue
-        if key in ("agent", "context", "stream_mode"):
+        if key in ("agent", "context", "stream_mode", "phase"):
             continue
         extra[key] = value
     return extra or None
@@ -446,12 +446,15 @@ class AgentCallNode(NodeType):
         prepare_kwargs: dict[str, Any] = {}
         if extra:
             prepare_kwargs["extra_context"] = extra
+        log.info("AgentCallNode[%s] agent=%s inputs=%s extra=%s",
+                 ctx.node_id, agent_name, list(ctx.inputs.keys()),
+                 list(extra.keys()) if extra else None)
         payload = ctx.graph.prepare(agent_name, agent_work, **prepare_kwargs)
 
         if isinstance(context, list) and context:
-            payload["messages"] = (
-                list(context) + payload.get("messages", [])[-1:]
-            )
+            prepared = payload.get("messages", [])
+            system_msgs = [m for m in prepared if m.get("role") == "system"]
+            payload["messages"] = system_msgs + list(context)
 
         yield {
             "type": "output",
@@ -609,18 +612,18 @@ class ToolFollowUpLoopNode(NodeType):
         follow_up_raw = ctx.inputs.get("follow_up", ctx.data.get("follow_up", True))
         follow_up = follow_up_raw is True or str(follow_up_raw).lower() in ("true", "1", "yes", "on")
 
-        messages = list(payload.get("messages", []))
+        base_messages = list(payload.get("messages", []))
+        new_messages: list[dict] = []
 
         if not tool_calls:
-            messages.append(response)
             yield {"type": "output", "data": {
                 "response": response,
-                "messages": messages,
+                "messages": [],
             }}
             return
 
         text = response.get("content", "") if isinstance(response, dict) else ""
-        messages.append({
+        new_messages.append({
             "role": "assistant",
             "content": text or None,
             "tool_calls": tool_calls,
@@ -651,7 +654,7 @@ class ToolFollowUpLoopNode(NodeType):
                         f"[Tool error] {type(exc).__name__}: {exc}"
                     )
 
-                messages.append({
+                new_messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id", ""),
                     "content": result_text,
@@ -667,7 +670,7 @@ class ToolFollowUpLoopNode(NodeType):
             if not follow_up:
                 break
 
-            payload = dict(payload, messages=messages)
+            payload = dict(payload, messages=base_messages + new_messages)
             acc = Acc(ctx.graph.dispatch(payload))
             async for event in acc:
                 if event_mode and event.get("event_type") in ("token", "reasoning"):
@@ -678,7 +681,7 @@ class ToolFollowUpLoopNode(NodeType):
             text = acc.text
 
             if tool_calls:
-                messages.append({
+                new_messages.append({
                     "role": "assistant",
                     "content": text or None,
                     "tool_calls": tool_calls,
@@ -689,12 +692,141 @@ class ToolFollowUpLoopNode(NodeType):
         else:
             final_response = response
 
-        messages.append(final_response)
+        new_messages.append(final_response)
         yield {"type": "output", "data": {
             "response": final_response,
-            "messages": messages,
+            "messages": new_messages,
         }}
 
+
+
+@register
+class BackgroundAgentNode(NodeType):
+    """All-in-one background agent: prepare → dispatch → tool loop.
+
+    Emits phase-scoped events (``{phase}_start``, ``{phase}_token``,
+    ``{phase}_tool_start/end``, ``{phase}_end``) so the frontend
+    groups everything inside the agent's own collapsible bubble.
+    """
+
+    type = "background_agent"
+    label = "Background Agent"
+    accent = "#667eea"
+    description = "Silent agent with tools"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_agent", "agent", Colors.cyan, "left", pin_type="string",
+                 dynamic_choices="agents"),
+        Pin.data("data_context", "context", Colors.blue, "left",
+                 pin_type="message_list"),
+        Pin.data("data_phase", "phase", Colors.purple, "left",
+                 pin_type="string"),
+        Pin.data("data_response", "response", Colors.amber, "right",
+                 pin_type="message"),
+        Pin.data("data_text", "text", Colors.green, "right",
+                 pin_type="string"),
+    ]
+
+    async def execute(self, ctx: NodeContext):  # noqa: C901
+        from assai.tasks.graph import Acc
+
+        agent_name = (ctx.inputs.get("agent", "")
+                      or ctx.data.get("agent", "default"))
+        phase = (ctx.inputs.get("phase", "")
+                 or ctx.data.get("phase", "")
+                 or ctx.data.get("label", agent_name)).lower().replace(" ", "_")
+        context = ctx.inputs.get("context", [])
+
+        agent_work = dict(ctx.work)
+        if isinstance(context, list):
+            context_str = "\n".join(
+                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                for m in context if isinstance(m, dict)
+            ) if context else ""
+        else:
+            context_str = str(context)
+        agent_work["message"] = context_str
+
+        extra = _extra_context(ctx)
+        prepare_kwargs: dict[str, Any] = {}
+        if extra:
+            prepare_kwargs["extra_context"] = extra
+
+        payload = ctx.graph.prepare(agent_name, agent_work, **prepare_kwargs)
+
+        if isinstance(context, list) and context:
+            prepared = payload.get("messages", [])
+            system_msgs = [m for m in prepared if m.get("role") == "system"]
+            payload["messages"] = system_msgs + list(context)
+
+        yield {"type": "event", "data": {
+            "event_type": f"{phase}_start",
+            "data": {"agent": agent_name},
+        }}
+
+        acc = Acc(ctx.graph.dispatch(payload))
+        async for event in acc:
+            if event.get("event_type") in ("token", "reasoning"):
+                yield {"type": "event", "data": {
+                    **event, "event_type": f"{phase}_token",
+                }}
+            else:
+                yield {"type": "event", "data": event}
+
+        while acc.tool_calls:
+            followup = list(payload["messages"])
+            followup.append({
+                "role": "assistant",
+                "content": acc.text or None,
+                "tool_calls": acc.tool_calls,
+            })
+            for call in acc.tool_calls:
+                fn = call.get("function", {})
+                tool_name = fn.get("name", "")
+                try:
+                    tool_args = json.loads(fn.get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    tool_args = {}
+
+                yield {"type": "event", "data": {
+                    "event_type": f"{phase}_tool_start",
+                    "data": {"tool_name": tool_name, "args": tool_args},
+                }}
+                try:
+                    result_text = await ctx.graph.dispatch_tool(
+                        tool_name, tool_args,
+                    )
+                except Exception as exc:
+                    log.exception("%s tool error: %s", phase, tool_name)
+                    result_text = (
+                        f"[Tool error] {type(exc).__name__}: {exc}"
+                    )
+
+                followup.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": result_text,
+                })
+                yield {"type": "event", "data": {
+                    "event_type": f"{phase}_tool_end",
+                    "data": {"tool_name": tool_name,
+                             "result_preview": result_text[:2000]},
+                }}
+
+            payload = dict(payload, messages=followup)
+            acc = Acc(ctx.graph.dispatch(payload))
+            async for event in acc:
+                pass  # silent on follow-up rounds
+
+        yield {"type": "event", "data": {
+            "event_type": f"{phase}_end",
+            "data": {"status": "done", "text_length": len(acc.text)},
+        }}
+        yield {"type": "output", "data": {
+            "response": {"role": "assistant", "content": acc.text},
+            "text": acc.text,
+        }}
 
 
 @register
@@ -726,6 +858,33 @@ class AppendNode(NodeType):
         elif b:
             result.append({"role": "assistant", "content": str(b)})
         yield {"type": "output", "data": {"result": result}}
+
+
+@register
+class ExtendNode(NodeType):
+    type = "extend"
+    label = "Extend"
+    accent = Colors.purple
+    description = "Merge two message lists"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_a", "first", Colors.blue, "left",
+                 pin_type="message_list"),
+        Pin.data("data_b", "second", Colors.amber, "left",
+                 pin_type="message_list"),
+        Pin.data("data_result", "result", Colors.blue, "right",
+                 pin_type="message_list"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        a = ctx.inputs.get("a", [])
+        b = ctx.inputs.get("b", [])
+        if not isinstance(a, list):
+            a = [a] if a else []
+        if not isinstance(b, list):
+            b = [b] if b else []
+        yield {"type": "output", "data": {"result": list(a) + list(b)}}
 
 
 @register
@@ -950,6 +1109,8 @@ class ParseKnowledgeNode(NodeType):
 
     async def execute(self, ctx: NodeContext):
         text = ctx.inputs.get("text", "")
+
+        print(text)
 
         if isinstance(text, str):
             docs = _parse_curator_output(text)

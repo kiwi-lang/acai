@@ -25,6 +25,6 @@ Answer questions, suggest plans, and create tasks when asked.
 [
   {"role": "system", "content": {{ system_prompt | tojson }}}
 {% for msg in messages %},
-  {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
+  {{ msg | tojson }}
 {% endfor %}
 ]
