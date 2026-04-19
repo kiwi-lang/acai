@@ -452,6 +452,21 @@ const ChatPanel = ({
             });
         }
 
+        es.addEventListener('print', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last?.isStreaming) copy[copy.length - 1] = { ...last, isStreaming: false };
+                copy.push({
+                    role: 'print' as const,
+                    content: data.text || '',
+                    nodeLabel: data.label || 'Print',
+                });
+                return copy;
+            });
+        });
+
         es.addEventListener('done', () => {
             setMessages(prev =>
                 prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m),
@@ -959,6 +974,37 @@ const ChatPanel = ({
                                 }
 
                                 return null;
+                            }
+
+                            if (msg.role === 'print') {
+                                const isLong = msg.content.length > 300;
+                                return (
+                                    <Box key={i} w="100%" py={1.5} px={compact ? 3 : 4}>
+                                        <Box maxW={maxW} mx={mx}
+                                            borderRadius="md" overflow="hidden"
+                                            border="1px solid" borderColor="var(--accent)"
+                                            bg="color-mix(in srgb, var(--accent) 8%, transparent)">
+                                            <HStack px={3} py={1.5} gap={2}
+                                                borderBottom="1px solid" borderColor="color-mix(in srgb, var(--accent) 20%, transparent)">
+                                                <Box w="6px" h="6px" borderRadius="sm" bg="var(--accent)" flexShrink={0} />
+                                                <Text fontSize="xs" fontWeight="semibold" color="var(--accent)">
+                                                    {msg.nodeLabel || 'Print'}
+                                                </Text>
+                                                <Text fontSize="xs" color="var(--text-muted)" ml="auto">
+                                                    {msg.content.length > 1000
+                                                        ? `${(msg.content.length / 1000).toFixed(1)}k chars`
+                                                        : `${msg.content.length} chars`}
+                                                </Text>
+                                            </HStack>
+                                            <Box px={3} py={2} fontSize="xs" lineHeight="1.5"
+                                                whiteSpace="pre-wrap" wordBreak="break-word"
+                                                fontFamily="mono" color="var(--text-secondary)"
+                                                maxH={isLong ? '200px' : undefined} overflowY={isLong ? 'auto' : undefined}>
+                                                {msg.content || '(empty)'}
+                                            </Box>
+                                        </Box>
+                                    </Box>
+                                );
                             }
 
                             if (msg.role === 'tool_call') {

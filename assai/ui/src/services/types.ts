@@ -1,7 +1,7 @@
 // Type definitions for ASSAI Agent Swarm
 
 export interface AgentMessage {
-    role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'phase';
+    role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'phase' | 'print';
     content: string;
     reasoning?: string;
     name?: string;
@@ -9,6 +9,8 @@ export interface AgentMessage {
     phase?: string;
     /** Phase status: "start", "end", "tool_start", "tool_end". */
     phaseStatus?: string;
+    /** Label for print messages (the originating node name). */
+    nodeLabel?: string;
     isStreaming?: boolean;
     taskId?: string;
     error?: string;

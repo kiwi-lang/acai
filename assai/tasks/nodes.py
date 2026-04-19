@@ -77,6 +77,7 @@ class Colors:
     cyan   = "#5cc6c6"   # noqa: E221
     red    = "#c45555"   # noqa: E221
     purple = "#9b7ed0"   # noqa: E221
+    pink   = "#e06090"   # noqa: E221
 
 
 # ===================================================================
@@ -589,8 +590,12 @@ class ToolFollowUpLoopNode(NodeType):
                  pin_type="json", optional=False),
         Pin.data("data_event_mode", "event_mode", Colors.purple, "left",
                  pin_type="string"),
+        Pin.data("data_follow_up", "follow_up", Colors.pink, "left",
+                 pin_type="bool"),
         Pin.data("data_response", "response", Colors.amber, "right",
                  pin_type="message"),
+        Pin.data("data_messages", "messages", Colors.blue, "right",
+                 pin_type="message_list"),
     ]
 
     async def execute(self, ctx: NodeContext):  # noqa: C901
@@ -601,23 +606,27 @@ class ToolFollowUpLoopNode(NodeType):
         payload = ctx.inputs.get("payload", {})
         event_mode = (ctx.inputs.get("event_mode")
                       or ctx.data.get("event_mode", ""))
+        follow_up_raw = ctx.inputs.get("follow_up", ctx.data.get("follow_up", True))
+        follow_up = follow_up_raw is True or str(follow_up_raw).lower() in ("true", "1", "yes", "on")
+
+        messages = list(payload.get("messages", []))
 
         if not tool_calls:
+            messages.append(response)
             yield {"type": "output", "data": {
                 "response": response,
+                "messages": messages,
             }}
             return
 
         text = response.get("content", "") if isinstance(response, dict) else ""
+        messages.append({
+            "role": "assistant",
+            "content": text or None,
+            "tool_calls": tool_calls,
+        })
 
         while tool_calls:
-            followup = list(payload.get("messages", []))
-            followup.append({
-                "role": "assistant",
-                "content": text or None,
-                "tool_calls": tool_calls,
-            })
-
             for call in tool_calls:
                 fn = call.get("function", {})
                 tool_name = fn.get("name", "")
@@ -642,7 +651,7 @@ class ToolFollowUpLoopNode(NodeType):
                         f"[Tool error] {type(exc).__name__}: {exc}"
                     )
 
-                followup.append({
+                messages.append({
                     "role": "tool",
                     "tool_call_id": call.get("id", ""),
                     "content": result_text,
@@ -655,7 +664,10 @@ class ToolFollowUpLoopNode(NodeType):
                              "result_preview": result_text[:2000]},
                 }}
 
-            payload = dict(payload, messages=followup)
+            if not follow_up:
+                break
+
+            payload = dict(payload, messages=messages)
             acc = Acc(ctx.graph.dispatch(payload))
             async for event in acc:
                 if event_mode and event.get("event_type") in ("token", "reasoning"):
@@ -663,9 +675,24 @@ class ToolFollowUpLoopNode(NodeType):
                 yield {"type": "event", "data": event}
 
             tool_calls = acc.tool_calls
+            text = acc.text
 
+            if tool_calls:
+                messages.append({
+                    "role": "assistant",
+                    "content": text or None,
+                    "tool_calls": tool_calls,
+                })
+
+        if follow_up:
+            final_response = {"role": "assistant", "content": acc.text}
+        else:
+            final_response = response
+
+        messages.append(final_response)
         yield {"type": "output", "data": {
-            "response": {"role": "assistant", "content": acc.text},
+            "response": final_response,
+            "messages": messages,
         }}
 
 
