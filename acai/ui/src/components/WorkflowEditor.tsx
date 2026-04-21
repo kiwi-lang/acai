@@ -992,6 +992,7 @@ const WorkflowEditor: FC = () => {
   const [edges, setEdges, onEdgesChange] = useEdgesState(DEFAULT_EDGES);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
   const [rfInstance, setRfInstance] = useState<ReactFlowInstance | null>(null);
+  const pendingCenter = useRef<{ x: number; y: number } | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
 
   const [workflowId, _setWorkflowId] = useState('');
@@ -1030,6 +1031,17 @@ const WorkflowEditor: FC = () => {
   /* Validation */
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
   const [showValidation, setShowValidation] = useState(false);
+
+  const handleRfInit = useCallback((instance: ReactFlowInstance) => {
+    setRfInstance(instance);
+    if (pendingCenter.current) {
+      const { x, y } = pendingCenter.current;
+      pendingCenter.current = null;
+      setTimeout(() => instance.setCenter(x, y, { zoom: 1 }), 50);
+    } else {
+      instance.fitView();
+    }
+  }, []);
 
   useEffect(() => {
     getNodeTypes().then(defs => {
@@ -1261,7 +1273,17 @@ const WorkflowEditor: FC = () => {
       };
     }));
     setSelectedNode(null);
-  }, [setNodes, setEdges, setWorkflowId]);
+
+    if (specNodes.length > 0) {
+      const cx = specNodes.reduce((s: number, n: any) => s + n.position.x, 0) / specNodes.length;
+      const cy = specNodes.reduce((s: number, n: any) => s + n.position.y, 0) / specNodes.length;
+      if (rfInstance) {
+        setTimeout(() => rfInstance.setCenter(cx, cy, { zoom: 1 }), 50);
+      } else {
+        pendingCenter.current = { x: cx, y: cy };
+      }
+    }
+  }, [setNodes, setEdges, setWorkflowId, rfInstance]);
 
   const handleLoad = useCallback(async (id: string) => {
     try { loadSpec(await getWorkflow(id)); } catch (err) { console.error('Load failed', err); }
@@ -1475,7 +1497,7 @@ const WorkflowEditor: FC = () => {
           onConnect={onConnect}
           onNodeClick={onNodeClick}
           onPaneClick={onPaneClick}
-          onInit={setRfInstance}
+          onInit={handleRfInit}
           onDragOver={onDragOver}
           onDrop={onDrop}
           onPaneContextMenu={onPaneContextMenu}
@@ -1484,7 +1506,6 @@ const WorkflowEditor: FC = () => {
           isValidConnection={isValidConnection}
           defaultEdgeOptions={{ selectable: true, deletable: true }}
           deleteKeyCode={['Backspace', 'Delete']}
-          fitView
           colorMode="dark"
           proOptions={{ hideAttribution: true }}
           style={{ background: C.bg }}
