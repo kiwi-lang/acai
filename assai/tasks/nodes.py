@@ -264,6 +264,7 @@ class NodeType:
     * ``label``       — human-readable name.
     * ``accent``      — hex color for the node header.
     * ``description`` — short tooltip text.
+    * ``category``    — grouping label for palette/menus (default ``"General"``).
     * ``pins``        — list of :class:`Pin` definitions.
 
     The ``execute`` method is an **async generator** that yields
@@ -279,6 +280,7 @@ class NodeType:
     label: str = ""
     accent: str = "#888"
     description: str = ""
+    category: str = "General"
     pins: list[Pin] = []
 
     async def execute(self, ctx: NodeContext):
@@ -292,6 +294,7 @@ class NodeType:
             "label": self.label,
             "accent": self.accent,
             "description": self.description,
+            "category": self.category,
             "pins": [p.to_dict() for p in self.pins],
         }
 
@@ -363,6 +366,7 @@ class StartNode(NodeType):
     label = "Start"
     accent = Colors.green
     description = "Entry point"
+    category = "Flow"
     pins = [
         Pin.exec_out(),
         Pin.data("data_conversation", "conversation", Colors.blue, "right",
@@ -402,6 +406,7 @@ class AgentCallNode(NodeType):
     label = "Agent Call"
     accent = Colors.blue
     description = "LLM call"
+    category = "Agent"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -477,6 +482,7 @@ class AccumulateNode(NodeType):
     label = "Accumulate"
     accent = Colors.green
     description = "Stream to response"
+    category = "Agent"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -542,6 +548,7 @@ class StreamTransformNode(NodeType):
     label = "Stream Transform"
     accent = Colors.purple
     description = "Relabel stream mode"
+    category = "Agent"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -582,6 +589,7 @@ class ToolFollowUpLoopNode(NodeType):
     label = "Tool Follow-Up"
     accent = Colors.amber
     description = "Execute tools & re-call LLM"
+    category = "Agent"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -713,6 +721,7 @@ class BackgroundAgentNode(NodeType):
     label = "Background Agent"
     accent = "#667eea"
     description = "Silent agent with tools"
+    category = "Agent"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -835,6 +844,7 @@ class AppendNode(NodeType):
     label = "Append"
     accent = Colors.purple
     description = "Append item to array"
+    category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -866,6 +876,7 @@ class ExtendNode(NodeType):
     label = "Extend"
     accent = Colors.purple
     description = "Merge two message lists"
+    category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -900,6 +911,7 @@ class ReasoningMessageNode(NodeType):
     label = "Reasoning Message"
     accent = Colors.purple
     description = "Wrap reasoning into a system message"
+    category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -933,6 +945,7 @@ class ContentNode(NodeType):
     label = "Content"
     accent = Colors.green
     description = "Extract content from a message"
+    category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -956,6 +969,7 @@ class RoleNode(NodeType):
     label = "Role"
     accent = Colors.amber
     description = "Extract role from a message"
+    category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -977,6 +991,7 @@ class ConditionNode(NodeType):
     label = "Condition"
     accent = Colors.red
     description = "Branch on expression"
+    category = "Flow"
     pins = [
         Pin.exec_in(),
         Pin.exec("exec_true", "true", Colors.green, "right"),
@@ -1009,6 +1024,7 @@ class OutputNode(NodeType):
     label = "Output"
     accent = Colors.cyan
     description = "Final response"
+    category = "Flow"
     pins = [
         Pin.exec_in(),
         Pin.data("data_response", "stream", Colors.green, "left",
@@ -1037,6 +1053,7 @@ class PrintNode(NodeType):
     label = "Print"
     accent = Colors.cyan
     description = "Display value"
+    category = "Debug"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -1098,6 +1115,7 @@ class ParseKnowledgeNode(NodeType):
     label = "Parse Knowledge"
     accent = Colors.cyan
     description = "Curator output → knowledge context"
+    category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -1149,6 +1167,7 @@ class FetchConversationNode(NodeType):
     label = "Fetch Conversation"
     accent = Colors.cyan
     description = "Load conversation history"
+    category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),

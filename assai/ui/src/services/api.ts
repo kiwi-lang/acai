@@ -410,6 +410,7 @@ export interface NodeTypeDef {
     label: string;
     accent: string;
     description: string;
+    category: string;
     pins: PinDef[];
 }
 

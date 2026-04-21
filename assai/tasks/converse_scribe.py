@@ -156,11 +156,7 @@ class ConverseScribeGraph(TaskGraph):
             # ==============================================================
             # Phase 3: Scribe — update knowledge base silently
             # ==============================================================
-            scribe_work = dict(work)
-            scribe_work["assistant_response"] = acc_converse.text
-
-            scribe_payload = self.prepare("scribe", scribe_work,
-                                          extra_context={"assistant_response": acc_converse.text})
+            scribe_payload = self.prepare("scribe", work)
 
             async for event in self._background_agent("scribe", scribe_payload):
                 yield event

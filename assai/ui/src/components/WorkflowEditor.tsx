@@ -758,37 +758,78 @@ interface ContextMenuProps {
   onClose: () => void;
 }
 
+const CATEGORY_ORDER = ['Flow', 'Agent', 'Data', 'Debug', 'General'];
+
 function ContextMenu({ x, y, flowX, flowY, onAddNode, onClose }: ContextMenuProps) {
+  const [openCat, setOpenCat] = useState<string | null>(null);
+
   useEffect(() => {
     const handle = () => onClose();
     window.addEventListener('click', handle);
     return () => window.removeEventListener('click', handle);
   }, [onClose]);
 
+  const grouped = useMemo(() => {
+    const map: Record<string, typeof _nodeDefs> = {};
+    for (const def of _nodeDefs) {
+      const cat = def.category || 'General';
+      (map[cat] ||= []).push(def);
+    }
+    return CATEGORY_ORDER.filter(c => map[c]).map(c => ({ category: c, defs: map[c] }));
+  }, []);
+
+  const menuH = grouped.length * 32 + 32;
+  const fitsBelow = y + menuH < window.innerHeight - 8;
+  const adjustedY = fitsBelow ? y : Math.max(8, window.innerHeight - menuH - 8);
+
   return (
     <div style={{
-      position: 'fixed', left: x, top: y, zIndex: 1000,
+      position: 'fixed', left: x, top: adjustedY, zIndex: 1000,
       background: '#2a2a2a', border: `1px solid ${C.border}`, borderRadius: 4,
-      minWidth: 160, padding: '4px 0', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+      minWidth: 150, padding: '4px 0', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
     }} onClick={e => e.stopPropagation()}>
-      <div style={{ fontSize: 13, color: C.muted, padding: '4px 12px', textTransform: 'uppercase', fontWeight: 600 }}>
+      <div style={{ fontSize: 11, color: C.muted, padding: '4px 12px', textTransform: 'uppercase', fontWeight: 600 }}>
         Add Node
       </div>
-      {_nodeDefs.map(def => (
-        <div key={def.type}
-          onClick={() => { onAddNode(def.type, { x: flowX, y: flowY }); onClose(); }}
-          style={{
-            padding: '5px 12px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8,
-            fontSize: 15, color: C.text,
-          }}
-          onMouseEnter={e => (e.currentTarget.style.background = '#383838')}
-          onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      {grouped.map(({ category, defs }) => (
+        <div key={category} style={{ position: 'relative' }}
+          onMouseEnter={() => setOpenCat(category)}
+          onMouseLeave={() => setOpenCat(null)}
         >
-          <div style={{ width: 6, height: 6, borderRadius: 1, background: def.accent, flexShrink: 0 }} />
-          <div>
-            <div style={{ fontWeight: 500 }}>{def.label}</div>
-            <div style={{ fontSize: 13, color: C.muted }}>{def.description}</div>
+          <div style={{
+            padding: '6px 12px', cursor: 'pointer', display: 'flex',
+            alignItems: 'center', justifyContent: 'space-between',
+            fontSize: 14, color: C.text, fontWeight: 500,
+            background: openCat === category ? '#383838' : 'transparent',
+          }}>
+            <span>{category}</span>
+            <span style={{ fontSize: 10, color: C.muted }}>&#9654;</span>
           </div>
+          {openCat === category && (
+            <div style={{
+              position: 'absolute', left: '100%', top: 0, zIndex: 1001,
+              background: '#2a2a2a', border: `1px solid ${C.border}`, borderRadius: 4,
+              minWidth: 180, padding: '4px 0', boxShadow: '0 4px 16px rgba(0,0,0,0.5)',
+            }}>
+              {defs.map(def => (
+                <div key={def.type}
+                  onClick={() => { onAddNode(def.type, { x: flowX, y: flowY }); onClose(); }}
+                  style={{
+                    padding: '5px 12px', cursor: 'pointer', display: 'flex',
+                    alignItems: 'center', gap: 8, fontSize: 14, color: C.text,
+                  }}
+                  onMouseEnter={e => (e.currentTarget.style.background = '#383838')}
+                  onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <div style={{ width: 6, height: 6, borderRadius: 1, background: def.accent, flexShrink: 0 }} />
+                  <div>
+                    <div style={{ fontWeight: 500 }}>{def.label}</div>
+                    <div style={{ fontSize: 12, color: C.muted }}>{def.description}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -977,6 +1018,7 @@ const WorkflowEditor: FC = () => {
   const [showChat, setShowChat] = useState(false);
   const [testChatKey, setTestChatKey] = useState(0);
   const [runLog, setRunLog] = useState<string[]>([]);
+  const [expandedCat, setExpandedCat] = useState<string | null>('Agent');
   const [nodeDefsVersion, setNodeDefsVersion] = useState(0);
 
   /* Execution highlighting state */
@@ -1340,27 +1382,51 @@ const WorkflowEditor: FC = () => {
           </Box>
 
           {/* Node palette */}
-          <Box p={2} borderBottom={`1px solid ${C.border}`}>
-            <Text fontSize="13px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Nodes</Text>
-            <VStack gap={0.5} align="stretch">
-              {_nodeDefs.map(def => (
-                <Box key={def.type} draggable
-                  onDragStart={e => { e.dataTransfer.setData('application/workflow-node-type', def.type); e.dataTransfer.effectAllowed = 'move'; }}
-                  px={2} py={1} borderRadius="3px"
-                  border={`1px solid ${def.accent}33`} cursor="grab"
-                  _hover={{ bg: `${def.accent}18`, borderColor: `${def.accent}66` }}
-                  transition="all 0.1s"
-                >
-                  <HStack gap={2}>
-                    <Box w="6px" h="6px" borderRadius="1px" bg={def.accent} flexShrink={0} />
-                    <Box>
-                      <Text fontSize="14px" fontWeight={500} color={C.text}>{def.label}</Text>
-                      <Text fontSize="13px" color={C.muted}>{def.description}</Text>
+          <Box p={2} borderBottom={`1px solid ${C.border}`} overflow="hidden"
+            display="flex" flexDirection="column" maxH="40vh">
+            <Text fontSize="13px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase" flexShrink={0}>Nodes</Text>
+            <Box overflowY="auto" flex={1} minH={0}>
+              <VStack gap={0} align="stretch">
+                {CATEGORY_ORDER.filter(cat => _nodeDefs.some(d => (d.category || 'General') === cat)).map(cat => {
+                  const isOpen = expandedCat === cat;
+                  return (
+                    <Box key={cat}>
+                      <HStack px={1} py={1} cursor="pointer" gap={1}
+                        onClick={() => setExpandedCat(isOpen ? null : cat)}
+                        _hover={{ bg: '#333' }} borderRadius="3px" mb={isOpen ? 0.5 : 0}>
+                        <Text fontSize="10px" color={C.muted}>{isOpen ? '▼' : '▶'}</Text>
+                        <Text fontSize="11px" fontWeight={600} color={isOpen ? C.text : C.muted}
+                          textTransform="uppercase">{cat}</Text>
+                        <Text fontSize="11px" color={C.muted} ml="auto">
+                          {_nodeDefs.filter(d => (d.category || 'General') === cat).length}
+                        </Text>
+                      </HStack>
+                      {isOpen && (
+                        <VStack gap={0.5} align="stretch" mb={1}>
+                          {_nodeDefs.filter(d => (d.category || 'General') === cat).map(def => (
+                            <Box key={def.type} draggable
+                              onDragStart={e => { e.dataTransfer.setData('application/workflow-node-type', def.type); e.dataTransfer.effectAllowed = 'move'; }}
+                              px={2} py={1} borderRadius="3px"
+                              border={`1px solid ${def.accent}33`} cursor="grab"
+                              _hover={{ bg: `${def.accent}18`, borderColor: `${def.accent}66` }}
+                              transition="all 0.1s"
+                            >
+                              <HStack gap={2}>
+                                <Box w="6px" h="6px" borderRadius="1px" bg={def.accent} flexShrink={0} />
+                                <Box>
+                                  <Text fontSize="14px" fontWeight={500} color={C.text}>{def.label}</Text>
+                                  <Text fontSize="13px" color={C.muted}>{def.description}</Text>
+                                </Box>
+                              </HStack>
+                            </Box>
+                          ))}
+                        </VStack>
+                      )}
                     </Box>
-                  </HStack>
-                </Box>
-              ))}
-            </VStack>
+                  );
+                })}
+              </VStack>
+            </Box>
           </Box>
 
           {/* Workflow list */}
