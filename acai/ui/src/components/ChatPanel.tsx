@@ -194,6 +194,8 @@ export interface ChatPanelProps {
     initialGraph?: string;
     /** Ephemeral mode — don't create or persist conversations (for test/preview chat). */
     ephemeral?: boolean;
+    /** Task id — conversations will be scoped under workspace/projects/<project>/<taskId>/. */
+    taskId?: string;
 }
 
 const ChatPanel = ({
@@ -217,6 +219,7 @@ const ChatPanel = ({
     autoSendMessage,
     initialGraph,
     ephemeral = false,
+    taskId,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -577,7 +580,7 @@ const ChatPanel = ({
             const think = initialThinkingMode ?? (initialThinking === false ? 'off' : 'native');
             if (think === 'emulated') {
                 const r = await thinkConverse(pending, convId, project || '', '',
-                    initialProviderRef.current, initialAgentRef.current);
+                    initialProviderRef.current, initialAgentRef.current, taskId);
                 if (signal?.cancelled) { r.stream.close(); return; }
                 setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
                 attachListeners(r.stream);
@@ -585,7 +588,7 @@ const ChatPanel = ({
                 const r = await converse(pending, convId, project || '', '',
                     initialProviderRef.current, initialAgentRef.current,
                     think === 'native' ? true : undefined, selectedGraph,
-                    ephemeral || undefined);
+                    ephemeral || undefined, taskId);
                 if (signal?.cancelled) { r.stream.close(); return; }
                 setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
                 attachListeners(r.stream);
@@ -596,7 +599,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
-    }, [openEventSource, attachListeners, initialThinkingMode, initialThinking, project]);
+    }, [openEventSource, attachListeners, initialThinkingMode, initialThinking, project, taskId]);
 
     const loadConversationRef = useRef(loadConversation);
     loadConversationRef.current = loadConversation;
@@ -699,7 +702,7 @@ const ChatPanel = ({
         try {
             const resp = await converse(text, targetConvId, project || '', '', selectedProvider, selectedAgent,
                 thinkingMode === 'native' ? true : undefined, selectedGraph,
-                ephemeral || undefined);
+                ephemeral || undefined, taskId);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -710,7 +713,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
-    }, [project, selectedProvider, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer, ephemeral]);
+    }, [project, selectedProvider, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer, ephemeral, taskId]);
 
     const acceptRoute = useCallback(() => {
         if (!routePending) return;
@@ -727,7 +730,7 @@ const ChatPanel = ({
         try {
             const resp = await converse(text, '', project || '', '', selectedProvider, selectedAgent,
                 thinkingMode === 'native' ? true : undefined, selectedGraph,
-                ephemeral || undefined);
+                ephemeral || undefined, taskId);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -738,7 +741,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
-    }, [routePending, project, selectedProvider, selectedAgent, thinkingMode, attachListeners, clearRouteTimer]);
+    }, [routePending, project, selectedProvider, selectedAgent, thinkingMode, attachListeners, clearRouteTimer, taskId]);
 
     useEffect(() => {
         if (!routePending) return;
@@ -771,7 +774,7 @@ const ChatPanel = ({
         setIsLoading(true);
         try {
             if (thinkingMode === 'emulated') {
-                const resp = await thinkConverse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent);
+                const resp = await thinkConverse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent, taskId);
                 setMessages(prev => [
                     ...prev,
                     { role: 'assistant', content: '', isStreaming: true },
@@ -780,7 +783,7 @@ const ChatPanel = ({
             } else {
                 const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
                     thinkingMode === 'native' ? true : undefined, selectedGraph,
-                    ephemeral || undefined);
+                    ephemeral || undefined, taskId);
                 setMessages(prev => [
                     ...prev,
                     { role: 'assistant', content: '', isStreaming: true },
@@ -792,7 +795,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
-    }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, attachListeners]);
+    }, [isLoading, messages, project, selectedProvider, selectedAgent, thinkingMode, attachListeners, taskId]);
 
     const handleSend = async (overrideText?: string) => {
         const text = (overrideText ?? input).trim();
@@ -817,7 +820,7 @@ const ChatPanel = ({
                 const resp = await uberConverse(text, prevConvId || '', selectedAgent);
                 attachListeners(resp.stream);
             } else if (thinkingMode === 'emulated') {
-                const resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent);
+                const resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent, taskId);
                 convIdRef.current = resp.conversation;
                 joinConversation(resp.conversation);
                 const convChanged = resp.conversation !== (prevConvId || '');
@@ -834,7 +837,7 @@ const ChatPanel = ({
             } else {
                 const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
                     thinkingMode === 'native' ? true : undefined, selectedGraph,
-                    ephemeral || undefined);
+                    ephemeral || undefined, taskId);
                 convIdRef.current = resp.conversation;
                 if (!ephemeral) {
                     joinConversation(resp.conversation);

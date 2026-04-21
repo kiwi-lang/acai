@@ -180,30 +180,30 @@ const SettingsPage = () => {
     const sandboxType = sb.type;
 
     return (
-        <Box h="100vh" w="100%" bg="var(--bg-page)" overflowY="auto" p={6}>
-            <Box maxW="4xl" mx="auto">
-                <HStack justify="space-between" mb={6}>
-                    <Heading size="lg" color="var(--text-heading)">Settings</Heading>
-                    <Text fontSize="xs" color="var(--text-muted)" fontFamily="mono">{config.workspace}</Text>
-                </HStack>
+        <Box h="100vh" w="100%" bg="var(--bg-page)" overflowY="auto" p={6} display="flex" flexDirection="column">
+            <HStack justify="space-between" mb={6} px={2} flexShrink={0}>
+                <Heading size="lg" color="var(--text-heading)">Settings</Heading>
+                <Text fontSize="xs" color="var(--text-muted)" fontFamily="mono">{config.workspace}</Text>
+            </HStack>
 
-                {error && (
-                    <Box p={3} bg="var(--bg-error)" borderRadius="md" mb={4}>
-                        <Text color="var(--text-error)" fontSize="sm">{error}</Text>
-                    </Box>
-                )}
+            {error && (
+                <Box p={3} bg="var(--bg-error)" borderRadius="md" mb={4} mx={2}>
+                    <Text color="var(--text-error)" fontSize="sm">{error}</Text>
+                </Box>
+            )}
 
-                <VStack gap={4} align="stretch">
+            <Box display="flex" flexWrap="wrap" gap={4} flex={1} alignContent="flex-start">
 
-                    {/* Sandbox */}
+                {/* Sandbox */}
+                <Box flex="1 1 480px" minW="360px">
                     <SectionCard
                         title="Sandbox"
                         busy={savingSection === 'sandbox'}
                         onSave={() => saveSection('sandbox')}
                         status={sectionStatus.sandbox || ''}
                     >
-                        <HStack gap={3}>
-                            <Box flex={1}>
+                        <HStack gap={3} flexWrap="wrap">
+                            <Box flex="1 1 100px" minW="100px">
                                 <Field label="Backend">
                                     <NativeSelect.Root size="sm">
                                         <NativeSelect.Field
@@ -218,17 +218,17 @@ const SettingsPage = () => {
                                     </NativeSelect.Root>
                                 </Field>
                             </Box>
-                            <Box flex={1}>
+                            <Box flex="1 1 80px" minW="80px">
                                 <Field label="Timeout (s)">
                                     <Input type="number" value={sb.timeout} onChange={e => updateSandbox('timeout', parseInt(e.target.value) || 120)} {...inputProps} />
                                 </Field>
                             </Box>
-                            <Box flex={1}>
+                            <Box flex="1 1 80px" minW="80px">
                                 <Field label="Memory Limit">
                                     <Input value={sb.memory_limit} onChange={e => updateSandbox('memory_limit', e.target.value)} {...inputProps} />
                                 </Field>
                             </Box>
-                            <Box flex={1}>
+                            <Box flex="1 1 80px" minW="80px">
                                 <Field label="MCP Port">
                                     <Input type="number" value={sb.mcp_port} onChange={e => updateSandbox('mcp_port', parseInt(e.target.value) || 9200)} {...inputProps} />
                                 </Field>
@@ -240,7 +240,6 @@ const SettingsPage = () => {
                             <ToggleButton label="GPU" value={sb.gpu} onChange={v => updateSandbox('gpu', v)} />
                         </HStack>
 
-                        {/* Container options */}
                         {(sandboxType === 'docker' || sandboxType === 'podman') && (
                             <Box p={3} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
                                 <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={2}>Container Options</Text>
@@ -259,7 +258,6 @@ const SettingsPage = () => {
                             </Box>
                         )}
 
-                        {/* Firecracker options */}
                         {sandboxType === 'firecracker' && (
                             <Box p={3} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
                                 <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={2}>Firecracker Options</Text>
@@ -292,7 +290,6 @@ const SettingsPage = () => {
                             </Box>
                         )}
 
-                        {/* Bubblewrap options */}
                         {sandboxType === 'bubblewrap' && (
                             <Box p={3} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
                                 <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={2}>Bubblewrap Options</Text>
@@ -314,7 +311,6 @@ const SettingsPage = () => {
                             </Box>
                         )}
 
-                        {/* Nsjail options */}
                         {sandboxType === 'nsjail' && (
                             <Box p={3} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
                                 <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={2}>Nsjail Options</Text>
@@ -341,8 +337,10 @@ const SettingsPage = () => {
                             </Box>
                         )}
                     </SectionCard>
+                </Box>
 
-                    {/* Worker */}
+                {/* Worker */}
+                <Box flex="1 1 400px" minW="320px">
                     <SectionCard
                         title="Worker"
                         busy={savingSection === 'worker'}
@@ -379,8 +377,10 @@ const SettingsPage = () => {
                             </Box>
                         </HStack>
                     </SectionCard>
+                </Box>
 
-                    {/* Git */}
+                {/* Git */}
+                <Box flex="1 1 400px" minW="320px">
                     <SectionCard
                         title="Git"
                         busy={savingSection === 'git'}
@@ -401,8 +401,10 @@ const SettingsPage = () => {
                         </HStack>
                         <ToggleButton label="Auto Commit" value={config.git.auto_commit} onChange={v => updateGit('auto_commit', v)} />
                     </SectionCard>
+                </Box>
 
-                    {/* Queue */}
+                {/* Queue */}
+                <Box flex="1 1 400px" minW="320px">
                     <SectionCard
                         title="Queue"
                         busy={savingSection === 'queue'}
@@ -425,8 +427,10 @@ const SettingsPage = () => {
                             </Box>
                         </HStack>
                     </SectionCard>
+                </Box>
 
-                    {/* Audit */}
+                {/* Audit */}
+                <Box flex="1 1 400px" minW="320px">
                     <SectionCard
                         title="Audit"
                         busy={savingSection === 'audit'}
@@ -442,8 +446,8 @@ const SettingsPage = () => {
                             </Box>
                         </HStack>
                     </SectionCard>
+                </Box>
 
-                </VStack>
             </Box>
         </Box>
     );

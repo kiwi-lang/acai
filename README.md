@@ -1,152 +1,151 @@
-acai
-=====
+Açaí
+====
 
-* Test for AI model in inference 
+An agentic AI orchestration platform that manages LLM-powered agents, tool
+execution, task queues, projects, knowledge bases and visual workflows — all
+through a modern web UI backed by a streaming FastAPI server.
 
-Generative AI
-   - [X] Text to Text      (Regular LLM)
-   - [X] Text to image     (Diffusion)
-   - [X] Text to Video     ()
-
-Vision
-   - [ ] Depth Estimation
-   - [ ] Key point detection
-   - [ ] Object Detection
-   - [ ] Image Segmentation
-
-3D
-   - [X] Image to Mesh     ()
-
-Audio
-   - [X] Text to Speech    (TTS)
-   - [X] Speech to Text    (Whisper)
-   - [ ] Text to audio
-
-Graph
-   - [ ] Graph Machine Learning
-      - Protein-Protein Interaction Prediction
-      - Molecular Property Prediction
-
-
+## Architecture overview
 
 ```mermaid
-flowchart TD
-    User --> IN_Speech[Speech]
-    User --> IN_Text[Text]
-    User --> IN_Image[Photo]
+flowchart LR
+    React[React UI] <--> Orchestrator
 
-    IN_Speech --> MODEL_S2T[Speech to Text]--> IN_Text
-    IN_Image[Photo] --> MODEL_LLM[Text to Text]
+    Orchestrator <--> Local[Local Store]
 
-    IN_Text --> MODEL_LLM[Text to Text] --> OUT_Text[Text] --> MODEL_TTS[Text to Speech] --> OUT_Speech[Speech]
-    IN_Text --> MODEL_T2I[Text to Image] --> OUT_Image[Image]
-    IN_Text --> MODEL_T2A[Text to Audio] --> OUT_Audio[Audio]
+    Local <--> Knowledge[Knowledge]
+    Local <--> Conversations[Conversations]
 
-    User@{shape: doc}
+    Orchestrator <--> Worker["Worker(s)"]
 
-    IN_Speech@{shape: lean-r}
-    IN_Text@{shape: lean-r}
-
-    OUT_Text@{shape: lean-l}
-    OUT_Image@{shape: lean-l}
-    OUT_Audio@{shape: lean-l}
-    OUT_Speech@{shape: lean-l}
-
-    MODEL_S2T@{shape: lin-rect}
-    MODEL_LLM@{shape: lin-rect}
-    MODEL_TTS@{shape: lin-rect}
-    MODEL_T2I@{shape: lin-rect}
-    MODEL_T2A@{shape: lin-rect}
-
+    Worker --> LLM[LLM Backend]
+    Worker --> Tools[Tool Executor] <--> Sandbox[Sandbox]
 ```
 
+### Repository layout
 
+```
+acai/
+├── orchestrator/       # FastAPI server, chat, agents, projects, config, dispatcher
+├── worker/             # Worker HTTP app, LLM abstraction, sandbox backends
+├── tasks/              # Task graphs: converse, think, uber, scribe, dynamic workflows
+├── tools/              # Agent tools: filesystem, shell, git, code, web, search, …
+├── queue/              # SQLAlchemy-backed work queue (WorkQueue)
+├── agents/             # Built-in agent definitions (system.j2 templates)
+├── models/             # Model backends: vLLM, llama.cpp, SGLang, TensorRT-LLM, …
+├── scheduler/          # Multi-provider scheduling
+├── cli/                # CLI entry points: orchestrator, worker, mcp
+├── ui/                 # React frontend (Vite, Chakra UI v3, React Flow)
+│   └── src/
+│       ├── components/ # Pages & reusable components
+│       ├── services/   # api.ts (REST/SSE), types.ts
+│       ├── contexts/   # WebSocketContext (socket.io)
+│       └── layout/     # Shell layout with sidebar
+└── plugins/            # Optional plugin discovery
+workspace/              # Runtime data (default location, configurable)
+├── conversations/      # Global conversation histories
+├── projects/           # Per-project data, tasks, conversations
+├── workflows/          # User-defined workflow graphs
+├── knowledge/          # Markdown knowledge documents
+├── agents/             # User agent overrides (copy-on-write)
+└── work.db             # SQLite task queue database
+```
 
+### Orchestrator
 
-* Audio
-   * AudioClassification
-   * AutomaticSpeechRecognition
-   * TextToAudio
-   * ZeroShotAudioClassification
-* Computer Vision
-   * Depth Estimation
-   * Image Classification
-   * Image Segmentation
-   * Image to Image
-   * KeypointMatching
-   * Object Detection
-   * VideoClassification
-   * ZeroShotImageClassification
-   * ZeroShotObjectDetection
-* NLP
-   * QuestionAnswering
-   * Summarization
-   * TextClassification
-   * TextGeneration
-   * Translaation
-* MultiModal
-   * Image to Text
+The orchestrator is a **FastAPI** application augmented with **python-socketio**
+for real-time events. It owns:
 
+- **ChatStore** — filesystem-backed conversation persistence with a three-tier
+  layout: global (`workspace/conversations/`), project-scoped
+  (`workspace/projects/<project>/conversations/`), and task-scoped
+  (`workspace/projects/<project>/<task_id>/`).
+- **AgentStore** — agent definitions with Jinja2 system-prompt templates, tool
+  lists, sandbox flags. Built-in agents ship in `acai/agents/`; user overrides
+  are written to `workspace/agents/` with copy-on-write semantics.
+- **WorkQueue** — a SQLAlchemy task queue (SQLite by default) with statuses
+  `pending → curating → ready → in_progress → completed/failed/review`,
+  dependency tracking, priority ordering, and timeout reaping.
+- **ProjectStore** — project metadata (`definition.json`), scaffolding, and
+  git-clone support.
+- **KnowledgeStore** — slug-based Markdown documents organized as
+  `subject / subsubject / title`.
+- **ProviderScheduler** — routes LLM calls across configured providers.
+- **LoadBalancer** — selects healthy workers for dispatch.
 
+#### API surface
 
+| Group | Examples |
+|-------|----------|
+| Conversations | CRUD, history, context stats, inflight check |
+| Chat | `/converse`, `/think/converse`, `/uber/converse`, `/scribe/converse` |
+| Workflows | CRUD, node-type registry, validate, run |
+| Tasks | CRUD, tree queries |
+| Knowledge | CRUD, search, append |
+| Projects | CRUD, scaffold/clone |
+| Agents | CRUD, template read/write, reset |
+| Providers | CRUD, activate |
+| Workers | Register, heartbeat, status |
+| Config | Read/patch system config |
+| Streaming | SSE stream replay via `/stream/{id}` |
 
-Models
+### Workers
 
-* Text To Image
-   * Black Forest Lab: Flux.1 | Flux.1 Krea | Flux.1 Kontext | Flux.2
-      * 57Go
-   * Google: Imagen4 | Nano Banana
-   * OpenAI
-   * Pony: Pony Diffusion | Pony Diffusion V7
-      * https://huggingface.co/purplesmartai/pony-v7-base:  60Go
-      * 
-   * SDXL:  Ilustrious | NoobAI
-      * https://huggingface.co/stablediffusionapi/nova-anime-xl-v8.0-ilustrious: 7Go
-      * https://huggingface.co/CabalResearch/NoobAI-Flux2VAE-RectifiedFlow: 70Go
-   * SD: Stable Diffusion 1.X | Stable Diffusion XL
-      * https://huggingface.co/stabilityai/stable-diffusion-xl-base-1.0: 80Go
-      * 
-   * ZImageTurbo
-      * Tongyi-MAI/Z-Image-Turbo: 32Go
-   * Chroma: 
-      * lodestones/Chroma1-Base:    45 Go
-      * lodestones/Chroma1-Radiance: 57 Go
-   * HiDream
-      * https://huggingface.co/HiDream-ai/HiDream-E1-Full/tree/main: 47Go
-   * Seedream
-      * https://huggingface.co/tm-hf-repo/seedream-pixar
-   * Qwen
-      * https://huggingface.co/Qwen/Qwen-Image: 57 Go
+Workers are lightweight HTTP servers that register with the orchestrator and
+expose two core endpoints:
 
-* Text to Video
-   * Sora 2
-   * Google VEO 3
-   * Vidu Q1
-   * Hailuo by MiniMax
-   * Kling
-      * https://huggingface.co/KlingTeam/SVG-T2I/tree/main: 107Go
-   * Lightricks
-      * https://huggingface.co/Lightricks/LTX-Video/tree/main: 254Go
-   * Mochi
-      * https://huggingface.co/genmo/mochi-1-preview: 134Go
-   * Hunyuan
-      * https://huggingface.co/tencent/HunyuanVideo-1.5/tree/main: 372Go
-   * Wan
-      * https://huggingface.co/Wan-AI/Wan2.2-I2V-A14B-Diffusers/tree/main: 126Go
+- **`POST /worker/llm/complete`** — streams tokens back as SSE (`token`,
+  `reasoning`, `tool_call_delta`, `done`, `error`).
+- **Tool routes** — execute agent tools in-process or forward sandboxed calls
+  through the `SandboxProxy`.
 
-# Wan-AI/Wan2.2-T2V-A14B-Diffusers
-# Wan-AI/Wan2.2-T2V-A14B-Diffusers : Text to Video
-# Wan-AI/Wan2.2-Animate-14B        : Video to Video
-# Wan-AI/Wan2.2-S2V-14B            : Speech-to-Video
-# Wan-AI/Wan2.2-I2V-A14B           : Image to Video
-# Wan-AI/Wan2.2-TI2V-5B            : Text | Image to Video
-# 
+LLM backends are pluggable via a `create_llm` factory: **vLLM**, **llama.cpp**,
+**SGLang**, **TensorRT-LLM**, or a generic OpenAI-compatible endpoint.
 
+### Sandbox system
 
-# https://www.reddit.com/r/StableDiffusion/comments/1q08ro5/qwenimage2512_released_on_huggingface/
+When an agent is marked `uses_sandbox`, tool calls flagged `sandbox=True` run
+inside an isolated environment. Supported backends:
 
-Unsloth
-<!-- 
-BF16 & FP8 by Comfy-Org https://huggingface.co/Comfy-Org/Qwen-Image_ComfyUI/tree/main/split_files/diffusion_models
-GGUF's: https://huggingface.co/unsloth/Qwen-Image-2512-GGUF
-4-step Turbo lora: https://huggingface.co/Wuli-art/Qwen-Image-2512-Turbo-LoRA -->
+| Backend | Description |
+|---------|-------------|
+| `none` | Direct in-process execution (no isolation) |
+| `docker` / `podman` | Container-based isolation |
+| `bubblewrap` | Linux user-namespace sandbox (bwrap) |
+| `nsjail` | Google nsjail with seccomp + cgroups |
+| `firecracker` | Firecracker microVM |
+
+Inside the sandbox, `acai mcp` starts a minimal HTTP tool server that the
+worker's `SandboxProxy` communicates with.
+
+### Task graphs
+
+Every chat interaction runs through a **TaskGraph** — a directed execution graph
+that orchestrates the agent loop:
+
+| Graph kind | Description |
+|------------|-------------|
+| `converse` | Standard agent loop with tool calling |
+| `think` | Emulated chain-of-thought reasoning step before conversation |
+| `converse_scribe` | Adds a curator (document selection) and scribe (note-taking) phase |
+| `uber` | Routes messages to the best conversation before conversing |
+| `workflow` | User-defined visual graph (`DynamicGraph`) with typed exec/data pins |
+
+Visual workflows are built in the React Flow-powered editor and persisted as
+JSON node/edge specs.
+
+### Frontend
+
+The UI is a **React 19 + TypeScript** single-page application built with
+**Vite** and styled with **Chakra UI v3**. Communication with the orchestrator
+uses three channels:
+
+| Channel | Usage |
+|---------|-------|
+| REST | CRUD operations, one-shot queries |
+| SSE | LLM token streaming (via POST-based `SSEStream`) |
+| socket.io | Real-time task updates, status, events, telemetry, toasts |
+
+Key pages: **Home**, **Conversations**, **Projects** (Kanban board),
+**Workflows** (visual graph editor), **Knowledge**, **Agents**, **Tasks**,
+**Settings**, **Status**.

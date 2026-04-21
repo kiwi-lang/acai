@@ -142,8 +142,10 @@ export async function converse(
     enable_thinking?: boolean,
     graph?: string,
     ephemeral?: boolean,
+    task_id?: string,
 ): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
+    if (task_id) body.task_id = task_id;
     if (enable_thinking !== undefined) body.enable_thinking = enable_thinking;
     if (graph) body.graph = graph;
     if (ephemeral) body.ephemeral = true;
@@ -171,8 +173,10 @@ export async function thinkConverse(
     parent_task = '',
     provider = '',
     agent = '',
+    task_id?: string,
 ): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
+    if (task_id) body.task_id = task_id;
 
     const response = await fetch(`${API_BASE}/think/converse`, {
         method: 'POST',

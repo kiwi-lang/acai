@@ -392,15 +392,6 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
     const children = taskTree.filter(t => t.id !== task.id);
     const kindInfo = KIND_LABELS[form.kind] || { label: form.kind, color: 'gray' };
 
-    const taskContext = [
-        `Task: ${form.title}`,
-        `Status: ${form.status}`,
-        form.description && `Description: ${form.description}`,
-        form.spec && `Spec: ${form.spec}`,
-        form.agent && `Agent: ${form.agent}`,
-        `Priority: P${form.priority}`,
-    ].filter(Boolean).join('\n');
-
     return createPortal(
         <Box
             position="fixed" inset={0} zIndex={1400}
@@ -728,10 +719,10 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
                         conversationId={taskConvId}
                         onConversationCreated={setTaskConvId}
                         project={project}
+                        taskId={task.id}
                         refinerAgent={refinerAgent}
                         compact
                         placeholder={`Refine task "${form.title}"… (task context is included)`}
-                        autoSendMessage={`I'd like to work on refining the following task. Here is its current state:\n\n${taskContext}\n\nPlease help me improve and clarify this task.`}
                     />
                 </Box>
             </HStack>

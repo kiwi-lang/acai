@@ -401,6 +401,7 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
   const widgets = pinWidgets || {};
   const execActive = !!data._execActive;
   const execDone = !!data._execDone;
+  const execUnreachable = !!data._execUnreachable;
   const timingMs = data._timingMs as number | null;
   const maxTimingMs = (data._maxTimingMs as number) || 0;
 
@@ -440,7 +441,9 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
     fontSize: 11,
     overflow: 'visible',
     boxShadow,
-    transition: 'border-color 0.2s, box-shadow 0.2s',
+    transition: 'border-color 0.2s, box-shadow 0.2s, opacity 0.3s',
+    position: 'relative',
+    opacity: execUnreachable ? 0.35 : 1,
   };
 
   const headerBg = execActive ? C.green + '30' : execDone ? C.green + '18' : def.accent + '26';
@@ -1091,6 +1094,23 @@ const WorkflowEditor: FC = () => {
     return vals.length > 0 ? Math.max(...vals) : 0;
   }, [nodeTimings]);
 
+  const execReachable = useMemo(() => {
+    const reachable = new Set<string>();
+    const queue: string[] = [];
+    const startNodes = nodes.filter(n => n.type === 'start');
+    for (const s of startNodes) { reachable.add(s.id); queue.push(s.id); }
+    while (queue.length > 0) {
+      const cur = queue.shift()!;
+      for (const e of edges) {
+        if (e.type === 'exec' && e.source === cur && !reachable.has(e.target)) {
+          reachable.add(e.target);
+          queue.push(e.target);
+        }
+      }
+    }
+    return reachable;
+  }, [nodes, edges]);
+
   const enrichedNodes = useMemo(() =>
     nodes.map(n => ({
       ...n,
@@ -1102,9 +1122,10 @@ const WorkflowEditor: FC = () => {
         _execDone: completedNodeIds.has(n.id),
         _timingMs: nodeTimings[n.id] ?? null,
         _maxTimingMs: maxNodeTime,
+        _execUnreachable: !execReachable.has(n.id),
       },
     })),
-  [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime]);
+  [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime, execReachable]);
 
   const enrichedEdges = useMemo(() =>
     edges.map(e => {

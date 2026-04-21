@@ -1028,7 +1028,7 @@ class OutputNode(NodeType):
     pins = [
         Pin.exec_in(),
         Pin.data("data_response", "stream", Colors.green, "left",
-                 pin_type="stream", optional=False),
+                 pin_type="any", optional=False),
     ]
 
     async def execute(self, ctx: NodeContext):
