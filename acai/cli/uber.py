@@ -77,6 +77,9 @@ def create_app():
 
     _setup_telemetry(socketio)
 
+    from acai.ui import mount_ui
+    mount_ui(app)
+
     worker_url = f"http://127.0.0.1:{port}/worker"
     active = config.active_provider()
     capabilities = {
