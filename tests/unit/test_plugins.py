@@ -1,8 +1,8 @@
-import assai.plugins
-from assai.server.run import discover_plugins
+import acai.plugins
+from acai.server.run import discover_plugins
 
 
 def test_plugins():
-    plugins = discover_plugins(assai.plugins)
+    plugins = discover_plugins(acai.plugins)
 
     assert len(plugins) == 1

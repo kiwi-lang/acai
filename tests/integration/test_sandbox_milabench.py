@@ -6,16 +6,16 @@ via ``shell.run`` tool calls, exactly as a real agent would.
 
 Flow:
     1.  ``create_sandbox(SandboxConfig(type="docker"))`` starts a generic
-        ``assai-sandbox`` container with the project worktree mounted at
+        ``acai-sandbox`` container with the project worktree mounted at
         ``/workspace``.
-    2.  The container runs ``assai mcp`` (lightweight tool server).
+    2.  The container runs ``acai mcp`` (lightweight tool server).
     3.  We POST tool calls to the container's ``/tools/call`` endpoint.
     4.  First call: ``pip install milabench`` (agent sets up the project).
     5.  Second call: ``milabench --help`` → verify output.
 
 Prerequisites::
 
-    docker build -t assai-sandbox -f Containerfile .
+    docker build -t acai-sandbox -f Containerfile .
 
 Run::
 
@@ -38,7 +38,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)-8s %(name)s: %(mess
 log = logging.getLogger(__name__)
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-IMAGE = os.environ.get("SANDBOX_IMAGE", "assai-sandbox")
+IMAGE = os.environ.get("SANDBOX_IMAGE", "acai-sandbox")
 
 
 # ---------------------------------------------------------------------------
@@ -93,7 +93,7 @@ def _call_tool(endpoint: str, tool: str, args: dict, timeout: float = 120) -> di
 
 def test_sandbox_lifecycle():
     """Verify start / stop / idempotent-restart of the sandbox."""
-    from assai.worker.sandbox import SandboxConfig, create_sandbox
+    from acai.worker.sandbox import SandboxConfig, create_sandbox
 
     if not _image_exists(IMAGE):
         _build_image()
@@ -118,7 +118,7 @@ def test_sandbox_lifecycle():
 
 def test_sandbox_tool_list():
     """The generic container should expose shell, filesystem, git, code tools."""
-    from assai.worker.sandbox import SandboxConfig, create_sandbox
+    from acai.worker.sandbox import SandboxConfig, create_sandbox
 
     if not _image_exists(IMAGE):
         _build_image()
@@ -139,7 +139,7 @@ def test_sandbox_tool_list():
 
 def test_milabench_help_inside_sandbox():
     """Install milabench inside the sandbox, then run ``milabench --help``."""
-    from assai.worker.sandbox import SandboxConfig, create_sandbox
+    from acai.worker.sandbox import SandboxConfig, create_sandbox
 
     if not _image_exists(IMAGE):
         _build_image()
@@ -180,7 +180,7 @@ def test_milabench_help_inside_sandbox():
 
 def test_agent_git_identity():
     """Verify that the sandbox configures git identity per-agent."""
-    from assai.worker.sandbox import SandboxConfig, create_sandbox
+    from acai.worker.sandbox import SandboxConfig, create_sandbox
 
     if not _image_exists(IMAGE):
         _build_image()
@@ -197,7 +197,7 @@ def test_agent_git_identity():
         log.info("Git identity: %s", stdout)
 
         assert "coder" in stdout, f"Expected 'coder' in git config, got: {stdout}"
-        assert "coder@assai.localhost" in stdout
+        assert "coder@acai.localhost" in stdout
 
         # Make a real commit to verify
         result = _call_tool(ep, "shell.run", {
@@ -208,7 +208,7 @@ def test_agent_git_identity():
             ),
         })
         stdout = result.get("stdout", "")
-        assert "coder <coder@assai.localhost>" in stdout
+        assert "coder <coder@acai.localhost>" in stdout
         log.info("SUCCESS: commits attributed to agent")
     finally:
         sandbox.stop()
@@ -216,11 +216,11 @@ def test_agent_git_identity():
 
 def test_create_sandbox_factory():
     """Verify the factory handles all known backend names."""
-    from assai.worker.sandbox import SandboxConfig, create_sandbox
-    from assai.worker.sandbox.container import ContainerSandbox
-    from assai.worker.sandbox.bubblewrap import BubblewrapSandbox
-    from assai.worker.sandbox.nsjail import NsjailSandbox
-    from assai.worker.sandbox.firecracker import FirecrackerSandbox
+    from acai.worker.sandbox import SandboxConfig, create_sandbox
+    from acai.worker.sandbox.container import ContainerSandbox
+    from acai.worker.sandbox.bubblewrap import BubblewrapSandbox
+    from acai.worker.sandbox.nsjail import NsjailSandbox
+    from acai.worker.sandbox.firecracker import FirecrackerSandbox
 
     for name in ("docker", "podman", "container"):
         s = create_sandbox(SandboxConfig(type=name, image="test"))

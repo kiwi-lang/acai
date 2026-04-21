@@ -1,4 +1,4 @@
-"""Tests for assai.orchestrator.dispatcher — SSE-based work dispatch."""
+"""Tests for acai.orchestrator.dispatcher — SSE-based work dispatch."""
 
 from __future__ import annotations
 
@@ -12,8 +12,8 @@ from fastapi import FastAPI, Request
 from starlette.responses import StreamingResponse
 from fastapi.responses import JSONResponse
 
-from assai.orchestrator.dispatcher import dispatch_llm, dispatch_tool
-from assai.orchestrator.stream import StreamTracker
+from acai.orchestrator.dispatcher import dispatch_llm, dispatch_tool
+from acai.orchestrator.stream import StreamTracker
 
 # ======================================================================
 # Tiny worker server used as a test fixture

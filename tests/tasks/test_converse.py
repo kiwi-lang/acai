@@ -1,4 +1,4 @@
-"""Tests for assai.tasks.converse — ConverseGraph."""
+"""Tests for acai.tasks.converse — ConverseGraph."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from assai.tasks.converse import ConverseGraph
+from acai.tasks.converse import ConverseGraph
 
 
 @pytest.mark.asyncio

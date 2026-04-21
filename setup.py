@@ -5,7 +5,7 @@ from setuptools import find_packages, setup
 
 if __name__ == "__main__":
     setup(
-        name="assai",
+        name="acai",
         version="0.1.0",
         description="AI agent swarm orchestrator for coding",
         long_description=(Path(__file__).parent / "README.md").read_text(),
@@ -13,7 +13,7 @@ if __name__ == "__main__":
         author="Delaunay",
         author_email="pierre@delaunay.io",
         license="BSD 3-Clause License",
-        url="https://assai.readthedocs.io",
+        url="https://acai.readthedocs.io",
         python_requires=">=3.10",
         classifiers=[
             "License :: OSI Approved :: BSD License",
@@ -24,7 +24,7 @@ if __name__ == "__main__":
         ],
         packages=find_packages(exclude=["tests", "tests.*"]),
         package_data={
-            "assai": [
+            "acai": [
                 "prompts/*.md",
                 "data/*.json",
                 "agents/*/definition.json",
@@ -72,7 +72,7 @@ if __name__ == "__main__":
         },
         entry_points={
             "console_scripts": [
-                "assai=assai.cli:main",
+                "acai=acai.cli:main",
             ],
         },
     )

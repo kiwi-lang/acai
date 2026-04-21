@@ -1,7 +1,7 @@
-assai
+acai
 =============================
 
-.. automodule:: assai
+.. automodule:: acai
     :members:
     :undoc-members:
     :show-inheritance:

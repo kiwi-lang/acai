@@ -1,4 +1,4 @@
-"""Tests for assai.orchestrator.iterator — sync and async SSE iterators."""
+"""Tests for acai.orchestrator.iterator — sync and async SSE iterators."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from starlette.responses import StreamingResponse
 
-from assai.orchestrator.iterator import (
+from acai.orchestrator.iterator import (
     AsyncSSEIterator,
     SSEIterator,
     ServerSentEvent,

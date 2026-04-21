@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-assai documentation build configuration file.
+acai documentation build configuration file.
 
 This file is execfile()d with the current directory set to its
 containing dir.
@@ -31,13 +31,13 @@ import sys
 
 docs_src_path = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, docs_src_path)
-src_path = os.path.abspath(os.path.join(docs_src_path, "..", "assai"))
+src_path = os.path.abspath(os.path.join(docs_src_path, "..", "acai"))
 sys.path.insert(0, src_path)
 src_path = os.path.abspath(os.path.join(docs_src_path, ".."))
 sys.path.insert(0, src_path)
 
 
-import assai.orchestrator  # noqa
+import acai.orchestrator  # noqa
 
 # -- General configuration ------------------------------------------------
 
@@ -63,10 +63,10 @@ extensions = [
 autodoc_inherit_docstrings = True
 
 # General information about the project.
-project = "assai"
-_full_version = assai.orchestrator.__version__
-author = assai.orchestrator.__author__
-copyright = assai.orchestrator.__copyright__
+project = "acai"
+_full_version = acai.orchestrator.__version__
+author = acai.orchestrator.__author__
+copyright = acai.orchestrator.__copyright__
 
 # The version info for the project you're documenting, acts as replacement for
 # |version| and |release|, also used in various other places throughout the
@@ -160,7 +160,7 @@ html_sidebars = {
 # -- Options for HTMLHelp output ------------------------------------------
 
 # Output file base name for HTML help builder.
-htmlhelp_basename = "assai-doc"
+htmlhelp_basename = "acai-doc"
 
 
 # -- Options for LaTeX output ---------------------------------------------
@@ -186,8 +186,8 @@ latex_elements = {
 latex_documents = [
     (
         master_doc,
-        "assai.tex",
-        "assai Documentation",
+        "acai.tex",
+        "acai Documentation",
         "authors",
         "manual",
     ),
@@ -201,8 +201,8 @@ latex_documents = [
 man_pages = [
     (
         master_doc,
-        "assai",
-        "assai Documentation",
+        "acai",
+        "acai Documentation",
         [author],
         1,
     )
@@ -217,11 +217,11 @@ man_pages = [
 texinfo_documents = [
     (
         master_doc,
-        "assai",
-        "assai Documentation",
+        "acai",
+        "acai Documentation",
         author,
-        "assai",
-        assai.orchestrator.__descr__,
+        "acai",
+        acai.orchestrator.__descr__,
         "Miscellaneous",
     ),
 ]

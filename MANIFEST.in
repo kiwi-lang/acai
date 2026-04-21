@@ -1,9 +1,9 @@
 global-exclude *.pyc
 global-exclude __pycache__
 
-recursive-include assai *.json
-recursive-include assai *.py
-recursive-include assai *.j2
+recursive-include acai *.json
+recursive-include acai *.py
+recursive-include acai *.j2
 
 include LICENSE
 include requirements.txt
@@ -18,4 +18,4 @@ exclude scripts/generate_cookie.sh
 prune docs
 prune tests
 prune examples
-prune assai/plugins
+prune acai/plugins

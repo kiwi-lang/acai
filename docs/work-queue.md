@@ -1,7 +1,7 @@
 Work Queue
 ==========
 
-The work queue (``assai/queue/work.py``) is a SQLite-backed task table.
+The work queue (``acai/queue/work.py``) is a SQLite-backed task table.
 It is primarily used for standalone tasks (created via ``POST /tasks``
 or internal routing calls) and provides task lineage tracking for the
 UI tree view.

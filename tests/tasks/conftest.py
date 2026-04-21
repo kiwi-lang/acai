@@ -1,4 +1,4 @@
-"""Shared fixtures for assai/tasks tests.
+"""Shared fixtures for acai/tasks tests.
 
 Provides a lightweight mock worker (FastAPI + uvicorn in a thread),
 in-memory ChatStore, AgentStore with a default template, and a real
@@ -19,11 +19,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
-from assai.orchestrator.agent_store import AgentDef, AgentStore
-from assai.orchestrator.chat import ChatStore
-from assai.orchestrator.config import AssaiConfig
-from assai.orchestrator.load_balancer import LoadBalancer
-from assai.orchestrator.stream import StreamTracker
+from acai.orchestrator.agent_store import AgentDef, AgentStore
+from acai.orchestrator.chat import ChatStore
+from acai.orchestrator.config import AcaiConfig
+from acai.orchestrator.load_balancer import LoadBalancer
+from acai.orchestrator.stream import StreamTracker
 
 # ======================================================================
 # Mock worker application
@@ -175,9 +175,9 @@ def agent_store(tmp_path):
 
 
 @pytest.fixture()
-def assai_config(tmp_path):
-    """Minimal AssaiConfig pointing at the tmp workspace."""
-    return AssaiConfig(workspace=str(tmp_path))
+def acai_config(tmp_path):
+    """Minimal AcaiConfig pointing at the tmp workspace."""
+    return AcaiConfig(workspace=str(tmp_path))
 
 
 @pytest.fixture()
@@ -186,12 +186,12 @@ def stream_tracker():
 
 
 @pytest.fixture()
-def graph_deps(agent_store, chat_store, assai_config, stream_tracker):
+def graph_deps(agent_store, chat_store, acai_config, stream_tracker):
     """Common keyword arguments for TaskGraph constructors."""
     return dict(
         agent_store=agent_store,
         chat=chat_store,
-        config=assai_config,
+        config=acai_config,
         tracker=stream_tracker,
         projects=None,
         tool_registry=None,

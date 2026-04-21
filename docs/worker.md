@@ -1,7 +1,7 @@
 Worker
 ======
 
-The worker (``assai/worker/app.py`` + ``assai/worker/llm.py``) is the
+The worker (``acai/worker/app.py`` + ``acai/worker/llm.py``) is the
 execution engine.  It hosts the LLM, runs tools, and streams results
 back to the orchestrator.
 
@@ -126,15 +126,15 @@ Tool dispatch
    server to free VRAM.
 2. If sandboxing is configured and the tool's namespace is sandboxed
    (``code``, ``git``, ``shell``, ``filesystem``), proxy the call to a
-   Podman container running ``assai mcp``.
+   Podman container running ``acai mcp``.
 3. Otherwise execute locally via ``registry.call(tool_name, args)``.
 
 A ``WorkerContext`` is set in the tool's thread providing an
 ``OrchestratorClient`` so tools like ``ui.toast`` can call back to
 the orchestrator.
 
-Tools are discovered at startup from ``assai.tools`` and
-``assai.plugins`` packages.  Each tool has a namespace, a qualified
+Tools are discovered at startup from ``acai.tools`` and
+``acai.plugins`` packages.  Each tool has a namespace, a qualified
 name, and an OpenAI-compatible function schema.
 
 

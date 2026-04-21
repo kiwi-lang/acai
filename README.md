@@ -1,4 +1,4 @@
-assai
+acai
 =====
 
 * Test for AI model in inference 

@@ -1,0 +1,98 @@
+"""Launch the LLM server (vLLM / llama.cpp) as a standalone process.
+
+Usage::
+
+    acai serve                            # use defaults from config
+    acai serve --model Qwen/Qwen3-Coder-Next-FP8 --port 8000
+"""
+
+from __future__ import annotations
+
+import signal
+import sys
+from dataclasses import dataclass
+
+from argklass import argument
+from argklass.command import Command
+
+from acai.cli import CommonArguments, setup
+
+
+@dataclass
+class ServeArguments(CommonArguments):
+    model: str = argument(default=None, help="override model name/path")
+    backend: str = argument(default=None, help="override backend (vllm, llamacpp)")
+    port: int = argument(default=None, help="override server port")
+    launch_template: str = argument(
+        default=None,
+        help="provide an explicit launch command template instead of auto-generating one",
+    )
+
+
+class Serve(Command):
+    """Launch the LLM server as a standalone process.
+
+    The process runs in the foreground so that you can inspect logs
+    directly.  Use ``acai uber --extern-llm`` in another terminal to
+    run the agent stack against this instance.
+    """
+
+    name = "serve"
+
+    Arguments = ServeArguments
+
+    @staticmethod
+    def execute(args) -> int:
+        config, _ = setup(args)
+
+        provider = config.local_provider() or config.active_provider()
+
+        if args.model:
+            from acai.orchestrator.config import _model_to_slug
+            provider.model = args.model
+            provider.slug = _model_to_slug(args.model)
+        if args.backend:
+            provider.backend = args.backend
+        if args.port:
+            provider.server_port = args.port
+            provider.endpoint = f"http://127.0.0.1:{args.port}"
+        if args.launch_template:
+            provider.launch_template = args.launch_template
+
+        from acai.worker.llm import LLMServer, LLMServerError
+
+        server = LLMServer(provider, workspace=config.workspace)
+
+        def _shutdown(sig, frame):
+            print(f"\nReceived signal {sig}, shutting down LLM server...")
+            server.stop()
+            sys.exit(0)
+
+        signal.signal(signal.SIGINT, _shutdown)
+        signal.signal(signal.SIGTERM, _shutdown)
+
+        print(f"Launching LLM server  model={provider.model}  backend={provider.backend}")
+        print(f"Endpoint will be at {provider.endpoint}")
+
+        try:
+            server.start()
+        except LLMServerError as exc:
+            print(f"\nFailed to start LLM server:\n{exc}", file=sys.stderr)
+            return 1
+
+        print(f"LLM server healthy  pid={server.pid}")
+        print(f"Logs: {server.latest_log_path()}")
+        print("Press Ctrl+C to stop.\n")
+
+        try:
+            if server.process is not None:
+                server.process.wait()
+            else:
+                signal.pause()
+        except KeyboardInterrupt:
+            _shutdown(signal.SIGINT, None)
+
+        return server.process.returncode if server.process else 0
+
+
+COMMANDS = Serve

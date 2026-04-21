@@ -8,9 +8,9 @@ list of messages ready for the LLM.
 Agent definitions on disk
 -------------------------
 
-Each agent lives in its own directory under ``assai/agents/``::
+Each agent lives in its own directory under ``acai/agents/``::
 
-    assai/agents/
+    acai/agents/
     ├── default/
     │   ├── definition.json
     │   └── system.j2
@@ -47,7 +47,7 @@ define the same agent name, the workspace version wins.
 AgentDef
 --------
 
-Dataclass defined in ``assai/orchestrator/agent_store.py``.  Key fields:
+Dataclass defined in ``acai/orchestrator/agent_store.py``.  Key fields:
 
 ================= ====================================================
 Field             Description
@@ -71,11 +71,11 @@ Field             Description
 AgentStore
 ----------
 
-``AgentStore`` (``assai/orchestrator/agent_store.py``) loads agent definitions:
+``AgentStore`` (``acai/orchestrator/agent_store.py``) loads agent definitions:
 
 ``get(name) -> AgentDef | None``
     Tries ``<workspace>/agents/<name>/definition.json`` first, then
-    falls back to the builtin ``assai/agents/<name>/definition.json``.
+    falls back to the builtin ``acai/agents/<name>/definition.json``.
 
 ``read_template(name) -> str``
     Same resolution order for ``system.j2``.  If neither workspace nor

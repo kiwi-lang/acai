@@ -1,10 +1,10 @@
-"""Tests for assai.tasks.think — ThinkGraph."""
+"""Tests for acai.tasks.think — ThinkGraph."""
 
 from __future__ import annotations
 
 import pytest
 
-from assai.tasks.think import ThinkGraph
+from acai.tasks.think import ThinkGraph
 
 
 @pytest.mark.asyncio
@@ -76,7 +76,7 @@ class TestThinkGraph:
         self, load_balancer, chat_store, graph_deps,
     ):
         """Acc captures reasoning text correctly across the stream."""
-        from assai.tasks.graph import Acc
+        from acai.tasks.graph import Acc
 
         conv = chat_store.create(title="acc test")
         chat_store.append(conv.id, {"role": "user", "content": "think about it"})

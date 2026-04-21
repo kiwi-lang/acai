@@ -1,8 +1,8 @@
-# assai-sandbox — generic container for running agent tools in isolation.
+# acai-sandbox — generic container for running agent tools in isolation.
 #
 # Build (auto-built on first sandbox use if missing):
-#   docker build -t assai-sandbox -f Containerfile .
-#   podman build -t localhost/assai-sandbox -f Containerfile .
+#   docker build -t acai-sandbox -f Containerfile .
+#   podman build -t localhost/acai-sandbox -f Containerfile .
 #
 # The agent sets up whatever project it needs at runtime via tool
 # calls (pip install, git clone, etc.) — do NOT bake project-specific
@@ -19,9 +19,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # git identity is configured at runtime per-agent by the sandbox manager
 # so commits are attributable to the specific agent that produced them.
 
-WORKDIR /opt/assai
+WORKDIR /opt/acai
 COPY setup.py README.md ./
-COPY assai/ assai/
+COPY acai/ acai/
 
 RUN pip install --no-cache-dir \
         fastapi \
@@ -38,5 +38,5 @@ RUN pip install --no-cache-dir \
 
 EXPOSE 9200
 
-ENTRYPOINT ["assai", "mcp"]
+ENTRYPOINT ["acai", "mcp"]
 CMD ["--host", "0.0.0.0", "--port", "9200"]
