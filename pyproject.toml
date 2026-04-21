@@ -1,0 +1,83 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acai-swarm"
+version = "0.1.0"
+description = "AI agent swarm orchestrator for coding"
+readme = "README.md"
+license = "BSD-3-Clause"
+requires-python = ">=3.10"
+authors = [
+    { name = "Delaunay", email = "pierre@delaunay.io" },
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "argklass",
+    "fastapi",
+    "uvicorn[standard]",
+    "python-socketio",
+    "flask",
+    "flask-socketio",
+    "requests",
+    "sqlalchemy",
+    "pyyaml",
+    "importlib_resources",
+    "cantilever",
+    "voir",
+    "qwen_vl_utils",
+    "torchvision",
+    "vllm",
+]
+
+[project.optional-dependencies]
+models = [
+    "accelerate",
+    "torch",
+    "torchcompat",
+    "transformers",
+    "sentencepiece",
+    "diffusers",
+    "datasets",
+    "librosa",
+    "torchaudio",
+    "opencv-python",
+    "imageio",
+    "imageio-ffmpeg",
+    "av",
+]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+
+[project.scripts]
+acai = "acai.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/kiwi-lang/acai"
+Documentation = "https://acai.readthedocs.io"
+Repository = "https://github.com/kiwi-lang/acai"
+Issues = "https://github.com/kiwi-lang/acai/issues"
+
+[tool.setuptools.packages.find]
+exclude = ["tests", "tests.*", "dependencies", "dependencies.*"]
+
+[tool.setuptools.package-data]
+acai = [
+    "prompts/*.md",
+    "data/*.json",
+    "agents/*/definition.json",
+    "agents/*/system.j2",
+    "ui/dist/**/*",
+    "ui/dist/*",
+]
