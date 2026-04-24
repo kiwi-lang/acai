@@ -198,10 +198,10 @@ const SettingsPage = () => {
                 </Box>
             )}
 
-            <Box display="flex" flexWrap="wrap" gap={4} flex={1} alignContent="flex-start">
+            <Box display="grid" gridTemplateColumns="repeat(auto-fill, minmax(320px, 1fr))" gap={4} flex={1} alignContent="flex-start">
 
                 {/* Sandbox */}
-                <Box flex="1 1 480px" minW="360px">
+                <Box>
                     <SectionCard
                         title="Sandbox"
                         busy={savingSection === 'sandbox'}
@@ -346,7 +346,7 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Worker */}
-                <Box flex="1 1 400px" minW="320px">
+                <Box>
                     <SectionCard
                         title="Worker"
                         busy={savingSection === 'worker'}
@@ -386,7 +386,7 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Git */}
-                <Box flex="1 1 400px" minW="320px">
+                <Box>
                     <SectionCard
                         title="Git"
                         busy={savingSection === 'git'}
@@ -405,12 +405,11 @@ const SettingsPage = () => {
                                 </Field>
                             </Box>
                         </HStack>
-                        <ToggleButton label="Auto Commit" value={config.git.auto_commit} onChange={v => updateGit('auto_commit', v)} />
                     </SectionCard>
                 </Box>
 
                 {/* Queue */}
-                <Box flex="1 1 400px" minW="320px">
+                <Box>
                     <SectionCard
                         title="Queue"
                         busy={savingSection === 'queue'}
@@ -436,7 +435,7 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Audit */}
-                <Box flex="1 1 400px" minW="320px">
+                <Box>
                     <SectionCard
                         title="Audit"
                         busy={savingSection === 'audit'}
@@ -455,12 +454,12 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Git Backup */}
-                <Box flex="1 1 480px" minW="360px">
+                <Box>
                     <GitBackupSection />
                 </Box>
 
                 {/* Auto Update */}
-                <Box flex="1 1 480px" minW="360px">
+                <Box>
                     <UpdateSection />
                 </Box>
 
@@ -503,6 +502,16 @@ const StatusDot = ({ ok }: { ok: boolean }) => (
         flexShrink={0}
     />
 );
+
+function _deployKeyUrl(remote: string): string {
+    let owner = '', repo = '';
+    const sshMatch = remote.match(/github\.com[:\-]([^/]+)\/(.+?)(?:\.git)?$/);
+    if (sshMatch) { owner = sshMatch[1]; repo = sshMatch[2]; }
+    const httpsMatch = remote.match(/github\.com\/([^/]+)\/(.+?)(?:\.git)?$/);
+    if (!owner && httpsMatch) { owner = httpsMatch[1]; repo = httpsMatch[2]; }
+    if (owner && repo) return `https://github.com/${owner}/${repo}/settings/keys/new`;
+    return 'https://github.com/settings/keys';
+}
 
 const GitBackupSection = () => {
     const [status, setStatus] = useState<GitBackupStatus | null>(null);
@@ -615,20 +624,39 @@ const GitBackupSection = () => {
                         </ActionButton>
                     </HStack>
                     {status?.ssh_public_key && (
-                        <Box
-                            p={2}
-                            bg="var(--bg-input)"
-                            borderRadius="md"
-                            border="1px solid"
-                            borderColor="var(--border-input)"
-                            cursor="pointer"
-                            onClick={() => navigator.clipboard.writeText(status.ssh_public_key)}
-                            title="Click to copy"
-                        >
-                            <Text fontSize="xs" fontFamily="mono" color="var(--text-code)" wordBreak="break-all">
-                                {status.ssh_public_key}
-                            </Text>
-                            <Text fontSize="xs" color="var(--text-muted)" mt={1}>Click to copy — add this as a deploy key on GitHub</Text>
+                        <Box>
+                            <Box
+                                p={2}
+                                bg="var(--bg-input)"
+                                borderRadius="md"
+                                border="1px solid"
+                                borderColor="var(--border-input)"
+                                cursor="pointer"
+                                onClick={() => navigator.clipboard.writeText(status.ssh_public_key)}
+                                title="Click to copy"
+                            >
+                                <Text fontSize="xs" fontFamily="mono" color="var(--text-code)" wordBreak="break-all">
+                                    {status.ssh_public_key}
+                                </Text>
+                            </Box>
+                            <HStack gap={1} mt={1}>
+                                <Text fontSize="xs" color="var(--text-muted)">Click to copy, then</Text>
+                                {status.remote ? (
+                                    <Text
+                                        as="a"
+                                        href={_deployKeyUrl(status.remote)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        fontSize="xs"
+                                        color="var(--text-link)"
+                                        _hover={{ textDecoration: 'underline' }}
+                                    >
+                                        add as deploy key on GitHub
+                                    </Text>
+                                ) : (
+                                    <Text fontSize="xs" color="var(--text-muted)">add as a deploy key on GitHub</Text>
+                                )}
+                            </HStack>
                         </Box>
                     )}
                 </Box>

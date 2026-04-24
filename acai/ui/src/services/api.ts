@@ -596,7 +596,36 @@ export interface VersionInfo {
 }
 
 export async function getVersion(): Promise<VersionInfo> {
-    return request<VersionInfo>('/version');
+    const local = await request<VersionInfo>('/version');
+
+    try {
+        const pypi = await fetch(`https://pypi.org/pypi/acai-swarm/json?_t=${Date.now()}`, {
+            cache: 'no-store',
+            headers: { Accept: 'application/json' },
+        });
+        if (pypi.ok) {
+            const data = await pypi.json();
+            const latest = data?.info?.version as string | undefined;
+            if (latest) {
+                local.latest = latest;
+                local.update_available = _versionNewer(latest, local.version);
+            }
+        }
+    } catch { /* PyPI unreachable — keep whatever the backend returned */ }
+
+    return local;
+}
+
+function _versionNewer(latest: string, current: string): boolean {
+    const a = latest.split('.').map(Number);
+    const b = current.split('.').map(Number);
+    for (let i = 0; i < Math.max(a.length, b.length); i++) {
+        const x = a[i] ?? 0;
+        const y = b[i] ?? 0;
+        if (x > y) return true;
+        if (x < y) return false;
+    }
+    return false;
 }
 
 export async function triggerUpdate(): Promise<SSEStream> {
