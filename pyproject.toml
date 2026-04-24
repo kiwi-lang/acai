@@ -28,6 +28,7 @@ dependencies = [
     "flask",
     "flask-socketio",
     "requests",
+    "httpx",
     "sqlalchemy",
     "pyyaml",
     "importlib_resources",

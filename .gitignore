@@ -85,3 +85,5 @@ env/
 
 
 workspace/
+
+node_modules/

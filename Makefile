@@ -1,3 +1,6 @@
+.PHONY: doc build-doc serve-doc update-doc virtual-env install back-dev front-dev \
+       build-ui build-wheel build clean tests hello vllm
+
 doc: build-doc
 
 build-doc:
@@ -12,27 +15,33 @@ virtual-env:
 	@[ -d .venv ] || uv venv --python=3.12 --seed
 
 install: virtual-env
-	(. .venv/bin/activate && pip install -r requirements.txt) 
-	(. .venv/bin/activate && pip install -e '.[models]') 
+	(. .venv/bin/activate && pip install -r requirements.txt)
+	(. .venv/bin/activate && pip install -e '.[models]')
 
-# back-dev:
-# 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) flask --debug --app acai.server.run:main run  --with-threads --port 5001)
-
-# back-dev: install
-# 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) python -m acai.server.run)
-
-back-dev: # install
+back-dev:
 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai uber --debug 1 --extern_llm 1)
 
 vllm:
 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "Qwen/Qwen3-Coder-Next-FP8")
 
-
-
 front-dev:
 	(cd acai/ui && npm i && npm run dev)
 
-.PHONY: tests
+# -- Build targets -----------------------------------------------------------
+
+build-ui:
+	cd acai/ui && npm ci && VITE_API_URL= VITE_BASE_PATH=/ npx vite build --outDir dist
+
+build-wheel: build-ui
+	python -m build
+
+build: build-wheel
+
+clean:
+	rm -rf acai/ui/dist dist build *.egg-info
+
+# -- Tests -------------------------------------------------------------------
+
 tests:
 	$(eval _MOD := acai.$(subst /,.,$(basename $(FILE))))
 	(. .venv/bin/activate && python -m pytest tests/$(dir $(FILE))test_$(notdir $(FILE)) --cov=$(_MOD) --cov-report=term-missing -v)

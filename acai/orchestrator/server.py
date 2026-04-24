@@ -19,6 +19,7 @@ import logging
 import os
 import threading
 import time
+from pathlib import Path
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -1771,6 +1772,116 @@ def create_router(config: AcaiConfig | None = None,
         })
         return {"ok": True}
 
+    # ==================================================================
+    # JSON store (file-backed config/data persistence)
+    # ==================================================================
+
+    from acai.orchestrator.route_jsonstore import router as jsonstore_router
+    router.include_router(jsonstore_router)
+
+    # ==================================================================
+    # Auto-update API
+    # ==================================================================
+
+    from acai.orchestrator import updater
+    from starlette.responses import StreamingResponse as _StreamingResponse
+
+    @router.post("/update")
+    async def trigger_update():
+        return _StreamingResponse(
+            updater.stream_upgrade(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+            },
+        )
+
+    @router.get("/version")
+    def get_version():
+        import acai as _pkg
+        latest = updater.get_latest_version()
+        result: dict = {"version": _pkg.__version__}
+        if latest:
+            result["latest"] = latest
+            result["update_available"] = updater.needs_update(latest)
+        return result
+
+    # ==================================================================
+    # Git backup (workspace auto-save to GitHub)
+    # ==================================================================
+
+    from acai.orchestrator import gitsync
+    workspace_path = Path(config.workspace)
+
+    @router.get("/git/status")
+    async def git_status_route():
+        status = gitsync.get_status(workspace_path)
+        status["data_path"] = str(workspace_path.resolve())
+        return status
+
+    @router.post("/git/generate-key")
+    async def git_generate_key():
+        loop = asyncio.get_event_loop()
+        pub = await loop.run_in_executor(None, gitsync.generate_ssh_key)
+        return {"public_key": pub}
+
+    @router.get("/git/ssh-key")
+    async def git_ssh_key():
+        pub = gitsync.get_ssh_public_key()
+        if pub is None:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=404, detail="No SSH key generated yet")
+        return {"public_key": pub}
+
+    @router.post("/git/setup")
+    async def git_setup(request: Request):
+        body = await _json_body(request)
+        remote = (body.get("remote") or "").strip()
+        if not remote:
+            return JSONResponse({"error": "remote is required"}, status_code=400)
+
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, gitsync.git_init, workspace_path, remote)
+
+        result = await loop.run_in_executor(None, gitsync.git_sync, workspace_path)
+        gitsync.ensure_sync_running(workspace_path)
+
+        resp: dict = {"message": "Git configured", "remote": remote, "commit": result.commit}
+        if result.push_error:
+            resp["push_error"] = result.push_error
+        if result.error:
+            resp["error"] = result.error
+        return resp
+
+    @router.post("/git/sync")
+    async def git_trigger_sync():
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, gitsync.git_sync, workspace_path)
+        resp: dict = {"commit": result.commit, "pushed": result.pushed}
+        if result.push_error:
+            resp["push_error"] = result.push_error
+        if result.error:
+            resp["error"] = result.error
+        return resp
+
+    @router.post("/git/test")
+    async def git_test_connection():
+        loop = asyncio.get_event_loop()
+
+        def _test():
+            import subprocess as _sp
+            r = _sp.run(
+                ["ssh", "-T", "-o", "StrictHostKeyChecking=accept-new",
+                 "git@github.com-acai"],
+                capture_output=True, text=True, timeout=15,
+            )
+            output = (r.stdout + r.stderr).strip()
+            return r.returncode == 1 and "successfully authenticated" in output.lower(), output
+
+        ok, output = await loop.run_in_executor(None, _test)
+        return {"connected": ok, "output": output}
+
     return router, queue, events, chat, config, tracker, _socketio_ref, lb
 
 
@@ -1927,5 +2038,22 @@ def routes(app, config: AcaiConfig | None = None, prefix: str = "/agent",
     async def _capture_loop():
         from acai.orchestrator.compat import _main_loop_ref
         _main_loop_ref[0] = asyncio.get_running_loop()
+
+    @app.on_event("startup")
+    async def _start_background_services():
+        from acai.orchestrator import gitsync, updater
+
+        workspace_path = Path(resolved_config.workspace)
+        gitsync.start_sync(workspace_path)
+
+        settings_path = workspace_path / "store" / "_config" / "_settings.json"
+        if settings_path.is_file():
+            import json as _json
+            with open(settings_path) as f:
+                settings = _json.load(f)
+            if settings.get("auto_update"):
+                updater.start_update_loop(settings.get("update_interval_hours", 24))
+
+    app.state.workspace = resolved_config.workspace
 
     return app, socketio, queue, events, chat, resolved_config, tracker, lb
