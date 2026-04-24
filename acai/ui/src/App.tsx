@@ -16,6 +16,7 @@ import SettingsPage from './components/SettingsPage';
 import UberChat from './components/UberChat';
 import WorkflowEditor from './components/WorkflowEditor';
 import KnowledgePage from './components/KnowledgePage';
+import SkillsPage from './components/SkillsPage';
 import { ColorModeProvider } from './components/ui/color-mode';
 import { Toaster } from './components/ui/toaster';
 import { AgentSocketProvider } from './contexts/WebSocketContext';
@@ -38,6 +39,7 @@ function App() {
               <Route path="/projects/:name" element={<ProjectView />} />
               <Route path="/agents" element={<AgentsPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
+              <Route path="/skills" element={<SkillsPage />} />
               <Route path="/tasks" element={<TasksPage />} />
               <Route path="/workflows" element={<WorkflowEditor />} />
               <Route path="/workflows/:workflowIdParam" element={<WorkflowEditor />} />

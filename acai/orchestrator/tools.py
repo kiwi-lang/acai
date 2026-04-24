@@ -214,6 +214,23 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
 
 
 # ---------------------------------------------------------------------------
+# Namespace matching (supports prefix for hierarchical namespaces)
+# ---------------------------------------------------------------------------
+
+def _ns_matches(ns: str, allowed: list[str]) -> bool:
+    """Return ``True`` if *ns* equals or is a child of any entry in *allowed*.
+
+    ``_ns_matches("skills.data", ["skills"])``  → ``True``
+    ``_ns_matches("skills",      ["skills"])``  → ``True``
+    ``_ns_matches("filesystem",  ["skills"])``  → ``False``
+    """
+    for a in allowed:
+        if ns == a or ns.startswith(a + "."):
+            return True
+    return False
+
+
+# ---------------------------------------------------------------------------
 # ToolRegistry
 # ---------------------------------------------------------------------------
 
@@ -303,14 +320,16 @@ class ToolRegistry:
         """Return MCP-compatible tool definitions.
 
         If *namespaces* is ``None`` all tools are included; otherwise only
-        tools whose namespace appears in the list.
+        tools whose namespace matches or is a child of one of the listed
+        namespaces.  For example, ``["skills"]`` matches ``skills``,
+        ``skills.data``, ``skills.data.sub``, etc.
 
         If *allowed_permissions* is given, only tools whose permissions
         intersect with the allowed set are included.
         """
         defs: list[dict] = []
         for td in self._tools.values():
-            if namespaces is not None and td.namespace not in namespaces:
+            if namespaces is not None and not _ns_matches(td.namespace, namespaces):
                 continue
             if allowed_permissions is not None:
                 if not set(td.permissions) & allowed_permissions:

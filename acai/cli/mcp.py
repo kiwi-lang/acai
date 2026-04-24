@@ -60,6 +60,15 @@ class Mcp(Command):
 
         configure_meta_tools(registry)
 
+        import os
+        from acai.orchestrator.skill_store import SkillStore
+        from acai.tools.skills import _configure as configure_skills
+
+        workspace = os.environ.get("ACAI_WORKSPACE", "workspace")
+        skill_store = SkillStore(os.path.join(workspace, "skills"))
+        skill_store.register_all(registry)
+        configure_skills(skill_store)
+
         app = FastAPI()
         tool_router = registry.router(url_prefix="/tools")
         app.include_router(tool_router)

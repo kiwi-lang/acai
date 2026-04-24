@@ -686,6 +686,85 @@ export async function testGitConnection(): Promise<{ connected: boolean; output:
     return request('/git/test', { method: 'POST' });
 }
 
+// Skills
+export interface SkillSummary {
+    qualified_name: string;
+    namespace: string;
+    name: string;
+    description: string;
+    path: string;
+}
+
+export interface SkillDetail {
+    qualified_name: string;
+    namespace: string;
+    name: string;
+    definition: {
+        name: string;
+        description: string;
+        parameters?: {
+            type: string;
+            properties: Record<string, { type: string; description?: string }>;
+            required?: string[];
+        };
+    };
+    code: string;
+    readme: string;
+}
+
+export async function listSkills(): Promise<SkillSummary[]> {
+    return request<SkillSummary[]>('/skills');
+}
+
+export async function getSkill(namespace: string, name: string): Promise<SkillDetail> {
+    return request<SkillDetail>(`/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`);
+}
+
+export async function createSkill(data: {
+    namespace: string;
+    name: string;
+    description: string;
+    parameters?: Record<string, unknown>;
+    code?: string;
+    readme?: string;
+}): Promise<{ created: boolean; qualified_name: string; path: string }> {
+    return request('/skills', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function updateSkillCode(namespace: string, name: string, code: string): Promise<{ updated: boolean }> {
+    return request(`/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/code`, {
+        method: 'PUT',
+        body: JSON.stringify({ code }),
+    });
+}
+
+export async function updateSkillDefinition(
+    namespace: string,
+    name: string,
+    data: { description?: string; parameters?: Record<string, unknown> },
+): Promise<{ updated: boolean; definition: Record<string, unknown> }> {
+    return request(`/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/definition`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function updateSkillReadme(namespace: string, name: string, readme: string): Promise<{ updated: boolean }> {
+    return request(`/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/readme`, {
+        method: 'PUT',
+        body: JSON.stringify({ readme }),
+    });
+}
+
+export async function deleteSkill(namespace: string, name: string): Promise<{ deleted: boolean }> {
+    return request(`/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+    });
+}
+
 // Knowledge
 export interface KnowledgeDocSummary {
     path: string;

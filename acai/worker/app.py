@@ -85,6 +85,15 @@ def create_worker_router(
 
     configure_meta_tools(registry)
 
+    import os
+    from acai.orchestrator.skill_store import SkillStore
+    from acai.tools.skills import _configure as configure_skills
+
+    skills_dir = os.path.join(config.workspace, "skills")
+    skill_store = SkillStore(skills_dir)
+    skill_store.register_all(registry)
+    configure_skills(skill_store)
+
     log.info(
         "worker router created  model=%s  backend=%s  tools=%d  extern_llm=%s",
         provider.model, provider.backend, len(registry.all_tools()), extern_llm,

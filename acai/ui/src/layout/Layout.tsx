@@ -92,6 +92,15 @@ const KnowledgeIcon = () => (
   </svg>
 );
 
+const SkillsIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M7 5h10v2h2V3c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v4h2V5z" />
+    <path d="M15.41 16.59L20 12l-4.59-4.59L14 8.83 17.17 12 14 15.17l1.41 1.42z" />
+    <path d="M10 15.17L6.83 12 10 8.83 8.59 7.41 4 12l4.59 4.59L10 15.17z" />
+    <path d="M17 19H7v-2H5v4c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-4h-2v2z" />
+  </svg>
+);
+
 const SettingsIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <circle cx="12" cy="12" r="3" />
@@ -105,6 +114,7 @@ const navItems = [
   { id: 'projects', name: 'Projects', path: '/projects', icon: ProjectsIcon, color: 'orange' },
   { id: 'agents', name: 'Agents', path: '/agents', icon: AgentsIcon, color: 'teal' },
   { id: 'knowledge', name: 'Knowledge', path: '/knowledge', icon: KnowledgeIcon, color: 'cyan' },
+  { id: 'skills', name: 'Skills', path: '/skills', icon: SkillsIcon, color: 'yellow' },
   { id: 'tasks', name: 'Work Queue', path: '/tasks', icon: TasksIcon, color: 'blue' },
   { id: 'status', name: 'Status', path: '/status', icon: StatusIcon, color: 'purple' },
   { id: 'settings', name: 'Settings', path: '/settings', icon: SettingsIcon, color: 'gray' },
