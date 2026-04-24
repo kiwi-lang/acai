@@ -38,6 +38,7 @@ function App() {
               <Route path="/projects" element={<ProjectsPage />} />
               <Route path="/projects/:name" element={<ProjectView />} />
               <Route path="/agents" element={<AgentsPage />} />
+              <Route path="/agents/:agentName" element={<AgentsPage />} />
               <Route path="/knowledge" element={<KnowledgePage />} />
               <Route path="/skills" element={<SkillsPage />} />
               <Route path="/tasks" element={<TasksPage />} />

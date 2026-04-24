@@ -48,7 +48,7 @@ class AgentDef:
     context_sources: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
     tool_permissions: list[str] = field(default_factory=lambda: ["read"])
-    uses_sandbox: bool = False
+    uses_sandbox: bool = True
     max_iterations: int = 20
     approval_required: bool = False
     compressor: str = "compressor"

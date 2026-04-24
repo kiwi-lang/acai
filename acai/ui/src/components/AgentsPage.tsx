@@ -1,14 +1,18 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { useParams, useNavigate } from 'react-router-dom';
 import {
     Box, VStack, HStack, Text, Heading, Badge, IconButton, Input,
-    NativeSelect, Spinner, Textarea,
+    NativeSelect, Spinner, Textarea, Button,
 } from '@chakra-ui/react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
     listAgents, createAgent, updateAgent, deleteAgent, resetAgent,
     getAgentTemplate, updateAgentTemplate, listProviders,
-    listToolNamespaces,
+    listToolNamespaces, listSkills,
 } from '../services/api';
-import type { ToolNamespace } from '../services/api';
+import type { ToolNamespace, SkillSummary } from '../services/api';
 import type { AgentDef, Provider } from '../services/types';
 
 const ROLES = ['worker', 'curator', 'manager'];
@@ -67,6 +71,12 @@ const ResetIcon = () => (
     </svg>
 );
 
+const CloseIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+    </svg>
+);
+
 const OUTPUT_FORMATS = ['messages', 'text'] as const;
 
 interface AgentFormData {
@@ -96,7 +106,7 @@ const emptyForm: AgentFormData = {
     tools: '', tool_permissions_read: true, tool_permissions_write: false, tool_permissions_execute: false,
     context_sources: '', max_iterations: '20',
     approval_required: false, tags: '',
-    uses_sandbox: false,
+    uses_sandbox: true,
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -105,101 +115,170 @@ const ROLE_COLORS: Record<string, string> = {
     manager: 'orange',
 };
 
-const AgentsPage = () => {
-    const [agents, setAgents] = useState<AgentDef[]>([]);
-    const [providers, setProviders] = useState<Provider[]>([]);
-    const [toolNamespaces, setToolNamespaces] = useState<ToolNamespace[]>([]);
-    const [error, setError] = useState('');
-    const [showForm, setShowForm] = useState(false);
-    const [editingName, setEditingName] = useState<string | null>(null);
-    const [form, setForm] = useState<AgentFormData>(emptyForm);
+const formToPayload = (f: AgentFormData) => {
+    const model_overrides: Record<string, any> = {};
+    const temp = parseFloat(f.temperature);
+    if (!isNaN(temp)) model_overrides.temperature = temp;
+    const mt = parseInt(f.max_tokens);
+    if (!isNaN(mt)) model_overrides.max_tokens = mt;
+
+    return {
+        name: f.name.trim(),
+        description: f.description,
+        role: f.role,
+        avatar: f.avatar,
+        provider: f.provider,
+        output_format: f.output_format,
+        model_overrides,
+        tools: f.tools ? f.tools.split(',').map(s => s.trim()).filter(Boolean) : [],
+        tool_permissions: [
+            ...(f.tool_permissions_read ? ['read'] : []),
+            ...(f.tool_permissions_write ? ['write'] : []),
+            ...(f.tool_permissions_execute ? ['execute'] : []),
+        ],
+        context_sources: f.context_sources ? f.context_sources.split(',').map(s => s.trim()).filter(Boolean) : [],
+        max_iterations: parseInt(f.max_iterations) || 20,
+        approval_required: f.approval_required,
+        tags: f.tags ? f.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
+        uses_sandbox: f.uses_sandbox,
+    };
+};
+
+/* ─── Tool & Skill Namespace Picker ────────────────────────────── */
+
+interface ToolNamespacePickerProps {
+    namespaces: ToolNamespace[];
+    skills: SkillSummary[];
+    value: string;
+    onChange: (v: string) => void;
+}
+
+const ToolNamespacePicker = ({ namespaces, skills, value, onChange }: ToolNamespacePickerProps) => {
+    const selected = useMemo(() => value.split(',').map(s => s.trim()).filter(Boolean), [value]);
+
+    const toggle = (ns: string) => {
+        const next = selected.includes(ns)
+            ? selected.filter(n => n !== ns)
+            : [...selected, ns];
+        onChange(next.join(', '));
+    };
+
+    const builtinNs = useMemo(
+        () => namespaces.filter(ns => !ns.namespace.startsWith('skills.')),
+        [namespaces],
+    );
+
+    const skillGroups = useMemo(() => {
+        const groups: Record<string, { namespace: string; toolCount: number; skillNames: string[] }> = {};
+        for (const sk of skills) {
+            const key = `skills.${sk.namespace}`;
+            if (!groups[key]) {
+                const match = namespaces.find(ns => ns.namespace === key);
+                groups[key] = { namespace: key, toolCount: match?.tools.length ?? 0, skillNames: [] };
+            }
+            groups[key].skillNames.push(sk.name);
+        }
+        return Object.values(groups).sort((a, b) => a.namespace.localeCompare(b.namespace));
+    }, [skills, namespaces]);
+
+    return (
+        <VStack gap={2} align="stretch">
+            <HStack gap={2} flexWrap="wrap">
+                {builtinNs.map(ns => {
+                    const isActive = selected.includes(ns.namespace);
+                    return (
+                        <Box
+                            key={ns.namespace}
+                            as="button"
+                            px={3} py={1}
+                            borderRadius="md"
+                            fontSize="xs"
+                            fontWeight="medium"
+                            border="1px solid"
+                            borderColor={isActive ? 'var(--accent)' : 'var(--border-primary)'}
+                            bg={isActive ? 'var(--accent-subtle)' : 'transparent'}
+                            color={isActive ? 'var(--accent)' : 'var(--text-tertiary)'}
+                            cursor="pointer"
+                            _hover={{ borderColor: 'var(--accent)' }}
+                            title={ns.tools.join(', ')}
+                            onClick={() => toggle(ns.namespace)}
+                        >
+                            {ns.namespace}
+                            <Text as="span" fontSize="2xs" color="var(--text-muted)" ml={1}>
+                                ({ns.tools.length})
+                            </Text>
+                        </Box>
+                    );
+                })}
+            </HStack>
+
+            {skillGroups.length > 0 && (
+                <>
+                    <Text fontSize="xs" color="var(--text-muted)">
+                        Skills
+                    </Text>
+                    <HStack gap={2} flexWrap="wrap">
+                        {skillGroups.map(sg => {
+                            const isActive = selected.includes(sg.namespace);
+                            const label = sg.namespace.replace(/^skills\./, '');
+                            return (
+                                <Box
+                                    key={sg.namespace}
+                                    as="button"
+                                    px={3} py={1}
+                                    borderRadius="md"
+                                    fontSize="xs"
+                                    fontWeight="medium"
+                                    border="1px solid"
+                                    borderColor={isActive ? 'yellow.400' : 'var(--border-primary)'}
+                                    bg={isActive ? 'yellow.900' : 'transparent'}
+                                    color={isActive ? 'yellow.200' : 'var(--text-tertiary)'}
+                                    cursor="pointer"
+                                    _hover={{ borderColor: 'yellow.400' }}
+                                    title={sg.skillNames.join(', ')}
+                                    onClick={() => toggle(sg.namespace)}
+                                >
+                                    {label}
+                                    <Text as="span" fontSize="2xs" color="var(--text-muted)" ml={1}>
+                                        ({sg.skillNames.length})
+                                    </Text>
+                                </Box>
+                            );
+                        })}
+                    </HStack>
+                </>
+            )}
+        </VStack>
+    );
+};
+
+/* ─── Agent Edit/Create Modal ──────────────────────────────────── */
+
+interface AgentEditModalProps {
+    editingName: string | null;
+    initialForm: AgentFormData;
+    initialTemplate: string;
+    providers: Provider[];
+    toolNamespaces: ToolNamespace[];
+    skills: SkillSummary[];
+    onSave: () => void;
+    onClose: () => void;
+}
+
+const AgentEditModal = ({
+    editingName, initialForm, initialTemplate,
+    providers, toolNamespaces, skills, onSave, onClose,
+}: AgentEditModalProps) => {
+    const [form, setForm] = useState<AgentFormData>(initialForm);
     const [formError, setFormError] = useState('');
     const [busy, setBusy] = useState(false);
-    const [templateContent, setTemplateContent] = useState('');
+    const [templateContent, setTemplateContent] = useState(initialTemplate);
     const [templateDirty, setTemplateDirty] = useState(false);
     const [savingTemplate, setSavingTemplate] = useState(false);
+    const [activeTab, setActiveTab] = useState<'config' | 'template'>('config');
 
-    const refresh = useCallback(() => {
-        listAgents().then(setAgents).catch(err => setError(err instanceof Error ? err.message : 'Failed to load'));
-    }, []);
-
-    useEffect(() => {
-        document.title = 'Agents - Açaí';
-        refresh();
-        listProviders().then(setProviders).catch(() => {});
-        listToolNamespaces().then(setToolNamespaces).catch(() => {});
-    }, [refresh]);
-
-    const formToPayload = (f: AgentFormData) => {
-        const model_overrides: Record<string, any> = {};
-        const temp = parseFloat(f.temperature);
-        if (!isNaN(temp)) model_overrides.temperature = temp;
-        const mt = parseInt(f.max_tokens);
-        if (!isNaN(mt)) model_overrides.max_tokens = mt;
-
-        return {
-            name: f.name.trim(),
-            description: f.description,
-            role: f.role,
-            avatar: f.avatar,
-            provider: f.provider,
-            output_format: f.output_format,
-            model_overrides,
-            tools: f.tools ? f.tools.split(',').map(s => s.trim()).filter(Boolean) : [],
-            tool_permissions: [
-                ...(f.tool_permissions_read ? ['read'] : []),
-                ...(f.tool_permissions_write ? ['write'] : []),
-                ...(f.tool_permissions_execute ? ['execute'] : []),
-            ],
-            context_sources: f.context_sources ? f.context_sources.split(',').map(s => s.trim()).filter(Boolean) : [],
-            max_iterations: parseInt(f.max_iterations) || 20,
-            approval_required: f.approval_required,
-            tags: f.tags ? f.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
-            uses_sandbox: f.uses_sandbox,
-        };
-    };
-
-    const openAdd = () => {
-        setForm(emptyForm);
-        setEditingName(null);
-        setFormError('');
-        setShowForm(true);
-        setTemplateContent(DEFAULT_TEMPLATE);
-        setTemplateDirty(false);
-    };
-
-    const openEdit = async (a: AgentDef) => {
-        setForm({
-            name: a.name,
-            description: a.description,
-            role: a.role,
-            avatar: a.avatar,
-            provider: a.provider,
-            output_format: a.output_format || 'messages',
-            temperature: String(a.model_overrides?.temperature ?? '0.7'),
-            max_tokens: String(a.model_overrides?.max_tokens ?? '4096'),
-            tools: a.tools.join(', '),
-            tool_permissions_read: (a.tool_permissions ?? ['read']).includes('read'),
-            tool_permissions_write: (a.tool_permissions ?? ['read']).includes('write'),
-            tool_permissions_execute: (a.tool_permissions ?? ['read']).includes('execute'),
-            context_sources: a.context_sources.join(', '),
-            max_iterations: String(a.max_iterations),
-            approval_required: a.approval_required,
-            tags: a.tags.join(', '),
-            uses_sandbox: a.uses_sandbox ?? false,
-        });
-        setEditingName(a.name);
-        setFormError('');
-        setShowForm(true);
-
-        try {
-            const { content } = await getAgentTemplate(a.name);
-            setTemplateContent(content);
-        } catch {
-            setTemplateContent('');
-        }
-        setTemplateDirty(false);
-    };
+    const setField = (key: keyof AgentFormData, value: any) =>
+        setForm(prev => ({ ...prev, [key]: value }));
 
     const handleSubmit = async () => {
         if (!form.name.trim()) { setFormError('Name is required'); return; }
@@ -217,30 +296,12 @@ const AgentsPage = () => {
                 const slug = (payload.name ?? '').replace(/\s+/g, '-').toLowerCase();
                 await updateAgentTemplate(slug, templateContent);
             }
-            setShowForm(false);
-            refresh();
+            onSave();
         } catch (err) {
             setFormError(err instanceof Error ? err.message : 'Failed');
         } finally {
             setBusy(false);
         }
-    };
-
-    const handleDelete = async (name: string) => {
-        setBusy(true);
-        try {
-            await deleteAgent(name);
-            refresh();
-        } catch { /* ignore */ } finally { setBusy(false); }
-    };
-
-    const handleReset = async (name: string) => {
-        setBusy(true);
-        try {
-            await resetAgent(name);
-            refresh();
-            if (editingName === name) setShowForm(false);
-        } catch { /* ignore */ } finally { setBusy(false); }
     };
 
     const handleSaveTemplate = async () => {
@@ -252,155 +313,65 @@ const AgentsPage = () => {
         } catch { /* ignore */ } finally { setSavingTemplate(false); }
     };
 
-    const setField = (key: keyof AgentFormData, value: any) =>
-        setForm(prev => ({ ...prev, [key]: value }));
+    const handleBackdrop = (e: React.MouseEvent) => {
+        if (e.target === e.currentTarget) onClose();
+    };
 
-    return (
-        <Box h="100vh" w="100%" bg="var(--bg-page)" overflowY="auto" p={6}>
-            <Box maxW="4xl" mx="auto">
-                <HStack justify="space-between" mb={6}>
-                    <Heading size="lg" color="var(--text-heading)">Agents</Heading>
-                    <IconButton
-                        aria-label="Add agent"
-                        size="sm"
-                        variant="outline"
-                        onClick={openAdd}
-                        borderColor="var(--border-primary)"
-                        color="var(--text-primary)"
-                    >
-                        <PlusIcon />
+    return createPortal(
+        <Box
+            position="fixed" inset={0} zIndex={1400}
+            display="flex" alignItems="center" justifyContent="center"
+            onClick={handleBackdrop}
+        >
+            <Box position="absolute" inset={0} bg="blackAlpha.600" />
+            <Box
+                position="relative" zIndex={1}
+                bg="var(--bg-page)" borderRadius="xl"
+                border="1px solid" borderColor="var(--border-primary)"
+                boxShadow="xl" w="full" maxW="680px" mx={4}
+                maxH="90vh" h="85vh" display="flex" flexDirection="column"
+            >
+                {/* Header */}
+                <HStack px={5} py={4} borderBottom="1px solid" borderColor="var(--border-primary)" justify="space-between" flexShrink={0}>
+                    <Heading size="sm" color="var(--text-heading)">
+                        {editingName ? `Edit — ${editingName}` : 'New Agent'}
+                    </Heading>
+                    <IconButton aria-label="Close" variant="ghost" size="sm" color="var(--text-tertiary)"
+                        _hover={{ color: 'var(--text-heading)' }} onClick={onClose}>
+                        <CloseIcon />
                     </IconButton>
                 </HStack>
 
-                {error && (
-                    <Box p={3} bg="var(--bg-error)" borderRadius="md" mb={4}>
-                        <Text color="var(--text-error)" fontSize="sm">{error}</Text>
-                    </Box>
-                )}
-
-                {/* Agent cards */}
-                {agents.length === 0 && !showForm && (
-                    <Text color="var(--text-muted)" fontSize="sm" py={8} textAlign="center">
-                        No agents configured. Click (+) to create one.
-                    </Text>
-                )}
-
-                <VStack gap={3} align="stretch" mb={6}>
-                    {agents.map(a => (
-                        <Box
-                            key={a.name}
-                            p={4}
-                            bg="var(--bg-card)"
-                            borderRadius="lg"
-                            border="1px solid"
-                            borderColor="var(--border-primary)"
+                {/* Tabs */}
+                <HStack px={5} pt={3} gap={0} borderBottom="1px solid" borderColor="var(--border-primary)" flexShrink={0}>
+                    {(['config', 'template'] as const).map(tab => (
+                        <Button
+                            key={tab}
+                            size="sm"
+                            variant="ghost"
+                            borderBottom="2px solid"
+                            borderColor={activeTab === tab ? 'var(--accent, teal.400)' : 'transparent'}
+                            borderRadius={0}
+                            color={activeTab === tab ? 'var(--text-heading)' : 'var(--text-muted)'}
+                            fontWeight={activeTab === tab ? 'medium' : 'normal'}
+                            onClick={() => setActiveTab(tab)}
+                            px={4} mb="-1px"
+                            _hover={{ color: 'var(--text-heading)' }}
                         >
-                            <HStack justify="space-between" mb={2}>
-                                <HStack gap={2}>
-                                    {a.avatar && <Text fontSize="lg">{a.avatar}</Text>}
-                                    <Text fontWeight="bold" color="var(--text-heading)" fontSize="sm">
-                                        {a.name}
-                                    </Text>
-                                    <Badge colorScheme={ROLE_COLORS[a.role] || 'gray'} fontSize="2xs">
-                                        {a.role}
-                                    </Badge>
-                                    <Badge variant="outline" fontSize="2xs">
-                                        {a.provider === 'auto' ? 'auto' : a.provider}
-                                    </Badge>
-                                    {a.builtin && (
-                                        <Badge colorScheme="green" fontSize="2xs" variant="subtle">
-                                            built-in
-                                        </Badge>
-                                    )}
-                                </HStack>
-                                <HStack gap={1}>
-                                    <IconButton
-                                        aria-label="Edit" size="xs" variant="ghost"
-                                        onClick={() => openEdit(a)}
-                                        color="var(--text-tertiary)"
-                                    >
-                                        <EditIcon />
-                                    </IconButton>
-                                    {!a.builtin && (
-                                        <IconButton
-                                            aria-label="Delete" size="xs" variant="ghost"
-                                            onClick={() => handleDelete(a.name)}
-                                            color="var(--text-error)" disabled={busy}
-                                        >
-                                            <TrashIcon />
-                                        </IconButton>
-                                    )}
-                                </HStack>
-                            </HStack>
-
-                            {a.description && (
-                                <Text fontSize="sm" color="var(--text-secondary)" mb={2}>
-                                    {a.description}
-                                </Text>
-                            )}
-
-                            <HStack gap={6} flexWrap="wrap">
-                                <VStack align="flex-start" gap={0}>
-                                    <Text fontSize="xs" color="var(--text-muted)">Max Iterations</Text>
-                                    <Text fontSize="sm" color="var(--text-primary)">{a.max_iterations}</Text>
-                                </VStack>
-                                <VStack align="flex-start" gap={0}>
-                                    <Text fontSize="xs" color="var(--text-muted)">Format</Text>
-                                    <Text fontSize="sm" color="var(--text-primary)">
-                                        {a.output_format || 'messages'}
-                                    </Text>
-                                </VStack>
-                                <VStack align="flex-start" gap={0}>
-                                    <Text fontSize="xs" color="var(--text-muted)">Approval</Text>
-                                    <Text fontSize="sm" color="var(--text-primary)">
-                                        {a.approval_required ? 'Required' : 'No'}
-                                    </Text>
-                                </VStack>
-                                {a.uses_sandbox && (
-                                    <VStack align="flex-start" gap={0}>
-                                        <Text fontSize="xs" color="var(--text-muted)">Sandbox</Text>
-                                        <Text fontSize="sm" color="var(--text-primary)">Enabled</Text>
-                                    </VStack>
-                                )}
-                            </HStack>
-
-                            {a.tools.length > 0 && (
-                                <HStack mt={2} gap={1} flexWrap="wrap">
-                                    <Text fontSize="xs" color="var(--text-muted)">Tools:</Text>
-                                    {a.tools.map(t => (
-                                        <Badge key={t} fontSize="2xs" variant="outline">{t}</Badge>
-                                    ))}
-                                </HStack>
-                            )}
-
-                            {a.tags.length > 0 && (
-                                <HStack mt={1} gap={1} flexWrap="wrap">
-                                    <Text fontSize="xs" color="var(--text-muted)">Tags:</Text>
-                                    {a.tags.map(t => (
-                                        <Badge key={t} fontSize="2xs" colorScheme="teal">{t}</Badge>
-                                    ))}
-                                </HStack>
-                            )}
-                        </Box>
+                            {tab === 'config' ? 'Configuration' : 'System Template'}
+                        </Button>
                     ))}
-                </VStack>
+                </HStack>
 
-                {/* Create / Edit Form */}
-                {showForm && (
-                    <Box
-                        p={4} bg="var(--bg-elevated)" borderRadius="lg"
-                        border="1px solid" borderColor="var(--border-primary)" mb={6}
-                    >
-                        <Text fontWeight="semibold" color="var(--text-heading)" mb={3} fontSize="sm">
-                            {editingName ? `Edit "${editingName}"` : 'New Agent'}
-                        </Text>
+                {/* Body */}
+                <Box flex={1} overflowY="auto" px={5} py={4}>
+                    {formError && (
+                        <Box p={2} bg="var(--bg-error)" borderRadius="md" mb={3}>
+                            <Text color="var(--text-error)" fontSize="xs">{formError}</Text>
+                        </Box>
+                    )}
 
-                        {formError && (
-                            <Box p={2} bg="var(--bg-error)" borderRadius="md" mb={3}>
-                                <Text color="var(--text-error)" fontSize="xs">{formError}</Text>
-                            </Box>
-                        )}
-
+                    {activeTab === 'config' ? (
                         <VStack gap={3} align="stretch">
                             {/* Row: Name + Role */}
                             <HStack gap={3}>
@@ -527,62 +498,10 @@ const AgentsPage = () => {
                                 </Box>
                             </HStack>
 
-                            {/* Tool namespaces */}
+                            {/* Tool permissions */}
                             <Box>
-                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>
-                                    Tool namespaces
-                                </Text>
-                                {toolNamespaces.length > 0 ? (
-                                    <HStack gap={2} flexWrap="wrap">
-                                        {toolNamespaces.map(ns => {
-                                            const selected = form.tools
-                                                .split(',').map(s => s.trim()).filter(Boolean);
-                                            const isActive = selected.includes(ns.namespace);
-                                            return (
-                                                <Box
-                                                    key={ns.namespace}
-                                                    as="button"
-                                                    px={3} py={1}
-                                                    borderRadius="md"
-                                                    fontSize="xs"
-                                                    fontWeight="medium"
-                                                    border="1px solid"
-                                                    borderColor={isActive ? 'var(--accent)' : 'var(--border-primary)'}
-                                                    bg={isActive ? 'var(--accent-subtle)' : 'transparent'}
-                                                    color={isActive ? 'var(--accent)' : 'var(--text-tertiary)'}
-                                                    cursor="pointer"
-                                                    _hover={{ borderColor: 'var(--accent)' }}
-                                                    title={ns.tools.join(', ')}
-                                                    onClick={() => {
-                                                        const cur = form.tools
-                                                            .split(',').map(s => s.trim()).filter(Boolean);
-                                                        const next = isActive
-                                                            ? cur.filter(n => n !== ns.namespace)
-                                                            : [...cur, ns.namespace];
-                                                        setField('tools', next.join(', '));
-                                                    }}
-                                                >
-                                                    {ns.namespace}
-                                                    <Text as="span" fontSize="2xs" color="var(--text-muted)" ml={1}>
-                                                        ({ns.tools.length})
-                                                    </Text>
-                                                </Box>
-                                            );
-                                        })}
-                                    </HStack>
-                                ) : (
-                                    <Input
-                                        size="sm" placeholder="filesystem, git, shell"
-                                        value={form.tools}
-                                        onChange={e => setField('tools', e.target.value)}
-                                        bg="var(--bg-input)" color="var(--text-primary)"
-                                        borderColor="var(--border-input)"
-                                    />
-                                )}
-
-                                {/* Tool permissions */}
-                                <HStack gap={3} mt={2}>
-                                    <Text fontSize="xs" color="var(--text-muted)">Permissions:</Text>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>Permissions</Text>
+                                <HStack gap={3}>
                                     {(['read', 'write', 'execute'] as const).map(perm => {
                                         const key = `tool_permissions_${perm}` as keyof AgentFormData;
                                         const isOn = form[key] as boolean;
@@ -608,6 +527,29 @@ const AgentsPage = () => {
                                         );
                                     })}
                                 </HStack>
+                            </Box>
+
+                            {/* Tool namespaces */}
+                            <Box>
+                                <Text fontSize="xs" color="var(--text-muted)" mb={1}>
+                                    Tools
+                                </Text>
+                                {toolNamespaces.length > 0 ? (
+                                    <ToolNamespacePicker
+                                        namespaces={toolNamespaces}
+                                        skills={skills}
+                                        value={form.tools}
+                                        onChange={v => setField('tools', v)}
+                                    />
+                                ) : (
+                                    <Input
+                                        size="sm" placeholder="filesystem, git, shell"
+                                        value={form.tools}
+                                        onChange={e => setField('tools', e.target.value)}
+                                        bg="var(--bg-input)" color="var(--text-primary)"
+                                        borderColor="var(--border-input)"
+                                    />
+                                )}
                             </Box>
 
                             {/* Context sources */}
@@ -638,8 +580,8 @@ const AgentsPage = () => {
                                 />
                             </Box>
 
-                            {/* Approval toggle */}
-                            <HStack gap={2}>
+                            {/* Toggles */}
+                            <HStack gap={3} flexWrap="wrap">
                                 <Box
                                     as="button"
                                     px={3} py={1}
@@ -656,10 +598,6 @@ const AgentsPage = () => {
                                 >
                                     {form.approval_required ? 'Approval required' : 'No approval needed'}
                                 </Box>
-                            </HStack>
-
-                            {/* Sandbox toggle */}
-                            <HStack gap={2}>
                                 <Box
                                     as="button"
                                     px={3} py={1}
@@ -680,75 +618,355 @@ const AgentsPage = () => {
                                     Sandbox backend is configured in Settings
                                 </Text>
                             </HStack>
-
-                            {/* System template */}
-                            <Box>
-                                <HStack justify="space-between" mb={1}>
-                                    <Text fontSize="xs" color="var(--text-muted)">
-                                        System Template (Jinja2)
-                                    </Text>
-                                    {editingName && templateDirty && (
-                                        <Box
-                                            as="button"
-                                            px={3} py={1}
-                                            borderRadius="md"
-                                            fontSize="xs"
-                                            fontWeight="medium"
-                                            bg="var(--accent)"
-                                            color="var(--text-inverse)"
-                                            cursor="pointer"
-                                            onClick={handleSaveTemplate}
-                                            _hover={{ bg: 'var(--accent-hover)' }}
-                                        >
-                                            {savingTemplate ? <Spinner size="xs" /> : 'Save template'}
-                                        </Box>
-                                    )}
-                                </HStack>
+                        </VStack>
+                    ) : (
+                        /* Template tab */
+                        <VStack gap={3} align="stretch" h="100%">
+                            <HStack justify="space-between" flexShrink={0}>
+                                <Text fontSize="xs" color="var(--text-muted)">
+                                    Jinja2 system prompt template
+                                </Text>
+                                {editingName && templateDirty && (
+                                    <Button
+                                        size="xs"
+                                        colorScheme="green"
+                                        onClick={handleSaveTemplate}
+                                        disabled={savingTemplate}
+                                    >
+                                        {savingTemplate ? <Spinner size="xs" /> : 'Save template'}
+                                    </Button>
+                                )}
+                            </HStack>
+                            <Box position="relative" flex={1} minH={0}>
                                 <Textarea
-                                    size="sm"
-                                    rows={12}
+                                    position="absolute"
+                                    inset={0}
                                     fontFamily="mono"
                                     fontSize="xs"
+                                    lineHeight="1.6"
                                     value={templateContent}
                                     onChange={e => { setTemplateContent(e.target.value); setTemplateDirty(true); }}
-                                    bg="var(--bg-input)"
-                                    color="var(--text-primary)"
+                                    bg="transparent"
+                                    color="transparent"
+                                    caretColor="var(--text-primary)"
                                     borderColor="var(--border-input)"
+                                    borderRadius="md"
+                                    resize="none"
+                                    zIndex={2}
+                                    p="16px"
+                                    spellCheck={false}
+                                    h="100%"
+                                    _focus={{ outline: 'none', boxShadow: 'none', borderColor: 'var(--accent, teal.400)' }}
                                     placeholder="Jinja2 system prompt template..."
                                 />
+                                <Box
+                                    position="absolute"
+                                    inset={0}
+                                    borderRadius="md"
+                                    overflow="auto"
+                                    pointerEvents="none"
+                                    zIndex={1}
+                                >
+                                    <SyntaxHighlighter
+                                        language="django"
+                                        style={oneDark}
+                                        customStyle={{
+                                            margin: 0,
+                                            padding: '16px',
+                                            fontSize: '0.75rem',
+                                            lineHeight: '1.6',
+                                            background: 'var(--bg-input, #1e1e1e)',
+                                            minHeight: '100%',
+                                            borderRadius: '0.375rem',
+                                        }}
+                                        codeTagProps={{ style: { fontFamily: 'var(--fonts-mono, monospace)' } }}
+                                    >
+                                        {templateContent || ' '}
+                                    </SyntaxHighlighter>
+                                </Box>
                             </Box>
-
-                            {/* Submit / Cancel */}
-                            <HStack gap={2} justify="flex-end">
-                                <Box
-                                    as="button"
-                                    px={4} py={1.5}
-                                    borderRadius="md"
-                                    fontSize="sm"
-                                    bg="transparent"
-                                    color="var(--text-secondary)"
-                                    cursor="pointer"
-                                    onClick={() => setShowForm(false)}
-                                >
-                                    Cancel
-                                </Box>
-                                <Box
-                                    as="button"
-                                    px={4} py={1.5}
-                                    borderRadius="md"
-                                    fontSize="sm"
-                                    fontWeight="medium"
-                                    bg="var(--accent)"
-                                    color="var(--text-inverse)"
-                                    cursor="pointer"
-                                    onClick={handleSubmit}
-                                    _hover={{ bg: 'var(--accent-hover)' }}
-                                >
-                                    {busy ? <Spinner size="xs" /> : editingName ? 'Save' : 'Create'}
-                                </Box>
-                            </HStack>
                         </VStack>
+                    )}
+                </Box>
+
+                {/* Footer */}
+                <HStack px={5} py={3} borderTop="1px solid" borderColor="var(--border-primary)" justify="flex-end" gap={2} flexShrink={0}>
+                    <Button size="sm" variant="ghost" color="var(--text-tertiary)" onClick={onClose}>
+                        Cancel
+                    </Button>
+                    <Button size="sm" colorScheme="green" onClick={handleSubmit} disabled={busy}>
+                        {busy ? <Spinner size="xs" /> : editingName ? 'Save' : 'Create'}
+                    </Button>
+                </HStack>
+            </Box>
+        </Box>,
+        document.body,
+    );
+};
+
+/* ─── Main Page ────────────────────────────────────────────────── */
+
+const AgentsPage = () => {
+    const { agentName: urlAgent } = useParams<{ agentName?: string }>();
+    const navigate = useNavigate();
+
+    const [agents, setAgents] = useState<AgentDef[]>([]);
+    const [providers, setProviders] = useState<Provider[]>([]);
+    const [toolNamespaces, setToolNamespaces] = useState<ToolNamespace[]>([]);
+    const [skills, setSkills] = useState<SkillSummary[]>([]);
+    const [error, setError] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    const [modalOpen, setModalOpen] = useState(false);
+    const [editingName, setEditingName] = useState<string | null>(null);
+    const [modalForm, setModalForm] = useState<AgentFormData>(emptyForm);
+    const [modalTemplate, setModalTemplate] = useState(DEFAULT_TEMPLATE);
+
+    const urlHandled = useRef<string | undefined>(undefined);
+
+    const refresh = useCallback(() => {
+        listAgents().then(setAgents).catch(err => setError(err instanceof Error ? err.message : 'Failed to load'));
+    }, []);
+
+    useEffect(() => {
+        document.title = 'Agents - Açaí';
+        refresh();
+        listProviders().then(setProviders).catch(() => {});
+        listToolNamespaces().then(setToolNamespaces).catch(() => {});
+        listSkills().then(setSkills).catch(() => {});
+    }, [refresh]);
+
+    useEffect(() => {
+        if (!urlAgent || agents.length === 0 || urlHandled.current === urlAgent) return;
+        const agent = agents.find(a => a.name === urlAgent);
+        if (agent) {
+            urlHandled.current = urlAgent;
+            openEdit(agent);
+        }
+    }, [urlAgent, agents]);
+
+    const openAdd = () => {
+        setModalForm(emptyForm);
+        setEditingName(null);
+        setModalTemplate(DEFAULT_TEMPLATE);
+        setModalOpen(true);
+        navigate('/agents/new', { replace: true });
+    };
+
+    const openEdit = async (a: AgentDef) => {
+        setModalForm({
+            name: a.name,
+            description: a.description,
+            role: a.role,
+            avatar: a.avatar,
+            provider: a.provider,
+            output_format: a.output_format || 'messages',
+            temperature: String(a.model_overrides?.temperature ?? '0.7'),
+            max_tokens: String(a.model_overrides?.max_tokens ?? '4096'),
+            tools: a.tools.join(', '),
+            tool_permissions_read: (a.tool_permissions ?? ['read']).includes('read'),
+            tool_permissions_write: (a.tool_permissions ?? ['read']).includes('write'),
+            tool_permissions_execute: (a.tool_permissions ?? ['read']).includes('execute'),
+            context_sources: a.context_sources.join(', '),
+            max_iterations: String(a.max_iterations),
+            approval_required: a.approval_required,
+            tags: a.tags.join(', '),
+            uses_sandbox: a.uses_sandbox ?? false,
+        });
+        setEditingName(a.name);
+
+        try {
+            const { content } = await getAgentTemplate(a.name);
+            setModalTemplate(content);
+        } catch {
+            setModalTemplate('');
+        }
+
+        setModalOpen(true);
+        navigate(`/agents/${encodeURIComponent(a.name)}`, { replace: true });
+    };
+
+    const closeModal = useCallback(() => {
+        setModalOpen(false);
+        urlHandled.current = undefined;
+        navigate('/agents', { replace: true });
+    }, [navigate]);
+
+    const handleDelete = async (name: string) => {
+        setBusy(true);
+        try {
+            await deleteAgent(name);
+            refresh();
+        } catch { /* ignore */ } finally { setBusy(false); }
+    };
+
+    const handleReset = async (name: string) => {
+        setBusy(true);
+        try {
+            await resetAgent(name);
+            refresh();
+        } catch { /* ignore */ } finally { setBusy(false); }
+    };
+
+    const handleModalSave = () => {
+        closeModal();
+        refresh();
+    };
+
+    return (
+        <Box h="100vh" w="100%" bg="var(--bg-page)" overflowY="auto" p={6}>
+            <Box maxW="4xl" mx="auto">
+                <HStack justify="space-between" mb={6}>
+                    <Heading size="lg" color="var(--text-heading)">Agents</Heading>
+                    <IconButton
+                        aria-label="Add agent"
+                        size="sm"
+                        variant="outline"
+                        onClick={openAdd}
+                        borderColor="var(--border-primary)"
+                        color="var(--text-primary)"
+                    >
+                        <PlusIcon />
+                    </IconButton>
+                </HStack>
+
+                {error && (
+                    <Box p={3} bg="var(--bg-error)" borderRadius="md" mb={4}>
+                        <Text color="var(--text-error)" fontSize="sm">{error}</Text>
                     </Box>
+                )}
+
+                {agents.length === 0 && (
+                    <Text color="var(--text-muted)" fontSize="sm" py={8} textAlign="center">
+                        No agents configured. Click (+) to create one.
+                    </Text>
+                )}
+
+                <VStack gap={3} align="stretch" mb={6}>
+                    {agents.map(a => (
+                        <Box
+                            key={a.name}
+                            p={4}
+                            bg="var(--bg-card)"
+                            borderRadius="lg"
+                            border="1px solid"
+                            borderColor="var(--border-primary)"
+                            cursor="pointer"
+                            _hover={{ borderColor: 'var(--border-secondary)', bg: 'var(--bg-hover)' }}
+                            transition="all 0.15s"
+                            onClick={() => openEdit(a)}
+                        >
+                            <HStack justify="space-between" mb={2}>
+                                <HStack gap={2}>
+                                    {a.avatar && <Text fontSize="lg">{a.avatar}</Text>}
+                                    <Text fontWeight="bold" color="var(--text-heading)" fontSize="sm">
+                                        {a.name}
+                                    </Text>
+                                    <Badge colorScheme={ROLE_COLORS[a.role] || 'gray'} fontSize="2xs">
+                                        {a.role}
+                                    </Badge>
+                                    <Badge variant="outline" fontSize="2xs">
+                                        {a.provider === 'auto' ? 'auto' : a.provider}
+                                    </Badge>
+                                    {a.builtin && (
+                                        <Badge colorScheme="green" fontSize="2xs" variant="subtle">
+                                            built-in
+                                        </Badge>
+                                    )}
+                                </HStack>
+                                <HStack gap={1} onClick={e => e.stopPropagation()}>
+                                    <IconButton
+                                        aria-label="Edit" size="xs" variant="ghost"
+                                        onClick={() => openEdit(a)}
+                                        color="var(--text-tertiary)"
+                                    >
+                                        <EditIcon />
+                                    </IconButton>
+                                    {a.builtin && (
+                                        <IconButton
+                                            aria-label="Reset" size="xs" variant="ghost"
+                                            onClick={() => handleReset(a.name)}
+                                            color="var(--text-tertiary)" disabled={busy}
+                                        >
+                                            <ResetIcon />
+                                        </IconButton>
+                                    )}
+                                    {!a.builtin && (
+                                        <IconButton
+                                            aria-label="Delete" size="xs" variant="ghost"
+                                            onClick={() => handleDelete(a.name)}
+                                            color="var(--text-error)" disabled={busy}
+                                        >
+                                            <TrashIcon />
+                                        </IconButton>
+                                    )}
+                                </HStack>
+                            </HStack>
+
+                            {a.description && (
+                                <Text fontSize="sm" color="var(--text-secondary)" mb={2}>
+                                    {a.description}
+                                </Text>
+                            )}
+
+                            <HStack gap={6} flexWrap="wrap">
+                                <VStack align="flex-start" gap={0}>
+                                    <Text fontSize="xs" color="var(--text-muted)">Max Iterations</Text>
+                                    <Text fontSize="sm" color="var(--text-primary)">{a.max_iterations}</Text>
+                                </VStack>
+                                <VStack align="flex-start" gap={0}>
+                                    <Text fontSize="xs" color="var(--text-muted)">Format</Text>
+                                    <Text fontSize="sm" color="var(--text-primary)">
+                                        {a.output_format || 'messages'}
+                                    </Text>
+                                </VStack>
+                                <VStack align="flex-start" gap={0}>
+                                    <Text fontSize="xs" color="var(--text-muted)">Approval</Text>
+                                    <Text fontSize="sm" color="var(--text-primary)">
+                                        {a.approval_required ? 'Required' : 'No'}
+                                    </Text>
+                                </VStack>
+                                {a.uses_sandbox && (
+                                    <VStack align="flex-start" gap={0}>
+                                        <Text fontSize="xs" color="var(--text-muted)">Sandbox</Text>
+                                        <Text fontSize="sm" color="var(--text-primary)">Enabled</Text>
+                                    </VStack>
+                                )}
+                            </HStack>
+
+                            {a.tools.length > 0 && (
+                                <HStack mt={2} gap={1} flexWrap="wrap">
+                                    <Text fontSize="xs" color="var(--text-muted)">Tools:</Text>
+                                    {a.tools.map(t => (
+                                        <Badge key={t} fontSize="2xs" variant="outline">{t}</Badge>
+                                    ))}
+                                </HStack>
+                            )}
+
+                            {a.tags.length > 0 && (
+                                <HStack mt={1} gap={1} flexWrap="wrap">
+                                    <Text fontSize="xs" color="var(--text-muted)">Tags:</Text>
+                                    {a.tags.map(t => (
+                                        <Badge key={t} fontSize="2xs" colorScheme="teal">{t}</Badge>
+                                    ))}
+                                </HStack>
+                            )}
+                        </Box>
+                    ))}
+                </VStack>
+
+                {/* Edit/Create Modal */}
+                {modalOpen && (
+                    <AgentEditModal
+                        editingName={editingName}
+                        initialForm={modalForm}
+                        initialTemplate={modalTemplate}
+                        providers={providers}
+                        toolNamespaces={toolNamespaces}
+                        skills={skills}
+                        onSave={handleModalSave}
+                        onClose={closeModal}
+                    />
                 )}
             </Box>
         </Box>
