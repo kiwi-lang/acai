@@ -198,10 +198,18 @@ const SettingsPage = () => {
                 </Box>
             )}
 
-            <Box display="grid" gridTemplateColumns="repeat(auto-fill, minmax(320px, 1fr))" gap={4} flex={1} alignContent="flex-start">
+            <Box
+                css={{
+                    columnCount: 3,
+                    columnGap: '1rem',
+                    '@media (max-width: 768px)': { columnCount: 1 },
+                    '@media (min-width: 769px) and (max-width: 1200px)': { columnCount: 2 },
+                }}
+                flex={1}
+            >
 
                 {/* Sandbox */}
-                <Box>
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
                     <SectionCard
                         title="Sandbox"
                         busy={savingSection === 'sandbox'}
@@ -346,7 +354,7 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Worker */}
-                <Box>
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
                     <SectionCard
                         title="Worker"
                         busy={savingSection === 'worker'}
@@ -386,7 +394,7 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Git */}
-                <Box>
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
                     <SectionCard
                         title="Git"
                         busy={savingSection === 'git'}
@@ -409,7 +417,7 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Queue */}
-                <Box>
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
                     <SectionCard
                         title="Queue"
                         busy={savingSection === 'queue'}
@@ -435,7 +443,7 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Audit */}
-                <Box>
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
                     <SectionCard
                         title="Audit"
                         busy={savingSection === 'audit'}
@@ -454,12 +462,12 @@ const SettingsPage = () => {
                 </Box>
 
                 {/* Git Backup */}
-                <Box>
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
                     <GitBackupSection />
                 </Box>
 
                 {/* Auto Update */}
-                <Box>
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
                     <UpdateSection />
                 </Box>
 

@@ -5,6 +5,8 @@ An agentic AI orchestration platform that manages LLM-powered agents, tool
 execution, task queues, projects, knowledge bases and visual workflows — all
 through a modern web UI backed by a streaming FastAPI server.
 
+Make your own workflow tailored to your work
+
 ## Architecture overview
 
 ```mermaid
@@ -25,6 +27,8 @@ flowchart LR
 ### Repository layout
 
 ```
+System
+
 acai/
 ├── orchestrator/       # FastAPI server, chat, agents, projects, config, dispatcher
 ├── worker/             # Worker HTTP app, LLM abstraction, sandbox backends
@@ -42,6 +46,9 @@ acai/
 │       ├── contexts/   # WebSocketContext (socket.io)
 │       └── layout/     # Shell layout with sidebar
 └── plugins/            # Optional plugin discovery
+
+Local Data (Json, git)
+
 workspace/              # Runtime data (default location, configurable)
 ├── conversations/      # Global conversation histories
 ├── projects/           # Per-project data, tasks, conversations
@@ -99,8 +106,7 @@ expose two core endpoints:
 - **Tool routes** — execute agent tools in-process or forward sandboxed calls
   through the `SandboxProxy`.
 
-LLM backends are pluggable via a `create_llm` factory: **vLLM**, **llama.cpp**,
-**SGLang**, **TensorRT-LLM**, or a generic OpenAI-compatible endpoint.
+LLM backends are pluggable via a `create_llm` factory: **vLLM**, or a generic OpenAI-compatible endpoint.
 
 ### Sandbox system
 
