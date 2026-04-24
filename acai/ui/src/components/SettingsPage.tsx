@@ -1,9 +1,15 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import {
     Box, VStack, HStack, Text, Heading, Input,
     NativeSelect, Spinner,
 } from '@chakra-ui/react';
-import { getConfig, updateConfig } from '../services/api';
+import {
+    getConfig, updateConfig,
+    getVersion, triggerUpdate,
+    getGitBackupStatus, generateGitKey, setupGitBackup,
+    triggerGitSync, testGitConnection,
+} from '../services/api';
+import type { VersionInfo, GitBackupStatus } from '../services/api';
 import type { SystemConfig, SandboxConfig } from '../services/types';
 
 const SANDBOX_TYPES = ['none', 'docker', 'podman', 'firecracker', 'bubblewrap', 'nsjail'];
@@ -448,7 +454,404 @@ const SettingsPage = () => {
                     </SectionCard>
                 </Box>
 
+                {/* Git Backup */}
+                <Box flex="1 1 480px" minW="360px">
+                    <GitBackupSection />
+                </Box>
+
+                {/* Auto Update */}
+                <Box flex="1 1 480px" minW="360px">
+                    <UpdateSection />
+                </Box>
+
             </Box>
+        </Box>
+    );
+};
+
+// ==========================================================================
+// Git Backup Section
+// ==========================================================================
+
+const ActionButton = ({ onClick, busy, children, variant = 'default' }: {
+    onClick: () => void; busy: boolean; children: React.ReactNode;
+    variant?: 'default' | 'accent';
+}) => (
+    <Box
+        as="button"
+        px={3} py={1.5}
+        borderRadius="md"
+        fontSize="sm"
+        fontWeight="medium"
+        border="1px solid"
+        borderColor={variant === 'accent' ? 'var(--accent)' : 'var(--border-primary)'}
+        bg={variant === 'accent' ? 'var(--accent)' : 'transparent'}
+        color={variant === 'accent' ? 'var(--text-inverse)' : 'var(--text-secondary)'}
+        cursor={busy ? 'not-allowed' : 'pointer'}
+        onClick={busy ? undefined : onClick}
+        _hover={{ borderColor: 'var(--accent)', bg: variant === 'accent' ? 'var(--accent-hover)' : 'var(--bg-hover)' }}
+    >
+        {busy ? <Spinner size="xs" /> : children}
+    </Box>
+);
+
+const StatusDot = ({ ok }: { ok: boolean }) => (
+    <Box
+        w="8px" h="8px"
+        borderRadius="full"
+        bg={ok ? '#48bb78' : 'var(--text-muted)'}
+        flexShrink={0}
+    />
+);
+
+const GitBackupSection = () => {
+    const [status, setStatus] = useState<GitBackupStatus | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [busy, setBusy] = useState('');
+    const [remote, setRemote] = useState('');
+    const [msg, setMsg] = useState('');
+    const [testResult, setTestResult] = useState('');
+
+    const refresh = useCallback(async () => {
+        try {
+            const s = await getGitBackupStatus();
+            setStatus(s);
+            if (s.remote) setRemote(s.remote);
+        } catch { /* noop */ }
+        setLoading(false);
+    }, []);
+
+    useEffect(() => { refresh(); }, [refresh]);
+
+    const handleGenerateKey = async () => {
+        setBusy('keygen');
+        setMsg('');
+        try {
+            await generateGitKey();
+            setMsg('SSH key generated');
+            await refresh();
+        } catch (e: any) {
+            setMsg(e.message || 'Key generation failed');
+        }
+        setBusy('');
+    };
+
+    const handleSetup = async () => {
+        if (!remote.trim()) { setMsg('Enter a remote URL'); return; }
+        setBusy('setup');
+        setMsg('');
+        try {
+            const res = await setupGitBackup(remote.trim());
+            setMsg(res.push_error ? `Configured (push warning: ${res.push_error})` : 'Git backup configured');
+            await refresh();
+        } catch (e: any) {
+            setMsg(e.message || 'Setup failed');
+        }
+        setBusy('');
+    };
+
+    const handleSync = async () => {
+        setBusy('sync');
+        setMsg('');
+        try {
+            const res = await triggerGitSync();
+            if (res.error) setMsg(`Sync error: ${res.error}`);
+            else if (res.push_error) setMsg(`Committed but push failed: ${res.push_error}`);
+            else if (res.pushed) setMsg('Synced and pushed');
+            else if (res.commit) setMsg(`Committed ${res.commit}`);
+            else setMsg('Nothing to sync');
+            await refresh();
+        } catch (e: any) {
+            setMsg(e.message || 'Sync failed');
+        }
+        setBusy('');
+    };
+
+    const handleTest = async () => {
+        setBusy('test');
+        setTestResult('');
+        try {
+            const res = await testGitConnection();
+            setTestResult(res.connected ? 'Connected successfully' : `Connection failed: ${res.output}`);
+        } catch (e: any) {
+            setTestResult(e.message || 'Test failed');
+        }
+        setBusy('');
+    };
+
+    if (loading) {
+        return (
+            <Box p={4} bg="var(--bg-card)" borderRadius="lg" border="1px solid" borderColor="var(--border-primary)">
+                <Text fontWeight="semibold" color="var(--text-heading)" fontSize="lg" mb={3}>Git Backup</Text>
+                <Spinner size="sm" color="var(--accent)" />
+            </Box>
+        );
+    }
+
+    return (
+        <Box p={4} bg="var(--bg-card)" borderRadius="lg" border="1px solid" borderColor="var(--border-primary)">
+            <HStack justify="space-between" mb={3}>
+                <Text fontWeight="semibold" color="var(--text-heading)" fontSize="lg">Git Backup</Text>
+                <HStack gap={2}>
+                    <StatusDot ok={!!status?.initialized} />
+                    <Text fontSize="xs" color="var(--text-muted)">
+                        {status?.initialized ? 'Initialized' : 'Not initialized'}
+                    </Text>
+                </HStack>
+            </HStack>
+
+            <VStack gap={3} align="stretch">
+                {/* SSH Key */}
+                <Box p={3} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
+                    <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={2}>SSH Key</Text>
+                    <HStack gap={2} mb={status?.ssh_public_key ? 2 : 0}>
+                        <StatusDot ok={!!status?.ssh_key_exists} />
+                        <Text fontSize="xs" color="var(--text-tertiary)">
+                            {status?.ssh_key_exists ? 'Key exists' : 'No key generated'}
+                        </Text>
+                        <Box flex={1} />
+                        <ActionButton onClick={handleGenerateKey} busy={busy === 'keygen'}>
+                            {status?.ssh_key_exists ? 'Regenerate' : 'Generate Key'}
+                        </ActionButton>
+                    </HStack>
+                    {status?.ssh_public_key && (
+                        <Box
+                            p={2}
+                            bg="var(--bg-input)"
+                            borderRadius="md"
+                            border="1px solid"
+                            borderColor="var(--border-input)"
+                            cursor="pointer"
+                            onClick={() => navigator.clipboard.writeText(status.ssh_public_key)}
+                            title="Click to copy"
+                        >
+                            <Text fontSize="xs" fontFamily="mono" color="var(--text-code)" wordBreak="break-all">
+                                {status.ssh_public_key}
+                            </Text>
+                            <Text fontSize="xs" color="var(--text-muted)" mt={1}>Click to copy — add this as a deploy key on GitHub</Text>
+                        </Box>
+                    )}
+                </Box>
+
+                {/* Remote setup */}
+                <Field label="Remote URL (git@github.com:user/repo.git)">
+                    <HStack gap={2}>
+                        <Input
+                            value={remote}
+                            onChange={e => setRemote(e.target.value)}
+                            placeholder="git@github.com:user/workspace-backup.git"
+                            {...inputProps}
+                            flex={1}
+                        />
+                        <ActionButton onClick={handleSetup} busy={busy === 'setup'} variant="accent">
+                            {status?.initialized ? 'Update' : 'Setup'}
+                        </ActionButton>
+                    </HStack>
+                </Field>
+
+                {status?.remote && (
+                    <Text fontSize="xs" color="var(--text-muted)" fontFamily="mono">
+                        Remote: {status.remote}
+                    </Text>
+                )}
+
+                {/* Actions */}
+                <HStack gap={2} flexWrap="wrap">
+                    <ActionButton onClick={handleSync} busy={busy === 'sync'} variant="accent">
+                        Force Sync & Push
+                    </ActionButton>
+                    <ActionButton onClick={handleTest} busy={busy === 'test'}>
+                        Test Connection
+                    </ActionButton>
+                </HStack>
+
+                {/* Recent commits */}
+                {status?.recent_commits && status.recent_commits.length > 0 && (
+                    <Box p={2} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
+                        <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={1}>Recent Commits</Text>
+                        {status.recent_commits.map((c, i) => (
+                            <Text key={i} fontSize="xs" fontFamily="mono" color="var(--text-tertiary)">{c}</Text>
+                        ))}
+                    </Box>
+                )}
+
+                {/* Last sync */}
+                {status?.last_sync && (
+                    <Text fontSize="xs" color="var(--text-muted)">
+                        Last sync: {new Date(status.last_sync.timestamp).toLocaleString()}
+                        {status.last_sync.pushed && ' — pushed'}
+                        {status.last_sync.error && ` — error: ${status.last_sync.error}`}
+                    </Text>
+                )}
+
+                {/* Feedback */}
+                {msg && <Text fontSize="xs" color="var(--accent)">{msg}</Text>}
+                {testResult && (
+                    <Text fontSize="xs" color={testResult.startsWith('Connected') ? '#48bb78' : 'var(--text-error)'}>
+                        {testResult}
+                    </Text>
+                )}
+            </VStack>
+        </Box>
+    );
+};
+
+// ==========================================================================
+// Auto-Update Section
+// ==========================================================================
+
+const UpdateSection = () => {
+    const [version, setVersion] = useState<VersionInfo | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [updating, setUpdating] = useState(false);
+    const [logs, setLogs] = useState<string[]>([]);
+    const [result, setResult] = useState('');
+    const logEndRef = useRef<HTMLDivElement>(null);
+
+    const refresh = useCallback(async () => {
+        try {
+            const v = await getVersion();
+            setVersion(v);
+        } catch { /* noop */ }
+        setLoading(false);
+    }, []);
+
+    useEffect(() => { refresh(); }, [refresh]);
+
+    useEffect(() => {
+        logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }, [logs]);
+
+    const handleCheckUpdate = async () => {
+        setLoading(true);
+        await refresh();
+    };
+
+    const handleUpdate = async () => {
+        setUpdating(true);
+        setLogs([]);
+        setResult('');
+
+        try {
+            const stream = await triggerUpdate();
+
+            stream.addEventListener('log', (e: MessageEvent) => {
+                setLogs(prev => [...prev, e.data]);
+            });
+
+            stream.addEventListener('done', (e: MessageEvent) => {
+                try {
+                    const data = JSON.parse(e.data);
+                    if (data.status === 'updated') {
+                        setResult('Update complete — service is restarting...');
+                    } else if (data.status === 'error') {
+                        setResult(`Update failed: ${data.message || 'unknown error'}`);
+                    } else {
+                        setResult(JSON.stringify(data));
+                    }
+                } catch {
+                    setResult(e.data);
+                }
+                setUpdating(false);
+            });
+
+            stream.onerror = (reason) => {
+                setResult(reason || 'Connection lost during update');
+                setUpdating(false);
+            };
+        } catch (e: any) {
+            setResult(e.message || 'Failed to start update');
+            setUpdating(false);
+        }
+    };
+
+    if (loading && !version) {
+        return (
+            <Box p={4} bg="var(--bg-card)" borderRadius="lg" border="1px solid" borderColor="var(--border-primary)">
+                <Text fontWeight="semibold" color="var(--text-heading)" fontSize="lg" mb={3}>Updates</Text>
+                <Spinner size="sm" color="var(--accent)" />
+            </Box>
+        );
+    }
+
+    return (
+        <Box p={4} bg="var(--bg-card)" borderRadius="lg" border="1px solid" borderColor="var(--border-primary)">
+            <HStack justify="space-between" mb={3}>
+                <Text fontWeight="semibold" color="var(--text-heading)" fontSize="lg">Updates</Text>
+                {version?.update_available && (
+                    <Box px={2} py={0.5} borderRadius="md" bg="var(--accent-subtle)" border="1px solid" borderColor="var(--accent)">
+                        <Text fontSize="xs" fontWeight="medium" color="var(--accent)">Update available</Text>
+                    </Box>
+                )}
+            </HStack>
+
+            <VStack gap={3} align="stretch">
+                {/* Version info */}
+                <HStack gap={4}>
+                    <Box>
+                        <Text fontSize="xs" color="var(--text-muted)">Installed</Text>
+                        <Text fontSize="md" fontWeight="semibold" fontFamily="mono" color="var(--text-primary)">
+                            {version?.version || '—'}
+                        </Text>
+                    </Box>
+                    {version?.latest && (
+                        <Box>
+                            <Text fontSize="xs" color="var(--text-muted)">Latest on PyPI</Text>
+                            <Text
+                                fontSize="md"
+                                fontWeight="semibold"
+                                fontFamily="mono"
+                                color={version.update_available ? 'var(--accent)' : 'var(--text-primary)'}
+                            >
+                                {version.latest}
+                            </Text>
+                        </Box>
+                    )}
+                </HStack>
+
+                {/* Actions */}
+                <HStack gap={2}>
+                    <ActionButton onClick={handleCheckUpdate} busy={loading}>
+                        Check for Updates
+                    </ActionButton>
+                    {version?.update_available && (
+                        <ActionButton onClick={handleUpdate} busy={updating} variant="accent">
+                            Install Update
+                        </ActionButton>
+                    )}
+                </HStack>
+
+                {/* Update log */}
+                {logs.length > 0 && (
+                    <Box
+                        p={3}
+                        bg="var(--bg-elevated)"
+                        borderRadius="md"
+                        border="1px solid"
+                        borderColor="var(--border-primary)"
+                        maxH="200px"
+                        overflowY="auto"
+                    >
+                        <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={1}>Update Log</Text>
+                        {logs.map((line, i) => (
+                            <Text key={i} fontSize="xs" fontFamily="mono" color="var(--text-tertiary)">{line}</Text>
+                        ))}
+                        <div ref={logEndRef} />
+                    </Box>
+                )}
+
+                {/* Result */}
+                {result && (
+                    <Text
+                        fontSize="xs"
+                        color={result.includes('failed') || result.includes('error') || result.includes('lost')
+                            ? 'var(--text-error)'
+                            : 'var(--accent)'}
+                    >
+                        {result}
+                    </Text>
+                )}
+            </VStack>
         </Box>
     );
 };

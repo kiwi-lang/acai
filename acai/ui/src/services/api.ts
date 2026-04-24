@@ -587,6 +587,76 @@ export async function updateConfig(patch: Record<string, any>): Promise<SystemCo
     });
 }
 
+// -- Version / Auto-update ------------------------------------------------
+
+export interface VersionInfo {
+    version: string;
+    latest?: string;
+    update_available?: boolean;
+}
+
+export async function getVersion(): Promise<VersionInfo> {
+    return request<VersionInfo>('/version');
+}
+
+export async function triggerUpdate(): Promise<SSEStream> {
+    const response = await fetch(`${API_BASE}/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return new SSEStream(response);
+}
+
+// -- Git Backup -----------------------------------------------------------
+
+export interface GitBackupStatus {
+    initialized: boolean;
+    remote: string | null;
+    ssh_key_exists: boolean;
+    ssh_public_key: string;
+    recent_commits: string[];
+    dirty: boolean;
+    data_path: string;
+    last_sync?: {
+        commit: string | null;
+        pushed: boolean;
+        push_error: string | null;
+        error: string | null;
+        timestamp: string;
+    };
+}
+
+export async function getGitBackupStatus(): Promise<GitBackupStatus> {
+    return request<GitBackupStatus>('/git/status');
+}
+
+export async function generateGitKey(): Promise<{ public_key: string }> {
+    return request<{ public_key: string }>('/git/generate-key', { method: 'POST' });
+}
+
+export async function getGitSshKey(): Promise<{ public_key: string }> {
+    return request<{ public_key: string }>('/git/ssh-key');
+}
+
+export async function setupGitBackup(remote: string): Promise<any> {
+    return request('/git/setup', {
+        method: 'POST',
+        body: JSON.stringify({ remote }),
+    });
+}
+
+export async function triggerGitSync(): Promise<any> {
+    return request('/git/sync', { method: 'POST' });
+}
+
+export async function testGitConnection(): Promise<{ connected: boolean; output: string }> {
+    return request('/git/test', { method: 'POST' });
+}
+
 // Knowledge
 export interface KnowledgeDocSummary {
     path: string;
