@@ -143,12 +143,14 @@ export async function converse(
     graph?: string,
     ephemeral?: boolean,
     task_id?: string,
+    context?: Record<string, unknown>,
 ): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
     if (task_id) body.task_id = task_id;
     if (enable_thinking !== undefined) body.enable_thinking = enable_thinking;
     if (graph) body.graph = graph;
     if (ephemeral) body.ephemeral = true;
+    if (context) body.context = context;
 
     const response = await fetch(`${API_BASE}/converse`, {
         method: 'POST',
@@ -502,6 +504,48 @@ export async function updateWorkflow(id: string, spec: WorkflowSpec): Promise<Wo
 
 export async function deleteWorkflow(id: string): Promise<void> {
     await request(`/workflows/${id}`, { method: 'DELETE' });
+}
+
+export interface WorkflowAgent {
+    name: string;
+    description: string;
+    provider: string;
+    output_format: string;
+}
+
+export interface WorkflowSkill {
+    qualified_name: string;
+    namespace: string;
+    name: string;
+    description: string;
+}
+
+export async function listWorkflowAgents(workflowId: string): Promise<WorkflowAgent[]> {
+    return request<WorkflowAgent[]>(`/workflows/${encodeURIComponent(workflowId)}/agents`);
+}
+
+export async function listWorkflowSkills(workflowId: string): Promise<WorkflowSkill[]> {
+    return request<WorkflowSkill[]>(`/workflows/${encodeURIComponent(workflowId)}/skills`);
+}
+
+export async function createWorkflowAgent(
+    workflowId: string,
+    data: { name: string; description?: string },
+): Promise<{ created: boolean; name: string }> {
+    return request(`/workflows/${encodeURIComponent(workflowId)}/agents`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function createWorkflowSkill(
+    workflowId: string,
+    data: { namespace: string; name: string; description?: string; code?: string; parameters?: string; readme?: string },
+): Promise<{ created: boolean; qualified_name: string }> {
+    return request(`/workflows/${encodeURIComponent(workflowId)}/skills`, {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
 }
 
 export async function runWorkflow(

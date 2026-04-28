@@ -45,6 +45,11 @@ import {
   listAgents,
   getAgentInputs,
   listToolDefinitions,
+  listSkills,
+  listWorkflowAgents,
+  listWorkflowSkills,
+  listProviders,
+  listToolNamespaces,
   validateWorkflow,
   validateWorkflowSpec,
   type WorkflowSummary,
@@ -53,7 +58,14 @@ import {
   type PinDef,
   type ToolDefinition,
   type Diagnostic,
+  type SkillSummary,
+  type WorkflowAgent,
+  type WorkflowSkill,
+  type ToolNamespace,
 } from '../services/api';
+import type { AgentDef, Provider } from '../services/types';
+import AgentEditModal, { emptyForm as agentEmptyForm, DEFAULT_TEMPLATE } from './AgentEditModal';
+import SkillEditModal from './SkillEditModal';
 import ChatPanel from './ChatPanel';
 
 /* ================================================================== */
@@ -1318,6 +1330,17 @@ const WorkflowEditor: FC = () => {
   }, []);
 
   const [toolDefs, setToolDefs] = useState<ToolDefinition[]>([]);
+  const [agentsList, setAgentsList] = useState<AgentDef[]>([]);
+  const [skillsList, setSkillsList] = useState<SkillSummary[]>([]);
+  const [wfAgents, setWfAgents] = useState<WorkflowAgent[]>([]);
+  const [wfSkills, setWfSkills] = useState<WorkflowSkill[]>([]);
+  const [showGlobalAgents, setShowGlobalAgents] = useState(false);
+  const [showGlobalSkills, setShowGlobalSkills] = useState(false);
+  const [showWfDropdown, setShowWfDropdown] = useState(false);
+  const [addAgentModal, setAddAgentModal] = useState(false);
+  const [addSkillModal, setAddSkillModal] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [toolNamespaces, setToolNamespaces] = useState<ToolNamespace[]>([]);
 
   useEffect(() => {
     getNodeTypes().then(defs => {
@@ -1326,7 +1349,19 @@ const WorkflowEditor: FC = () => {
     }).catch(() => {});
     listWorkflows().then(setSavedWorkflows).catch(() => {});
     listToolDefinitions().then(setToolDefs).catch(() => {});
+    listAgents().then(setAgentsList).catch(() => {});
+    listSkills().then(setSkillsList).catch(() => {});
+    listProviders().then(setProviders).catch(() => {});
+    listToolNamespaces().then(setToolNamespaces).catch(() => {});
   }, []);
+
+  const refreshWfAssets = useCallback((wfId: string) => {
+    if (!wfId) { setWfAgents([]); setWfSkills([]); return; }
+    listWorkflowAgents(wfId).then(setWfAgents).catch(() => setWfAgents([]));
+    listWorkflowSkills(wfId).then(setWfSkills).catch(() => setWfSkills([]));
+  }, []);
+
+  useEffect(() => { refreshWfAssets(workflowId); }, [workflowId, refreshWfAssets]);
 
   const nodeTypes = useMemo(() => buildNodeTypes(), [nodeDefsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1464,6 +1499,16 @@ const WorkflowEditor: FC = () => {
       },
     })),
   [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime, execReachable, replyTypeFieldsMap, toolDefs, nodeDiagMap, computeDynamicPins]);
+
+  const buildChatContext = useMemo(() => {
+    const spec = {
+      id: workflowId || 'untitled',
+      name: workflowId || 'Untitled',
+      nodes: nodes.map(n => ({ id: n.id, type: n.type, position: n.position, data: n.data })),
+      edges: edges.map(e => ({ id: e.id, source: e.source, target: e.target, sourceHandle: e.sourceHandle, targetHandle: e.targetHandle, type: e.type })),
+    };
+    return { current_workflow: JSON.stringify(spec, null, 2), workflow_id: workflowId || '' };
+  }, [nodes, edges, workflowId]);
 
   const enrichedEdges = useMemo(() =>
     edges.map(e => {
@@ -1641,6 +1686,10 @@ const WorkflowEditor: FC = () => {
     try { loadSpec(await getWorkflow(id)); } catch (err) { console.error('Load failed', err); }
   }, [loadSpec]);
 
+  const reloadWorkflow = useCallback(() => {
+    if (workflowId) handleLoad(workflowId);
+  }, [workflowId, handleLoad]);
+
   /* Auto-load workflow from URL param */
   const initialLoadDone = useRef(false);
   useEffect(() => {
@@ -1698,9 +1747,56 @@ const WorkflowEditor: FC = () => {
         <Box w="220px" minW="220px" h="100%" bg="#242424" borderRight={`1px solid ${C.border}`}
           display="flex" flexDirection="column" overflowY="auto">
 
-          {/* Workflow meta */}
+          {/* Workflow meta — title with dropdown picker */}
           <Box p={2} borderBottom={`1px solid ${C.border}`}>
-            <Text fontSize="13px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Workflow</Text>
+            <Box position="relative" mb={1}>
+              <HStack gap={1} cursor="pointer" onClick={() => setShowWfDropdown(v => !v)}
+                _hover={{ bg: '#333' }} borderRadius="3px" px={1} py={0.5}>
+                <Text fontSize="13px" fontWeight="bold" color={C.muted} textTransform="uppercase" flex={1}>
+                  {workflowName || 'New Workflow'}
+                </Text>
+                <Text fontSize="10px" color={C.muted}>{showWfDropdown ? '▲' : '▼'}</Text>
+              </HStack>
+              {showWfDropdown && (
+                <Box position="absolute" top="100%" left={0} right={0} zIndex={100}
+                  bg="#2a2a2a" border={`1px solid ${C.border}`} borderRadius="4px"
+                  maxH="250px" overflowY="auto" mt={0.5} boxShadow="0 4px 12px rgba(0,0,0,0.5)">
+                  <Box px={2} py={1} borderBottom={`1px solid ${C.border}`}
+                    cursor="pointer" _hover={{ bg: '#383838' }}
+                    onClick={() => {
+                      setWorkflowId(''); setWorkflowName('New Workflow'); setWorkflowDesc('');
+                      setIsBuiltin(false); setNodes(DEFAULT_NODES); setEdges(DEFAULT_EDGES);
+                      setShowWfDropdown(false);
+                    }}>
+                    <Text fontSize="13px" color={C.green} fontWeight={500}>+ New Workflow</Text>
+                  </Box>
+                  {savedWorkflows.map(wf => {
+                    const wfBuiltin = (wf as any).builtin;
+                    return (
+                      <HStack key={wf.id} px={2} py={1}
+                        bg={workflowId === wf.id ? '#383838' : 'transparent'}
+                        _hover={{ bg: '#333' }} cursor="pointer"
+                        onClick={() => { handleLoad(wf.id); setShowWfDropdown(false); }}
+                        justify="space-between">
+                        <HStack gap={1} overflow="hidden">
+                          {wfBuiltin && (devMode ? <UnlockIcon /> : <LockIcon />)}
+                          <Box overflow="hidden">
+                            <Text fontSize="13px" fontWeight={500} color={C.text} lineClamp={1}>{wf.name}</Text>
+                            <Text fontSize="11px" color={C.muted}>{wf.node_count}n · {wf.edge_count}e</Text>
+                          </Box>
+                        </HStack>
+                        {(!wfBuiltin || devMode) && (
+                          <IconButton aria-label="Delete" size="xs" variant="ghost"
+                            onClick={e => { e.stopPropagation(); handleDelete(wf.id); }}>
+                            <TrashIcon />
+                          </IconButton>
+                        )}
+                      </HStack>
+                    );
+                  })}
+                </Box>
+              )}
+            </Box>
             <Input size="sm" value={workflowName} onChange={e => setWorkflowName(e.target.value)}
               bg="#1a1a1a" borderColor={C.border} fontSize="md" mb={1} color={C.text}
               readOnly={isBuiltin && !devMode} />
@@ -1809,37 +1905,140 @@ const WorkflowEditor: FC = () => {
             </Box>
           </Box>
 
-          {/* Workflow list */}
-          <Box p={2} flex={1} overflowY="auto">
-            <Text fontSize="13px" fontWeight="bold" color={C.muted} mb={1} textTransform="uppercase">Workflows</Text>
-            {savedWorkflows.length === 0 ? (
-              <Text fontSize="14px" color={C.muted}>None yet</Text>
-            ) : (
-              <VStack gap={0.5} align="stretch">
-                {savedWorkflows.map(wf => {
-                  const wfBuiltin = (wf as any).builtin;
-                  return (
-                    <HStack key={wf.id} px={2} py={1} borderRadius="3px"
-                      bg={workflowId === wf.id ? '#383838' : 'transparent'}
-                      _hover={{ bg: '#333' }} cursor="pointer"
-                      onClick={() => handleLoad(wf.id)} justify="space-between">
-                      <HStack gap={1} overflow="hidden">
-                        {wfBuiltin && (devMode ? <UnlockIcon /> : <LockIcon />)}
+          {/* Agents drawer */}
+          <Box p={2} borderBottom={`1px solid ${C.border}`} overflow="hidden"
+            display="flex" flexDirection="column" maxH="30vh">
+            <HStack mb={1} justify="space-between">
+              <Text fontSize="13px" fontWeight="bold" color={C.muted} textTransform="uppercase">Agents</Text>
+              <HStack gap={1}>
+                <Text fontSize="11px" color={C.muted}>{wfAgents.length}</Text>
+                {workflowId && (
+                  <Box as="button" fontSize="13px" color={C.green} fontWeight="bold" lineHeight="1"
+                    _hover={{ color: '#9fda75' }} onClick={() => setAddAgentModal(true)}
+                    title="Add agent to this workflow">+</Box>
+                )}
+              </HStack>
+            </HStack>
+            <Box overflowY="auto" flex={1} minH={0}>
+              {wfAgents.length === 0 && !showGlobalAgents ? (
+                <Text fontSize="13px" color={C.muted}>{workflowId ? 'No workflow agents' : 'Select a workflow'}</Text>
+              ) : (
+                <VStack gap={0.5} align="stretch">
+                  {wfAgents.map(ag => (
+                    <Box key={ag.name} px={2} py={1} borderRadius="3px"
+                      border={`1px solid ${C.blue}33`}
+                      _hover={{ bg: `${C.blue}18`, borderColor: `${C.blue}66` }}
+                      transition="all 0.1s">
+                      <HStack gap={2}>
+                        <Box w="6px" h="6px" borderRadius="50%" bg={C.blue} flexShrink={0} />
                         <Box overflow="hidden">
-                          <Text fontSize="14px" fontWeight={500} color={C.text} lineClamp={1}>{wf.name}</Text>
-                          <Text fontSize="13px" color={C.muted}>{wf.node_count}n · {wf.edge_count}e</Text>
+                          <Text fontSize="13px" fontWeight={500} color={C.text} lineClamp={1}>{ag.name}</Text>
+                          {ag.description && (
+                            <Text fontSize="11px" color={C.muted} lineClamp={1}>{ag.description}</Text>
+                          )}
                         </Box>
                       </HStack>
-                      {(!wfBuiltin || devMode) && (
-                        <IconButton aria-label="Delete" size="xs" variant="ghost"
-                          onClick={e => { e.stopPropagation(); handleDelete(wf.id); }}>
-                          <TrashIcon />
-                        </IconButton>
-                      )}
+                    </Box>
+                  ))}
+                </VStack>
+              )}
+              {/* Global agents (collapsed) */}
+              {agentsList.length > 0 && (
+                <Box mt={1}>
+                  <HStack px={1} py={0.5} cursor="pointer" gap={1}
+                    onClick={() => setShowGlobalAgents(v => !v)}
+                    _hover={{ bg: '#333' }} borderRadius="3px">
+                    <Text fontSize="10px" color={C.muted}>{showGlobalAgents ? '▼' : '▶'}</Text>
+                    <Text fontSize="11px" color={C.muted} fontWeight={600} textTransform="uppercase">
+                      Global ({agentsList.length})
+                    </Text>
+                  </HStack>
+                  {showGlobalAgents && (
+                    <VStack gap={0.5} align="stretch" mt={0.5}>
+                      {agentsList.map(ag => (
+                        <Box key={ag.name} px={2} py={0.5} borderRadius="3px"
+                          border={`1px solid ${C.border}`}
+                          _hover={{ bg: '#2a2a2a' }} transition="all 0.1s">
+                          <HStack gap={2}>
+                            <Box w="5px" h="5px" borderRadius="50%" bg={C.muted} flexShrink={0} />
+                            <Box overflow="hidden">
+                              <Text fontSize="12px" color={C.muted} lineClamp={1}>{ag.name}</Text>
+                            </Box>
+                          </HStack>
+                        </Box>
+                      ))}
+                    </VStack>
+                  )}
+                </Box>
+              )}
+            </Box>
+          </Box>
+
+          {/* Skills drawer */}
+          <Box p={2} flex={1} overflowY="auto">
+            <HStack mb={1} justify="space-between">
+              <Text fontSize="13px" fontWeight="bold" color={C.muted} textTransform="uppercase">Skills</Text>
+              <HStack gap={1}>
+                <Text fontSize="11px" color={C.muted}>{wfSkills.length}</Text>
+                {workflowId && (
+                  <Box as="button" fontSize="13px" color={C.green} fontWeight="bold" lineHeight="1"
+                    _hover={{ color: '#9fda75' }} onClick={() => setAddSkillModal(true)}
+                    title="Add skill to this workflow">+</Box>
+                )}
+              </HStack>
+            </HStack>
+            {wfSkills.length === 0 && !showGlobalSkills ? (
+              <Text fontSize="13px" color={C.muted}>{workflowId ? 'No workflow skills' : 'Select a workflow'}</Text>
+            ) : (
+              <VStack gap={0.5} align="stretch">
+                {wfSkills.map(sk => (
+                  <Box key={sk.qualified_name} px={2} py={1} borderRadius="3px"
+                    border={`1px solid ${C.cyan}33`}
+                    _hover={{ bg: `${C.cyan}18`, borderColor: `${C.cyan}66` }}
+                    transition="all 0.1s">
+                    <HStack gap={2}>
+                      <Box w="6px" h="6px" borderRadius="1px" bg={C.cyan} flexShrink={0} />
+                      <Box overflow="hidden">
+                        <Text fontSize="13px" fontWeight={500} color={C.text} lineClamp={1}>{sk.name}</Text>
+                        <Text fontSize="11px" color={C.muted} lineClamp={1}>
+                          {sk.namespace}{sk.description ? ` · ${sk.description}` : ''}
+                        </Text>
+                      </Box>
                     </HStack>
-                  );
-                })}
+                  </Box>
+                ))}
               </VStack>
+            )}
+            {/* Global skills (collapsed) */}
+            {skillsList.length > 0 && (
+              <Box mt={1}>
+                <HStack px={1} py={0.5} cursor="pointer" gap={1}
+                  onClick={() => setShowGlobalSkills(v => !v)}
+                  _hover={{ bg: '#333' }} borderRadius="3px">
+                  <Text fontSize="10px" color={C.muted}>{showGlobalSkills ? '▼' : '▶'}</Text>
+                  <Text fontSize="11px" color={C.muted} fontWeight={600} textTransform="uppercase">
+                    Global ({skillsList.length})
+                  </Text>
+                </HStack>
+                {showGlobalSkills && (
+                  <VStack gap={0.5} align="stretch" mt={0.5}>
+                    {skillsList.map(sk => (
+                      <Box key={sk.qualified_name} px={2} py={0.5} borderRadius="3px"
+                        border={`1px solid ${C.border}`}
+                        _hover={{ bg: '#2a2a2a' }} transition="all 0.1s">
+                        <HStack gap={2}>
+                          <Box w="5px" h="5px" borderRadius="1px" bg={C.muted} flexShrink={0} />
+                          <Box overflow="hidden">
+                            <Text fontSize="12px" color={C.muted} lineClamp={1}>
+                              {sk.namespace}.{sk.name}
+                            </Text>
+                          </Box>
+                        </HStack>
+                      </Box>
+                    ))}
+                  </VStack>
+                )}
+              </Box>
             )}
           </Box>
         </Box>
@@ -2053,6 +2252,8 @@ const WorkflowEditor: FC = () => {
                   ephemeral
                   initialAgent="graph_builder"
                   placeholder="Describe how to modify this workflow..."
+                  context={buildChatContext}
+                  onResponseComplete={reloadWorkflow}
                 />
               </Box>
             </Box>
@@ -2103,6 +2304,30 @@ const WorkflowEditor: FC = () => {
           borderLeft={`1px solid ${C.border}`} overflowY="auto">
           <PropPanel node={currentSelectedNode} onUpdate={updateNodeData} onDelete={deleteNode} />
         </Box>
+      )}
+
+      {/* Add Agent modal — reuses shared AgentEditModal */}
+      {addAgentModal && workflowId && (
+        <AgentEditModal
+          editingName={null}
+          initialForm={agentEmptyForm}
+          initialTemplate={DEFAULT_TEMPLATE}
+          providers={providers}
+          toolNamespaces={toolNamespaces}
+          skills={skillsList}
+          workflowId={workflowId}
+          onSave={() => { setAddAgentModal(false); refreshWfAssets(workflowId); }}
+          onClose={() => setAddAgentModal(false)}
+        />
+      )}
+
+      {/* Add Skill modal — reuses shared SkillEditModal */}
+      {addSkillModal && workflowId && (
+        <SkillEditModal
+          workflowId={workflowId}
+          onSave={() => { setAddSkillModal(false); refreshWfAssets(workflowId); }}
+          onClose={() => setAddSkillModal(false)}
+        />
       )}
     </Box>
   );

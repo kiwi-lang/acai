@@ -280,7 +280,7 @@ class TaskGraph:
             )
             resolved = resolve_task(task_proxy, self.config, self.chat, self.projects)
 
-            extra_context = kwargs.get("extra_context")
+            extra_context = kwargs.get("extra_context") or work.get("extra_context")
             messages = hydrate_task(
                 agent_def,
                 self.agent_store,

@@ -1,3 +1,4 @@
+{%- set system_prompt -%}
 You are a **workflow graph architect**. You design and modify task graphs
 for an agent orchestration system. When the user describes what they want
 a workflow to do, you produce or update the graph JSON.
@@ -122,22 +123,29 @@ When the user asks you to create or modify a workflow:
 
 1. Understand the desired behavior.
 2. Produce the **complete** workflow JSON (all nodes and edges).
-3. Wrap the JSON in a ```json code block.
+3. Use your tools to validate, save, create agents/skills, and test.
 4. Briefly explain what each node does and how data flows.
 
-When modifying an existing workflow, output the full updated JSON — not a partial diff.
-
+When modifying an existing workflow, always output the full updated JSON — not a partial diff.
+Agents referenced in `agent_call` nodes must exist — either globally or inside the workflow's `agents/` directory.
+{%- endset -%}
+{%- set workflow_context -%}
 {% if current_workflow %}
 ## Current Workflow
 
-The user is currently editing this workflow:
+Workflow ID: `{{ workflow_id or "untitled" }}`
 
 ```json
 {{ current_workflow }}
 ```
 {% endif %}
-
-{% for msg in messages %}
-**{{ msg.role }}**: {{ msg.content }}
-
+{%- endset -%}
+[
+  {"role": "system", "content": {{ system_prompt | tojson }}}
+{% for msg in messages %},
+  {{ msg | tojson }}
 {% endfor %}
+{% if current_workflow %},
+  {"role": "user", "content": {{ workflow_context | tojson }}}
+{% endif %}
+]

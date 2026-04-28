@@ -478,6 +478,10 @@ def create_router(config: AcaiConfig | None = None,
         if workflow_dir:
             work["workflow_dir"] = workflow_dir
 
+        extra_ctx = data.get("context")
+        if isinstance(extra_ctx, dict):
+            work["extra_context"] = extra_ctx
+
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -777,6 +781,157 @@ def create_router(config: AcaiConfig | None = None,
         if os.path.isdir(wf_dir):
             _shutil.rmtree(wf_dir)
         return {"deleted": True}
+
+    @router.get("/workflows/{workflow_id}/agents")
+    def list_workflow_agents(workflow_id: str):
+        """List agents bundled inside a workflow directory."""
+        results = []
+        for base in (os.path.join(workflows_dir, workflow_id),
+                     os.path.join(_builtin_wf_dir, workflow_id)):
+            agents_dir = os.path.join(base, "agents")
+            if not os.path.isdir(agents_dir):
+                continue
+            for name in sorted(os.listdir(agents_dir)):
+                def_path = os.path.join(agents_dir, name, "definition.json")
+                if not os.path.isfile(def_path):
+                    continue
+                try:
+                    with open(def_path) as f:
+                        defn = json.load(f)
+                    results.append({
+                        "name": defn.get("name", name),
+                        "description": defn.get("description", ""),
+                        "provider": defn.get("provider", "auto"),
+                        "output_format": defn.get("output_format", "text"),
+                    })
+                except (json.JSONDecodeError, OSError):
+                    continue
+            break
+        return results
+
+    @router.get("/workflows/{workflow_id}/skills")
+    def list_workflow_skills(workflow_id: str):
+        """List skills bundled inside a workflow directory."""
+        results = []
+        for base in (os.path.join(workflows_dir, workflow_id),
+                     os.path.join(_builtin_wf_dir, workflow_id)):
+            skills_dir = os.path.join(base, "skills")
+            if not os.path.isdir(skills_dir):
+                continue
+            for ns in sorted(os.listdir(skills_dir)):
+                ns_dir = os.path.join(skills_dir, ns)
+                if not os.path.isdir(ns_dir):
+                    continue
+                for name in sorted(os.listdir(ns_dir)):
+                    tool_path = os.path.join(ns_dir, name, "tool.json")
+                    if not os.path.isfile(tool_path):
+                        continue
+                    try:
+                        with open(tool_path) as f:
+                            defn = json.load(f)
+                        results.append({
+                            "qualified_name": f"{ns}.{name}",
+                            "namespace": ns,
+                            "name": defn.get("name", name),
+                            "description": defn.get("description", ""),
+                        })
+                    except (json.JSONDecodeError, OSError):
+                        continue
+            break
+        return results
+
+    @router.post("/workflows/{workflow_id}/agents")
+    async def create_workflow_agent(workflow_id: str, request: Request):
+        """Create or update an agent inside a workflow directory."""
+        data = await _json_body(request)
+        name = data.get("name", "").strip()
+        if not name:
+            return JSONResponse({"error": "agent name required"}, status_code=400)
+        wf_dir = os.path.join(workflows_dir, workflow_id)
+        if not os.path.isdir(wf_dir):
+            wf_dir = os.path.join(_builtin_wf_dir, workflow_id)
+        agent_dir = os.path.join(wf_dir, "agents", name)
+        os.makedirs(agent_dir, exist_ok=True)
+        definition: dict = {
+            "name": name,
+            "description": data.get("description", ""),
+            "role": data.get("role", "system"),
+            "provider": data.get("provider", "auto"),
+            "output_format": data.get("output_format", "messages"),
+        }
+        if data.get("model_overrides"):
+            definition["model_overrides"] = data["model_overrides"]
+        if data.get("tools"):
+            definition["tools"] = data["tools"]
+        if data.get("tool_permissions"):
+            definition["tool_permissions"] = data["tool_permissions"]
+        if data.get("context_sources"):
+            definition["context_sources"] = data["context_sources"]
+        if "max_iterations" in data:
+            definition["max_iterations"] = data["max_iterations"]
+        if "approval_required" in data:
+            definition["approval_required"] = data["approval_required"]
+        if "uses_sandbox" in data:
+            definition["uses_sandbox"] = data["uses_sandbox"]
+        if data.get("tags"):
+            definition["tags"] = data["tags"]
+        if data.get("avatar"):
+            definition["avatar"] = data["avatar"]
+        with open(os.path.join(agent_dir, "definition.json"), "w") as f:
+            json.dump(definition, f, indent=2)
+        template = data.get("system_template", "")
+        if template:
+            with open(os.path.join(agent_dir, "system.j2"), "w") as f:
+                f.write(template)
+        return {"created": True, "name": name}
+
+    _DEFAULT_SKILL_CODE = (
+        "#!/usr/bin/env python3\n"
+        "import json, sys\n\n"
+        "def main():\n"
+        '    args = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}\n'
+        '    result = {"status": "ok"}\n'
+        "    print(json.dumps(result))\n\n"
+        'if __name__ == "__main__":\n'
+        "    main()\n"
+    )
+
+    @router.post("/workflows/{workflow_id}/skills")
+    async def create_workflow_skill(workflow_id: str, request: Request):
+        """Create or update a skill inside a workflow directory."""
+        data = await _json_body(request)
+        ns = data.get("namespace", "").strip()
+        name = data.get("name", "").strip()
+        if not ns or not name:
+            return JSONResponse({"error": "namespace and name required"}, status_code=400)
+        wf_dir = os.path.join(workflows_dir, workflow_id)
+        if not os.path.isdir(wf_dir):
+            wf_dir = os.path.join(_builtin_wf_dir, workflow_id)
+        skill_dir = os.path.join(wf_dir, "skills", ns, name)
+        os.makedirs(skill_dir, exist_ok=True)
+        params = data.get("parameters")
+        if isinstance(params, str):
+            try:
+                params = json.loads(params)
+            except (json.JSONDecodeError, TypeError):
+                params = None
+        if not params:
+            params = {"type": "object", "properties": {}, "required": []}
+        tool_def = {
+            "name": name,
+            "description": data.get("description", ""),
+            "parameters": params,
+        }
+        with open(os.path.join(skill_dir, "tool.json"), "w") as f:
+            json.dump(tool_def, f, indent=2)
+        code = data.get("code", "").strip() or _DEFAULT_SKILL_CODE
+        with open(os.path.join(skill_dir, "run.py"), "w") as f:
+            f.write(code)
+        readme = data.get("readme", "").strip()
+        if readme:
+            with open(os.path.join(skill_dir, "README.md"), "w") as f:
+                f.write(readme)
+        return {"created": True, "qualified_name": f"{ns}.{name}"}
 
     @router.post("/workflows/validate")
     async def validate_workflow_spec(request: Request):

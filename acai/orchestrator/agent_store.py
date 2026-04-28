@@ -250,6 +250,7 @@ class AgentStore:
     _STANDARD_VARS = frozenset({
         "agent", "task", "messages", "project", "spec",
         "tools_description", "datetime", "node_registry",
+        "current_workflow", "workflow_id",
         "range", "true", "false", "none", "loop",
     })
 

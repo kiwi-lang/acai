@@ -39,12 +39,42 @@ class OrchestratorClient:
         resp = http.get(f"{self.base_url}{path}", params=params, timeout=timeout)
         return resp.json()
 
+    def _put(self, path: str, payload: dict, timeout: int = 15) -> dict:
+        resp = http.put(f"{self.base_url}{path}", json=payload, timeout=timeout)
+        return resp.json()
+
     def _patch(self, path: str, payload: dict, timeout: int = 15) -> dict:
         resp = http.patch(f"{self.base_url}{path}", json=payload, timeout=timeout)
         return resp.json()
 
     def post(self, path: str, payload: dict, timeout: int = 15) -> dict:
         return self._post(path, payload, timeout)
+
+    def post_sse(self, path: str, payload: dict, timeout: int = 120) -> str:
+        """POST and consume an SSE stream, returning the accumulated text."""
+        resp = http.post(
+            f"{self.base_url}{path}", json=payload,
+            stream=True, timeout=timeout,
+        )
+        parts: list[str] = []
+        for raw_line in resp.iter_lines(decode_unicode=True):
+            if not raw_line or not raw_line.startswith("data: "):
+                continue
+            try:
+                evt = json.loads(raw_line[6:])
+            except Exception:
+                continue
+            token = evt.get("token") or evt.get("content") or ""
+            if token:
+                parts.append(token)
+            msg = evt.get("message")
+            if isinstance(msg, str) and msg:
+                parts.append(msg)
+        resp.close()
+        return "".join(parts)
+
+    def put(self, path: str, payload: dict, timeout: int = 15) -> dict:
+        return self._put(path, payload, timeout)
 
     def get(self, path: str, params: dict | None = None, timeout: int = 15) -> Any:
         return self._get(path, params, timeout)
