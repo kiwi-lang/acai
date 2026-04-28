@@ -308,8 +308,6 @@ class TaskGraph:
             if task_proxy.enable_thinking is not None:
                 payload["enable_thinking"] = task_proxy.enable_thinking
 
-            self.audit.save_payload(f"prepare-{agent_name}", payload)
-
         return payload
 
     # ------------------------------------------------------------------
@@ -333,6 +331,8 @@ class TaskGraph:
         from acai.orchestrator.iterator import AsyncSSEIterator
 
         url = f"{self.worker.url}/llm/complete"
+
+        self.audit.save_payload(f"prepare-{payload.get('agent', 'unknown')}", payload)
 
         _dispatch_t0 = _time.monotonic()
         _first_token_t: float | None = None
