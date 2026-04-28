@@ -200,6 +200,32 @@ class NodeType:
     category: str = "General"
     pins: list[Pin] = []
 
+    @classmethod
+    def dynamic_pins(
+        cls,
+        data: dict,
+        spec: dict | None = None,
+        **ctx: Any,
+    ) -> list[Pin]:
+        """Return extra pins that depend on node configuration.
+
+        Override in subclasses whose pins change based on the node's
+        ``data`` (e.g. a selected tool, a connected schema).  The
+        type checker and frontend call this to resolve pin types for
+        handles that aren't in the static ``pins`` list.
+
+        Parameters
+        ----------
+        data:
+            The node's ``data`` dict from the workflow spec.
+        spec:
+            The full workflow spec (nodes + edges) — needed when
+            dynamic pins depend on other nodes in the graph.
+        **ctx:
+            Extra context, e.g. ``tool_defs`` for tool registries.
+        """
+        return []
+
     async def execute(self, ctx: NodeContext):
         """Async generator yielding ``{"type": ..., "data": ...}`` dicts."""
         yield {"type": "output", "data": {}}
@@ -1287,6 +1313,11 @@ class SkillCallNode(NodeType):
     accent = "#e06090"
     description = "Call a tool or skill"
     category = "Agent"
+    _JSON_TO_PIN = {
+        "string": "string", "integer": "int", "number": "float",
+        "boolean": "bool", "object": "json", "array": "json",
+    }
+
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -1295,6 +1326,28 @@ class SkillCallNode(NodeType):
         Pin.data("data_result", "result", Colors.green, "right",
                  pin_type="string"),
     ]
+
+    @classmethod
+    def dynamic_pins(cls, data: dict, spec: dict | None = None, **ctx: Any) -> list[Pin]:
+        tool_defs: list[dict] = ctx.get("tool_defs", [])
+        tool_name = data.get("tool", "")
+        if not tool_name or not tool_defs:
+            return []
+        for td in tool_defs:
+            if td.get("function", {}).get("name") != tool_name:
+                continue
+            props = td["function"].get("parameters", {}).get("properties", {})
+            required = set(td["function"].get("parameters", {}).get("required", []))
+            pins: list[Pin] = []
+            for name, schema in props.items():
+                jtype = schema.get("type", "string")
+                pins.append(Pin.data(
+                    f"data_{name}", name, Colors.green, "left",
+                    pin_type=cls._JSON_TO_PIN.get(jtype, "string"),
+                    optional=name not in required,
+                ))
+            return pins
+        return []
 
     async def execute(self, ctx: NodeContext):
         tool_name = ctx.inputs.get("tool", "") or ctx.data.get("tool", "")
@@ -1329,6 +1382,15 @@ class SkillCallNode(NodeType):
         }}
 
         yield {"type": "output", "data": {"result": result_text}}
+
+
+@register
+class ToolCallNode(SkillCallNode):
+    """Alias for SkillCallNode so users can find it as 'Tool Call'."""
+
+    type = "tool_call"
+    label = "Tool Call"
+    description = "Call a tool"
 
 
 def _extract_json_text(text: str) -> str:
@@ -1420,6 +1482,13 @@ class ReadReplyNode(NodeType):
     accent = "#c06cdb"
     description = "Parse structured agent reply"
     category = "Data"
+    _FIELD_TO_PIN = {
+        "str": "string", "string": "string",
+        "int": "int", "integer": "int",
+        "float": "float", "number": "float",
+        "bool": "bool", "boolean": "bool",
+    }
+
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
@@ -1428,6 +1497,36 @@ class ReadReplyNode(NodeType):
         Pin.data("data_reply_type", "reply_type", "#c06cdb", "left",
                  pin_type="format", optional=False),
     ]
+
+    @classmethod
+    def dynamic_pins(cls, data: dict, spec: dict | None = None, **ctx: Any) -> list[Pin]:
+        if spec is None:
+            return []
+        node_id = data.get("_node_id", "")
+        nodes_by_id = {n["id"]: n for n in spec.get("nodes", [])}
+        for edge in spec.get("edges", []):
+            if edge.get("target") != node_id:
+                continue
+            src = nodes_by_id.get(edge.get("source", ""))
+            if not src or src.get("type") != "reply_type":
+                continue
+            try:
+                fields = json.loads(
+                    src.get("data", {}).get("fields", "[]"))
+            except (json.JSONDecodeError, TypeError):
+                fields = []
+            pins: list[Pin] = []
+            for f in fields:
+                name = f.get("name", "")
+                if not name:
+                    continue
+                ftype = f.get("type", "str")
+                pins.append(Pin.data(
+                    f"data_{name}", name, "#c06cdb", "right",
+                    pin_type=cls._FIELD_TO_PIN.get(ftype, "string"),
+                ))
+            return pins
+        return []
 
     async def execute(self, ctx: NodeContext):
         reply = ctx.inputs.get("reply", {})

@@ -570,6 +570,17 @@ export async function validateWorkflowSpec(spec: WorkflowSpec): Promise<Validati
     });
 }
 
+export async function resolveDynamicPins(
+    nodeType: string,
+    data: Record<string, unknown>,
+    spec?: WorkflowSpec,
+): Promise<{ pins: PinDef[] }> {
+    return request<{ pins: PinDef[] }>('/workflows/resolve-pins', {
+        method: 'POST',
+        body: JSON.stringify({ node_type: nodeType, data, spec }),
+    });
+}
+
 export async function saveBuiltinWorkflow(id: string, spec: WorkflowSpec): Promise<WorkflowSpec> {
     return request<WorkflowSpec>(`/workflows/builtin/${id}`, {
         method: 'PUT',

@@ -107,36 +107,9 @@ function getPinType(nodeType: string, handleId: string, nodeData?: Record<string
   if (pin?.pin_type) return pin.pin_type;
   if (!nodeData) return 'any';
 
-  if (nodeType === 'skill_call') {
-    const toolDefs = (nodeData._toolDefs || []) as ToolDefinition[];
-    const toolName = String(nodeData.tool || '');
-    const toolDef = toolName ? toolDefs.find(t => t.function.name === toolName) : undefined;
-    if (toolDef) {
-      const paramName = handleId.replace(/^data_/, '');
-      const schema = toolDef.function.parameters?.properties?.[paramName];
-      if (schema) {
-        const jtype = schema.type || 'string';
-        const JSON_PIN: Record<string, string> = {
-          string: 'string', integer: 'int', number: 'float', boolean: 'bool',
-          object: 'json', array: 'json',
-        };
-        return JSON_PIN[jtype] || 'string';
-      }
-    }
-  }
-
-  if (nodeType === 'read_reply') {
-    const fields = (nodeData._replyTypeFields || []) as { name: string; type: string }[];
-    const fieldName = handleId.replace(/^data_/, '');
-    const field = fields.find(f => f.name === fieldName);
-    if (field) {
-      const FIELD_PIN: Record<string, string> = {
-        str: 'string', string: 'string', int: 'int', integer: 'int',
-        float: 'float', number: 'float', bool: 'bool', boolean: 'bool',
-      };
-      return FIELD_PIN[field.type] || 'string';
-    }
-  }
+  const dynPins = (nodeData._dynamicPins || []) as PinDef[];
+  const dynPin = dynPins.find(p => p.id === handleId);
+  if (dynPin?.pin_type) return dynPin.pin_type;
 
   return 'any';
 }
@@ -445,6 +418,8 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
   const execUnreachable = !!data._execUnreachable;
   const timingMs = data._timingMs as number | null;
   const maxTimingMs = (data._maxTimingMs as number) || 0;
+  const diagErrors = (data._diagErrors as number) || 0;
+  const diagWarnings = (data._diagWarnings as number) || 0;
 
   const leftPins = def.pins.filter(p => p.side === 'left');
   const rightPins = def.pins.filter(p => p.side === 'right');
@@ -491,6 +466,30 @@ function NodeShell({ def, selected, connectedHandles, data, onUpdate, pinWidgets
 
   return (
     <div style={nodeStyle}>
+      {/* Diagnostic badge */}
+      {(diagErrors > 0 || diagWarnings > 0) && (
+        <div style={{
+          position: 'absolute', top: -6, right: -6, zIndex: 10,
+          display: 'flex', gap: 2,
+        }}>
+          {diagErrors > 0 && (
+            <div title={`${diagErrors} error${diagErrors > 1 ? 's' : ''}`} style={{
+              width: 16, height: 16, borderRadius: '50%',
+              background: C.red, color: '#fff',
+              fontSize: 9, fontWeight: 700, lineHeight: '16px', textAlign: 'center',
+              boxShadow: `0 0 4px ${C.red}88`,
+            }}>{diagErrors}</div>
+          )}
+          {diagWarnings > 0 && diagErrors === 0 && (
+            <div title={`${diagWarnings} warning${diagWarnings > 1 ? 's' : ''}`} style={{
+              width: 16, height: 16, borderRadius: '50%',
+              background: C.amber, color: '#fff',
+              fontSize: 9, fontWeight: 700, lineHeight: '16px', textAlign: 'center',
+              boxShadow: `0 0 4px ${C.amber}88`,
+            }}>{diagWarnings}</div>
+          )}
+        </div>
+      )}
       {/* Header */}
       <div style={{
         height: HEADER_H, display: 'flex', alignItems: 'center',
@@ -914,40 +913,42 @@ const JSON_TYPE_TO_COLOR: Record<string, string> = {
   object: C.amber, array: C.amber,
 };
 
-function SkillCallNodeComponent({ data, selected }: NodeProps) {
-  const baseDef = _nodeDefMap['skill_call'];
-  if (!baseDef) return null;
+function ToolNodeComponent(nodeType: string) {
+  return function ToolNodeInner({ data, selected }: NodeProps) {
+    const baseDef = _nodeDefMap[nodeType];
+    if (!baseDef) return null;
 
-  const toolDefs = (data._toolDefs || []) as ToolDefinition[];
-  const selectedTool = String(data.tool || '');
+    const toolDefs = (data._toolDefs || []) as ToolDefinition[];
+    const selectedTool = String(data.tool || '');
 
-  const toolDef = selectedTool
-    ? toolDefs.find(t => t.function.name === selectedTool)
-    : undefined;
+    const toolDef = selectedTool
+      ? toolDefs.find(t => t.function.name === selectedTool)
+      : undefined;
 
-  const extraPins: PinDef[] = [];
-  if (toolDef) {
-    const props = toolDef.function.parameters?.properties || {};
-    const req = new Set(toolDef.function.parameters?.required || []);
-    for (const [name, schema] of Object.entries(props)) {
-      const jtype = schema.type || 'string';
-      extraPins.push({
-        id: `data_${name}`,
-        label: name,
-        color: JSON_TYPE_TO_COLOR[jtype] || C.green,
-        side: 'left' as const,
-        kind: 'data' as const,
-        pin_type: JSON_TYPE_TO_PIN[jtype] || 'string',
-        optional: !req.has(name),
-      });
+    const extraPins: PinDef[] = [];
+    if (toolDef) {
+      const props = toolDef.function.parameters?.properties || {};
+      const req = new Set(toolDef.function.parameters?.required || []);
+      for (const [name, schema] of Object.entries(props)) {
+        const jtype = schema.type || 'string';
+        extraPins.push({
+          id: `data_${name}`,
+          label: name,
+          color: JSON_TYPE_TO_COLOR[jtype] || C.green,
+          side: 'left' as const,
+          kind: 'data' as const,
+          pin_type: JSON_TYPE_TO_PIN[jtype] || 'string',
+          optional: !req.has(name),
+        });
+      }
     }
-  }
 
-  const mergedDef = extraPins.length > 0
-    ? { ...baseDef, pins: [...baseDef.pins, ...extraPins] }
-    : baseDef;
+    const mergedDef = extraPins.length > 0
+      ? { ...baseDef, pins: [...baseDef.pins, ...extraPins] }
+      : baseDef;
 
-  return <NodeShell def={mergedDef} selected={selected} {...nodeProps(data as Record<string, unknown>)} />;
+    return <NodeShell def={mergedDef} selected={selected} {...nodeProps(data as Record<string, unknown>)} />;
+  };
 }
 
 function buildNodeTypes(): NodeTypes {
@@ -958,7 +959,8 @@ function buildNodeTypes(): NodeTypes {
     agent_call: AgentNodeComponent('agent_call'),
     reply_type: ReplyTypeNodeComponent,
     read_reply: ReadReplyNodeComponent,
-    skill_call: SkillCallNodeComponent,
+    skill_call: ToolNodeComponent('skill_call'),
+    tool_call: ToolNodeComponent('tool_call'),
   };
   for (const def of _nodeDefs) {
     if (types[def.type]) continue;
@@ -1394,6 +1396,54 @@ const WorkflowEditor: FC = () => {
     return map;
   }, [edges, nodes]);
 
+  const nodeDiagMap = useMemo(() => {
+    const m: Record<string, { errors: number; warnings: number }> = {};
+    for (const d of validationErrors) {
+      const nid = d.node_id || d.target_node || d.source_node;
+      if (!nid) continue;
+      if (!m[nid]) m[nid] = { errors: 0, warnings: 0 };
+      if (d.severity === 'error') m[nid].errors++;
+      else m[nid].warnings++;
+    }
+    return m;
+  }, [validationErrors]);
+
+  const computeDynamicPins = useCallback((n: Node): PinDef[] => {
+    const type = n.type || '';
+    const data = (n.data || {}) as Record<string, unknown>;
+    if (type === 'skill_call' || type === 'tool_call') {
+      const tds = (toolDefs || []) as ToolDefinition[];
+      const toolName = String(data.tool || '');
+      const td = toolName ? tds.find(t => t.function.name === toolName) : undefined;
+      if (!td) return [];
+      const props = td.function.parameters?.properties || {};
+      const req = new Set(td.function.parameters?.required || []);
+      return Object.entries(props).map(([name, schema]) => {
+        const jtype = schema.type || 'string';
+        return {
+          id: `data_${name}`, label: name,
+          color: JSON_TYPE_TO_COLOR[jtype] || C.green,
+          side: 'left' as const, kind: 'data' as const,
+          pin_type: JSON_TYPE_TO_PIN[jtype] || 'string',
+          optional: !req.has(name),
+        };
+      });
+    }
+    if (type === 'read_reply') {
+      const fields = (replyTypeFieldsMap[n.id] || []) as { name: string; type: string }[];
+      const FIELD_PIN: Record<string, string> = {
+        str: 'string', string: 'string', int: 'int', integer: 'int',
+        float: 'float', number: 'float', bool: 'bool', boolean: 'bool',
+      };
+      return fields.filter(f => f.name).map(f => ({
+        id: `data_${f.name}`, label: f.name,
+        color: '#c06cdb', side: 'right' as const, kind: 'data' as const,
+        pin_type: FIELD_PIN[f.type] || 'string', optional: true,
+      }));
+    }
+    return [];
+  }, [toolDefs, replyTypeFieldsMap]);
+
   const enrichedNodes = useMemo(() =>
     nodes.map(n => ({
       ...n,
@@ -1406,11 +1456,14 @@ const WorkflowEditor: FC = () => {
         _timingMs: nodeTimings[n.id] ?? null,
         _maxTimingMs: maxNodeTime,
         _execUnreachable: !execReachable.has(n.id),
+        _diagErrors: nodeDiagMap[n.id]?.errors || 0,
+        _diagWarnings: nodeDiagMap[n.id]?.warnings || 0,
+        _dynamicPins: computeDynamicPins(n),
         ...(n.type === 'read_reply' ? { _replyTypeFields: replyTypeFieldsMap[n.id] || [] } : {}),
-        ...(n.type === 'skill_call' ? { _toolDefs: toolDefs } : {}),
+        ...((n.type === 'skill_call' || n.type === 'tool_call') ? { _toolDefs: toolDefs } : {}),
       },
     })),
-  [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime, execReachable, replyTypeFieldsMap, toolDefs]);
+  [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime, execReachable, replyTypeFieldsMap, toolDefs, nodeDiagMap, computeDynamicPins]);
 
   const enrichedEdges = useMemo(() =>
     edges.map(e => {
@@ -1476,7 +1529,7 @@ const WorkflowEditor: FC = () => {
     if (type === 'start') { defaultData.preview_message = 'Hello!'; }
     if (type === 'fetch_conversation') { defaultData.conversation_id = ''; defaultData.debug = true; }
     if (type === 'reply_type') { defaultData.fields = '[]'; }
-    if (type === 'skill_call') { defaultData.tool = ''; }
+    if (type === 'skill_call' || type === 'tool_call') { defaultData.tool = ''; }
     setNodes(nds => [...nds, { id: nid(), type, position, data: defaultData }]);
   }, [setNodes]);
 
@@ -1932,18 +1985,29 @@ const WorkflowEditor: FC = () => {
             {validationErrors.map((err, i) => (
               <Box key={i} py={0.5} cursor="pointer" _hover={{ bg: '#ffffff08' }} borderRadius="2px" px={1}
                 onClick={() => {
+                  const targetNodeId = err.node_id || err.target_node || err.source_node;
                   if (err.edge_id) {
                     setEdges(eds => eds.map(e => ({
                       ...e,
                       selected: e.id === err.edge_id,
                     })));
-                  } else if (err.node_id) {
-                    const node = nodes.find(n => n.id === err.node_id);
-                    if (node) setSelectedNode(node);
+                  }
+                  if (targetNodeId) {
+                    const node = nodes.find(n => n.id === targetNodeId);
+                    if (node) {
+                      setSelectedNode(node);
+                      if (rfInstance) {
+                        rfInstance.setCenter(
+                          node.position.x + 80,
+                          node.position.y + 40,
+                          { zoom: 1.2, duration: 300 },
+                        );
+                      }
+                    }
                   }
                 }}>
                 <Text fontSize="13px" color={err.severity === 'error' ? C.red : C.amber}>
-                  {err.severity === 'warning' ? '\u26a0 ' : ''}{err.message}
+                  {err.severity === 'error' ? '\u2716 ' : '\u26a0 '}{err.message}
                 </Text>
               </Box>
             ))}

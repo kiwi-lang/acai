@@ -679,6 +679,25 @@ def create_router(config: AcaiConfig | None = None,
         return {"agent": agent_name,
                 "inputs": agent_store.template_inputs(agent_name)}
 
+    @router.post("/workflows/resolve-pins")
+    async def resolve_dynamic_pins(request: Request):
+        """Resolve dynamic pins for a node given its data and the spec.
+
+        Body: ``{node_type, data, spec?}``
+        Returns: ``{pins: [...]}`` — list of pin dicts.
+        """
+        from acai.tasks.nodes import get as get_nt
+        body = await _json_body(request)
+        node_type = body.get("node_type", "")
+        data = body.get("data", {})
+        spec = body.get("spec")
+        nt = get_nt(node_type)
+        if nt is None:
+            return {"pins": []}
+        td = tool_registry.mcp_definitions() if tool_registry else []
+        dyn = nt.dynamic_pins(data, spec, tool_defs=td)
+        return {"pins": [p.to_dict() for p in dyn]}
+
     @router.get("/workflows/tool-definitions")
     def get_tool_definitions():
         """Return all registered tools with their parameter schemas.

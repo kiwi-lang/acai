@@ -18,27 +18,12 @@ Each diagnostic is a dict with at least ``severity``, ``code``,
 
 from __future__ import annotations
 
-import json as _json
 import logging
 from typing import Any
 
-from acai.tasks.nodes import get as get_node_type
+from acai.tasks.nodes import Pin, get as get_node_type
 
 log = logging.getLogger(__name__)
-
-# ── pin-type maps for dynamic nodes ──────────────────────────────
-
-_JSON_TO_PIN: dict[str, str] = {
-    "string": "string", "integer": "int", "number": "float",
-    "boolean": "bool", "object": "json", "array": "json",
-}
-
-_FIELD_TO_PIN: dict[str, str] = {
-    "str": "string", "string": "string",
-    "int": "int", "integer": "int",
-    "float": "float", "number": "float",
-    "bool": "bool", "boolean": "bool",
-}
 
 # ── helpers ──────────────────────────────────────────────────────
 
@@ -47,64 +32,63 @@ def _pin_name(handle_id: str) -> str:
     return handle_id.removeprefix("data_") if handle_id.startswith("data_") else handle_id
 
 
+def _all_pins(
+    nt: Any,
+    node: dict,
+    spec: dict,
+    **ctx: Any,
+) -> list[Pin]:
+    """Return static + dynamic pins for a node type."""
+    data = dict(node.get("data") or {})
+    data["_node_id"] = node.get("id", "")
+    dynamic = nt.dynamic_pins(data, spec, **ctx)
+    return list(nt.pins) + dynamic
+
+
+def _find_pin(
+    nt: Any,
+    handle_id: str,
+    node: dict,
+    spec: dict,
+    **ctx: Any,
+) -> Pin | None:
+    """Find a pin by handle id across static and dynamic pins."""
+    pin = next((p for p in nt.pins if p.id == handle_id), None)
+    if pin is not None:
+        return pin
+    data = dict(node.get("data") or {})
+    data["_node_id"] = node.get("id", "")
+    for p in nt.dynamic_pins(data, spec, **ctx):
+        if p.id == handle_id:
+            return p
+    return None
+
+
 def _resolve_pin_type(
     node_type_name: str,
     handle_id: str,
     node: dict,
-    nodes_by_id: dict[str, dict],
-    edges: list[dict],
-    tool_defs: list[dict] | None = None,
+    spec: dict,
+    **ctx: Any,
 ) -> str:
-    """Return the pin type for *handle_id* on *node*.
-
-    Checks the static registry first, then falls back to dynamic
-    resolution for ``skill_call`` and ``read_reply`` nodes.
-    """
+    """Return the pin type for *handle_id* on *node*."""
     nt = get_node_type(node_type_name)
-    if nt is not None:
-        pin = next((p for p in nt.pins if p.id == handle_id), None)
-        if pin is not None:
-            return pin.pin_type
-
-    pin_name = _pin_name(handle_id)
-    data = node.get("data") or {}
-
-    if node_type_name == "skill_call" and tool_defs:
-        tool_name = data.get("tool", "")
-        if tool_name:
-            for td in tool_defs:
-                if td.get("function", {}).get("name") == tool_name:
-                    props = (td["function"]
-                             .get("parameters", {})
-                             .get("properties", {}))
-                    schema = props.get(pin_name)
-                    if schema:
-                        return _JSON_TO_PIN.get(schema.get("type", ""), "string")
-
-    if node_type_name == "read_reply":
-        for edge in edges:
-            if edge.get("target") != node.get("id"):
-                continue
-            src = nodes_by_id.get(edge.get("source", ""))
-            if src and src.get("type") == "reply_type":
-                try:
-                    fields = _json.loads(
-                        src.get("data", {}).get("fields", "[]"))
-                except (ValueError, TypeError):
-                    fields = []
-                for f in fields:
-                    if f.get("name") == pin_name:
-                        return _FIELD_TO_PIN.get(f.get("type", ""), "string")
-
-    return "any"
+    if nt is None:
+        return "any"
+    pin = _find_pin(nt, handle_id, node, spec, **ctx)
+    return pin.pin_type if pin else "any"
 
 
 def _pin_label(
-    node_type_name: str, handle_id: str,
+    node_type_name: str,
+    handle_id: str,
+    node: dict,
+    spec: dict,
+    **ctx: Any,
 ) -> str:
     nt = get_node_type(node_type_name)
     if nt is not None:
-        pin = next((p for p in nt.pins if p.id == handle_id), None)
+        pin = _find_pin(nt, handle_id, node, spec, **ctx)
         if pin is not None:
             return pin.label or _pin_name(handle_id)
     return _pin_name(handle_id)
@@ -135,13 +119,16 @@ def typecheck(
         The workflow JSON (``{nodes, edges}``).
     tool_defs:
         Optional MCP tool definitions (as returned by the
-        ``/workflows/tool-definitions`` endpoint).  When provided,
-        ``skill_call`` dynamic pins get full type resolution instead
-        of falling back to ``any``.
+        ``/workflows/tool-definitions`` endpoint).  Forwarded to
+        each node's ``dynamic_pins()`` method.
     """
     nodes_list: list[dict] = spec.get("nodes", [])
     edges_list: list[dict] = spec.get("edges", [])
     nodes_by_id: dict[str, dict] = {n["id"]: n for n in nodes_list}
+
+    ctx: dict[str, Any] = {}
+    if tool_defs is not None:
+        ctx["tool_defs"] = tool_defs
 
     diags: list[dict] = []
 
@@ -194,13 +181,13 @@ def typecheck(
         tgt_type_name = tgt_node.get("type", "")
 
         src_pin_type = _resolve_pin_type(
-            src_type_name, src_handle, src_node,
-            nodes_by_id, edges_list, tool_defs)
+            src_type_name, src_handle, src_node, spec, **ctx)
         tgt_pin_type = _resolve_pin_type(
-            tgt_type_name, tgt_handle, tgt_node,
-            nodes_by_id, edges_list, tool_defs)
+            tgt_type_name, tgt_handle, tgt_node, spec, **ctx)
 
         if not _compatible(src_pin_type, tgt_pin_type):
+            src_pl = _pin_label(src_type_name, src_handle, src_node, spec, **ctx)
+            tgt_pl = _pin_label(tgt_type_name, tgt_handle, tgt_node, spec, **ctx)
             diags.append({
                 "severity": "error",
                 "code": "type_mismatch",
@@ -208,14 +195,14 @@ def typecheck(
                 "node_id": tgt_id,
                 "source_node": src_id,
                 "target_node": tgt_id,
-                "source_pin": _pin_label(src_type_name, src_handle),
-                "target_pin": _pin_label(tgt_type_name, tgt_handle),
+                "source_pin": src_pl,
+                "target_pin": tgt_pl,
                 "source_type": src_pin_type,
                 "target_type": tgt_pin_type,
                 "message": (
-                    f"{_node_label(src_node)}.{_pin_label(src_type_name, src_handle)} "
+                    f"{_node_label(src_node)}.{src_pl} "
                     f"({src_pin_type}) \u2192 "
-                    f"{_node_label(tgt_node)}.{_pin_label(tgt_type_name, tgt_handle)} "
+                    f"{_node_label(tgt_node)}.{tgt_pl} "
                     f"({tgt_pin_type}): incompatible types"
                 ),
             })
@@ -233,7 +220,8 @@ def typecheck(
         if nt is None:
             continue
         data = node.get("data") or {}
-        for pin in nt.pins:
+        all_pins = _all_pins(nt, node, spec, **ctx)
+        for pin in all_pins:
             if pin.kind != "data" or pin.side != "left" or pin.optional:
                 continue
             if (node["id"], pin.id) in connected_inputs:
