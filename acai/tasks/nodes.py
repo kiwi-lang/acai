@@ -7,7 +7,8 @@ Built-in types
 --------------
 start, agent, agent_call, accumulate, stream_transform,
 for_each, tool_loop, tool, append, reasoning_message, print,
-condition, output, fetch_conversation, background_agent
+condition, output, fetch_conversation, background_agent,
+set_variable, get_variable
 
 Creating a custom node
 ----------------------
@@ -93,7 +94,7 @@ class Pin:
     kind: str          # "exec" | "data"
     pin_type: str = "string"   # "string" | "bool" | "int" | "float" | "json"
                                # | "stream" | "stream[string]" | "stream[json]"
-                               # | "message" | "message_list" | "any"
+                               # | "message" | "message_list" | "format" | "any"
     choices: tuple[str, ...] = ()
     dynamic_choices: str = ""   # "agents" | "conversations" — frontend fetches list
     optional: bool = True
@@ -152,90 +153,6 @@ def pin_types_compatible(source_type: str, target_type: str) -> bool:
     if source_type == "any" or target_type == "any":
         return True
     return source_type == target_type
-
-
-def validate_workflow(spec: dict) -> list[dict]:
-    """Validate a workflow spec and return a list of type errors.
-
-    Each error is a dict with keys: ``edge_id``, ``source_node``,
-    ``target_node``, ``source_pin``, ``target_pin``, ``source_type``,
-    ``target_type``, ``message``.
-    """
-    nodes_by_id: dict[str, dict] = {n["id"]: n for n in spec.get("nodes", [])}
-    errors: list[dict] = []
-
-    for edge in spec.get("edges", []):
-        if edge.get("type") != "data":
-            continue
-
-        src_id = edge.get("source", "")
-        tgt_id = edge.get("target", "")
-        src_handle = edge.get("sourceHandle", "")
-        tgt_handle = edge.get("targetHandle", "")
-
-        src_node = nodes_by_id.get(src_id)
-        tgt_node = nodes_by_id.get(tgt_id)
-        if not src_node or not tgt_node:
-            continue
-
-        src_type_name = src_node.get("type", "")
-        tgt_type_name = tgt_node.get("type", "")
-        src_nt = get(src_type_name)
-        tgt_nt = get(tgt_type_name)
-        if not src_nt or not tgt_nt:
-            continue
-
-        src_pin = next((p for p in src_nt.pins if p.id == src_handle), None)
-        tgt_pin = next((p for p in tgt_nt.pins if p.id == tgt_handle), None)
-        if not src_pin or not tgt_pin:
-            continue
-
-        if not pin_types_compatible(src_pin.pin_type, tgt_pin.pin_type):
-            src_label = src_node.get("data", {}).get("label", src_id)
-            tgt_label = tgt_node.get("data", {}).get("label", tgt_id)
-            errors.append({
-                "edge_id": edge.get("id", ""),
-                "source_node": src_id,
-                "target_node": tgt_id,
-                "source_pin": src_pin.label or src_handle,
-                "target_pin": tgt_pin.label or tgt_handle,
-                "source_type": src_pin.pin_type,
-                "target_type": tgt_pin.pin_type,
-                "message": (
-                    f"{src_label}.{src_pin.label} ({src_pin.pin_type}) "
-                    f"\u2192 {tgt_label}.{tgt_pin.label} ({tgt_pin.pin_type}): "
-                    f"incompatible types"
-                ),
-            })
-
-    connected_inputs: set[tuple[str, str]] = set()
-    for edge in spec.get("edges", []):
-        if edge.get("type") == "data":
-            connected_inputs.add((edge.get("target", ""), edge.get("targetHandle", "")))
-
-    for node in spec.get("nodes", []):
-        nt = get(node.get("type", ""))
-        if not nt:
-            continue
-        for pin in nt.pins:
-            if pin.kind != "data" or pin.side != "left" or pin.optional:
-                continue
-            if (node["id"], pin.id) not in connected_inputs:
-                label = node.get("data", {}).get("label", node["id"])
-                errors.append({
-                    "edge_id": "",
-                    "source_node": "",
-                    "target_node": node["id"],
-                    "source_pin": "",
-                    "target_pin": pin.label or pin.id,
-                    "source_type": "",
-                    "target_type": pin.pin_type,
-                    "message": (
-                        f"{label}.{pin.label}: required input is not connected"
-                    ),
-                })
-
-    return errors
 
 
 # ===================================================================
@@ -323,6 +240,63 @@ def get(type_name: str) -> NodeType | None:
 def all_types() -> list[NodeType]:
     """Return all registered node types (ordered by registration)."""
     return list(_REGISTRY.values())
+
+
+def describe_registry() -> str:
+    """Generate a markdown description of all registered node types.
+
+    Used to dynamically populate agent system prompts (e.g. graph_builder)
+    so they always reflect the current node definitions.
+    """
+    pin_types_seen: set[str] = set()
+    categories: dict[str, list[NodeType]] = {}
+    for nt in _REGISTRY.values():
+        categories.setdefault(nt.category, []).append(nt)
+        for p in nt.pins:
+            if p.kind == "data":
+                pin_types_seen.add(p.pin_type)
+
+    lines: list[str] = ["## Available Node Types\n"]
+
+    for cat, nodes in categories.items():
+        lines.append(f"### {cat} Nodes\n")
+        for nt in nodes:
+            lines.append(f"**{nt.type}** — {nt.description}")
+
+            inputs = [p for p in nt.pins if p.side == "left"]
+            outputs = [p for p in nt.pins if p.side == "right"]
+
+            if inputs:
+                parts = []
+                for p in inputs:
+                    req = ", required" if not p.optional else ""
+                    if p.kind == "exec":
+                        parts.append(f"`{p.id}`")
+                    else:
+                        parts.append(f"`{p.id}` ({p.pin_type}{req})")
+                lines.append(f"- Inputs: {', '.join(parts)}")
+
+            if outputs:
+                parts = []
+                for p in outputs:
+                    if p.kind == "exec":
+                        parts.append(f"`{p.id}`")
+                    else:
+                        parts.append(f"`{p.id}` ({p.pin_type})")
+                lines.append(f"- Outputs: {', '.join(parts)}")
+
+            lines.append("")
+
+    lines.append("## Pin Type System\n")
+    sorted_types = sorted(pin_types_seen)
+    lines.append(f"Pin types: {', '.join(f'`{t}`' for t in sorted_types)}.")
+    lines.append("- `format` carries a structured output format — distinct from `json`.")
+    lines.append("- `any` is compatible with all types.")
+    lines.append("- Otherwise, source and target pin types must match exactly.")
+    lines.append("- Data pin IDs always start with `data_` (e.g. `data_context`).")
+    lines.append("- Exec pin IDs always start with `exec_` (e.g. `exec_in`, `exec_out`).")
+
+    return "\n".join(lines)
 
 
 # ===================================================================
@@ -417,6 +391,8 @@ class AgentCallNode(NodeType):
         Pin.data("data_stream_mode", "stream_mode", Colors.amber, "left",
                  pin_type="string",
                  choices=("token", "reasoning", "silent")),
+        Pin.data("data_format", "format", "#c06cdb", "left",
+                 pin_type="format"),
         Pin.data("data_stream", "stream", Colors.green, "right",
                  pin_type="stream"),
         Pin.data("data_payload", "payload", Colors.blue, "right",
@@ -460,6 +436,17 @@ class AgentCallNode(NodeType):
             prepared = payload.get("messages", [])
             system_msgs = [m for m in prepared if m.get("role") == "system"]
             payload["messages"] = system_msgs + list(context)
+
+        fmt = ctx.inputs.get("format")
+        if fmt and isinstance(fmt, dict):
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": fmt.get("title", "structured_output"),
+                    "strict": True,
+                    "schema": fmt,
+                },
+            }
 
         yield {
             "type": "output",
@@ -923,9 +910,8 @@ class ReasoningMessageNode(NodeType):
 
     async def execute(self, ctx: NodeContext):
         reasoning = ctx.inputs.get("reasoning", "")
-        message: dict = {}
         if reasoning:
-            message = {
+            message: dict | None = {
                 "role": "system",
                 "content": (
                     "## Prior Reasoning\n"
@@ -934,7 +920,9 @@ class ReasoningMessageNode(NodeType):
                     + reasoning
                 ),
             }
-        yield {"type": "output", "data": message}
+        else:
+            message = None
+        yield {"type": "output", "data": {"message": message}}
 
 
 @register
@@ -1150,6 +1138,83 @@ class ParseKnowledgeNode(NodeType):
 
 
 @register
+class SetVariableNode(NodeType):
+    """Store a value under a named key for retrieval by Get Variable nodes.
+
+    Variables are scoped to the current workflow execution and persist
+    across all subsequent nodes.  Writing to the same name overwrites
+    the previous value.
+    """
+
+    type = "set_variable"
+    label = "Set Variable"
+    accent = Colors.amber
+    description = "Store a named variable"
+    category = "Data"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_name", "name", Colors.amber, "left",
+                 pin_type="string", optional=False),
+        Pin.data("data_value", "value", Colors.green, "left",
+                 pin_type="any", optional=False),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        name = ctx.inputs.get("name", "") or ctx.data.get("name", "")
+        value = ctx.inputs.get("value")
+
+        if not name:
+            log.warning("SetVariable: empty name, skipping")
+            yield {"type": "output", "data": {}}
+            return
+
+        store = ctx.work.setdefault("_variables", {})
+        store[name] = value
+
+        yield {"type": "event", "data": {
+            "event_type": "variable_set",
+            "data": {"node_id": ctx.node_id, "name": name,
+                     "preview": str(value)[:200]},
+        }}
+        yield {"type": "output", "data": {}}
+
+
+@register
+class GetVariableNode(NodeType):
+    """Retrieve a previously stored variable by name.
+
+    If the variable has not been set, outputs ``None`` (or a fallback
+    default if one is wired into the ``default`` pin).
+    """
+
+    type = "get_variable"
+    label = "Get Variable"
+    accent = Colors.amber
+    description = "Read a named variable"
+    category = "Data"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_name", "name", Colors.amber, "left",
+                 pin_type="string", optional=False),
+        Pin.data("data_default", "default", Colors.green, "left",
+                 pin_type="any"),
+        Pin.data("data_value", "value", Colors.green, "right",
+                 pin_type="any"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        name = ctx.inputs.get("name", "") or ctx.data.get("name", "")
+        default = ctx.inputs.get("default")
+
+        store = ctx.work.get("_variables", {})
+        value = store.get(name, default)
+
+        yield {"type": "output", "data": {"value": value}}
+
+
+@register
 class FetchConversationNode(NodeType):
     """Load a conversation by ID — or from the test chat when debugging.
 
@@ -1205,3 +1270,178 @@ class FetchConversationNode(NodeType):
                 conversation = list(ctx.graph.chat.read(conv_id))
 
         yield {"type": "output", "data": {"conversation": conversation}}
+
+
+@register
+class SkillCallNode(NodeType):
+    """Call a registered tool/skill by name.
+
+    The user selects a tool from a dropdown.  The frontend dynamically
+    generates input pins for each of the tool's parameters and an output
+    pin for the result.  At execution time, all wired parameter inputs
+    are collected and the tool is dispatched through the worker.
+    """
+
+    type = "skill_call"
+    label = "Skill Call"
+    accent = "#e06090"
+    description = "Call a tool or skill"
+    category = "Agent"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_tool", "tool", "#e06090", "left",
+                 pin_type="string", dynamic_choices="tools"),
+        Pin.data("data_result", "result", Colors.green, "right",
+                 pin_type="string"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        tool_name = ctx.inputs.get("tool", "") or ctx.data.get("tool", "")
+        if not tool_name:
+            log.warning("SkillCall: no tool selected")
+            yield {"type": "output", "data": {"result": ""}}
+            return
+
+        _SKIP = {p.id.removeprefix("data_") for p in self.pins
+                 if p.kind == "data"}
+        args: dict[str, Any] = {}
+        for key, value in ctx.inputs.items():
+            if key in _SKIP:
+                continue
+            args[key] = value
+
+        yield {"type": "event", "data": {
+            "event_type": "tool_start",
+            "data": {"node_id": ctx.node_id, "tool_name": tool_name, "args": args},
+        }}
+
+        try:
+            result_text = await ctx.graph.dispatch_tool(tool_name, args)
+        except Exception as exc:
+            log.exception("SkillCall dispatch error: %s", tool_name)
+            result_text = f"[Tool error] {type(exc).__name__}: {exc}"
+
+        yield {"type": "event", "data": {
+            "event_type": "tool_end",
+            "data": {"node_id": ctx.node_id, "tool_name": tool_name,
+                     "result_preview": result_text[:2000]},
+        }}
+
+        yield {"type": "output", "data": {"result": result_text}}
+
+
+def _extract_json_text(text: str) -> str:
+    """Extract JSON from text, stripping ```json fences if present."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1]
+    if text.endswith("```"):
+        text = text.rsplit("```", 1)[0]
+    return text.strip()
+
+
+_FIELD_TYPE_MAP = {
+    "str": {"type": "string"},
+    "string": {"type": "string"},
+    "int": {"type": "integer"},
+    "integer": {"type": "integer"},
+    "float": {"type": "number"},
+    "number": {"type": "number"},
+    "bool": {"type": "boolean"},
+    "boolean": {"type": "boolean"},
+}
+
+
+def _fields_to_schema(fields: list[dict]) -> dict:
+    """Build an OpenAI-compatible JSON schema from a list of {name, type} dicts."""
+    properties: dict = {}
+    required: list[str] = []
+    for f in fields:
+        name = f.get("name", "").strip()
+        ftype = f.get("type", "str").strip().lower()
+        if not name:
+            continue
+        properties[name] = _FIELD_TYPE_MAP.get(ftype, {"type": "string"})
+        required.append(name)
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additionalProperties": False,
+    }
+
+
+@register
+class ReplyTypeNode(NodeType):
+    """Define the expected output format for an agent reply.
+
+    The user adds fields (name + type) in the property panel.  At
+    execution time a JSON schema is built from those fields and output
+    on the ``format`` pin so it can be wired into an AgentCall or
+    ReadReply node.
+    """
+
+    type = "reply_type"
+    label = "Reply Type"
+    accent = "#c06cdb"
+    description = "Define structured output format"
+    category = "Data"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_format", "format", "#c06cdb", "right",
+                 pin_type="format"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        fields_raw = ctx.data.get("fields", "[]")
+        try:
+            fields = json.loads(fields_raw) if isinstance(fields_raw, str) else fields_raw
+        except (json.JSONDecodeError, TypeError):
+            log.warning("ReplyType: invalid fields data: %.200s", fields_raw)
+            fields = []
+        schema = _fields_to_schema(fields)
+        yield {"type": "output", "data": {"format": schema}}
+
+
+@register
+class ReadReplyNode(NodeType):
+    """Parse an agent response according to a Reply Type format.
+
+    Extracts JSON from the response content (handles ````` fences),
+    parses it, and exposes each field from the format as a separate
+    output pin (dynamically added by the frontend).  Also outputs the
+    full parsed dict and raw JSON string.
+    """
+
+    type = "read_reply"
+    label = "Read Reply"
+    accent = "#c06cdb"
+    description = "Parse structured agent reply"
+    category = "Data"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_reply", "reply", Colors.blue, "left",
+                 pin_type="message", optional=False),
+        Pin.data("data_reply_type", "reply_type", "#c06cdb", "left",
+                 pin_type="format", optional=False),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        reply = ctx.inputs.get("reply", {})
+        content = reply.get("content", "") if isinstance(reply, dict) else str(reply)
+
+        raw_json = _extract_json_text(content)
+        try:
+            parsed = json.loads(raw_json)
+        except (json.JSONDecodeError, TypeError):
+            log.warning("ReadReply: could not parse JSON from response: %.200s", raw_json)
+            parsed = {}
+
+        out: dict[str, Any] = {}
+        if isinstance(parsed, dict):
+            for key, value in parsed.items():
+                out[key] = value
+        yield {"type": "output", "data": out}

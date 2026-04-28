@@ -44,12 +44,15 @@ import {
   listConversations,
   listAgents,
   getAgentInputs,
+  listToolDefinitions,
   validateWorkflow,
+  validateWorkflowSpec,
   type WorkflowSummary,
   type WorkflowSpec,
   type NodeTypeDef,
   type PinDef,
-  type ValidationError,
+  type ToolDefinition,
+  type Diagnostic,
 } from '../services/api';
 import ChatPanel from './ChatPanel';
 
@@ -99,9 +102,43 @@ function pinTypesCompatible(srcType: string, tgtType: string): boolean {
   return srcType === tgtType;
 }
 
-function getPinType(nodeType: string, handleId: string): string {
+function getPinType(nodeType: string, handleId: string, nodeData?: Record<string, unknown>): string {
   const pin = getPinDefs(nodeType).find(p => p.id === handleId);
-  return pin?.pin_type || 'any';
+  if (pin?.pin_type) return pin.pin_type;
+  if (!nodeData) return 'any';
+
+  if (nodeType === 'skill_call') {
+    const toolDefs = (nodeData._toolDefs || []) as ToolDefinition[];
+    const toolName = String(nodeData.tool || '');
+    const toolDef = toolName ? toolDefs.find(t => t.function.name === toolName) : undefined;
+    if (toolDef) {
+      const paramName = handleId.replace(/^data_/, '');
+      const schema = toolDef.function.parameters?.properties?.[paramName];
+      if (schema) {
+        const jtype = schema.type || 'string';
+        const JSON_PIN: Record<string, string> = {
+          string: 'string', integer: 'int', number: 'float', boolean: 'bool',
+          object: 'json', array: 'json',
+        };
+        return JSON_PIN[jtype] || 'string';
+      }
+    }
+  }
+
+  if (nodeType === 'read_reply') {
+    const fields = (nodeData._replyTypeFields || []) as { name: string; type: string }[];
+    const fieldName = handleId.replace(/^data_/, '');
+    const field = fields.find(f => f.name === fieldName);
+    if (field) {
+      const FIELD_PIN: Record<string, string> = {
+        str: 'string', string: 'string', int: 'int', integer: 'int',
+        float: 'float', number: 'float', bool: 'bool', boolean: 'bool',
+      };
+      return FIELD_PIN[field.type] || 'string';
+    }
+  }
+
+  return 'any';
 }
 
 const PIN_TYPE_COLORS: Record<string, string> = {
@@ -113,6 +150,7 @@ const PIN_TYPE_COLORS: Record<string, string> = {
   bool:         '#e06090',  // pink
   int:          '#cc7832',  // orange
   float:        '#cc7832',  // orange (same as int)
+  format:       '#c06cdb',  // magenta — reply format type
   any:          '#888888',  // grey
 };
 
@@ -278,6 +316,9 @@ const _dynamicFetchers: Record<string, () => Promise<DropdownOption[]>> = {
   ),
   conversations: () => listConversations().then(list =>
     list.map(c => ({ value: c.id, label: c.title || c.id })),
+  ),
+  tools: () => listToolDefinitions().then(list =>
+    list.map(t => ({ value: t.function.name, label: t.function.name })),
   ),
 };
 
@@ -697,12 +738,227 @@ function GenericNode(typeName: string) {
   return Comp;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Reply Type — inline field editor on the node canvas                */
+/* ------------------------------------------------------------------ */
+
+const FIELD_TYPES = ['str', 'int', 'float', 'bool'] as const;
+const FIELD_TYPE_COLOR: Record<string, string> = {
+  str: C.green, int: C.cyan, float: C.amber, bool: C.purple,
+};
+
+function parseFieldsData(data: Record<string, unknown>): { name: string; type: string }[] {
+  try {
+    const raw = data.fields;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+function ReplyTypeNodeComponent({ data, selected }: NodeProps) {
+  const baseDef = _nodeDefMap['reply_type'];
+  if (!baseDef) return null;
+  const { connectedHandles, onUpdate } = nodeProps(data);
+  const connected = connectedHandles || new Set<string>();
+  const fields = parseFieldsData(data as Record<string, unknown>);
+
+  const updateFields = (next: { name: string; type: string }[]) =>
+    onUpdate?.({ ...(data as Record<string, unknown>), fields: JSON.stringify(next) });
+
+  const execActive = !!data._execActive;
+  const execDone = !!data._execDone;
+  const execUnreachable = !!data._execUnreachable;
+  const timingMs = data._timingMs as number | null;
+  const maxTimingMs = (data._maxTimingMs as number) || 0;
+
+  const FIELD_ROW_H = 24;
+  const bodyRows = Math.max(fields.length, 1);
+  const bodyH = bodyRows * FIELD_ROW_H + 28;
+
+  const rightPin = baseDef.pins.find(p => p.id === 'data_format');
+  const execIn = baseDef.pins.find(p => p.id === 'exec_in');
+  const execOut = baseDef.pins.find(p => p.id === 'exec_out');
+
+  let borderColor = selected ? baseDef.accent : C.border;
+  let boxShadow: string | undefined;
+  if (execActive) { borderColor = C.green; boxShadow = `0 0 8px ${C.green}88`; }
+  else if (execDone) { borderColor = C.green + '99'; }
+
+  const leftW = 150;
+  const rightW = 50;
+  const totalW = leftW + 1 + rightW;
+  const formatPinY = bodyH / 2;
+
+  return (
+    <div style={{
+      background: C.node, borderRadius: 4, border: `2px solid ${borderColor}`,
+      width: totalW, fontSize: 11, overflow: 'visible', boxShadow,
+      transition: 'border-color 0.2s, box-shadow 0.2s, opacity 0.3s',
+      position: 'relative', opacity: execUnreachable ? 0.35 : 1,
+    }}>
+      {/* Header */}
+      <div style={{
+        height: HEADER_H, display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between', padding: '0 8px',
+        background: (execActive ? C.green + '30' : execDone ? C.green + '18' : baseDef.accent + '26'),
+        borderRadius: '3px 3px 0 0', borderBottom: `1px solid ${C.border}`,
+      }}>
+        <span style={{ color: C.text, fontWeight: 500, fontSize: 11 }}>
+          {String(data.label || baseDef.label)}
+        </span>
+        {timingMs != null && (
+          <span style={{ fontSize: 9, fontWeight: 500, color: heatColor(timingMs, maxTimingMs) }}>
+            {fmtMs(timingMs)}
+          </span>
+        )}
+      </div>
+
+      {/* Exec row */}
+      <div style={{ height: EXEC_ROW_H, position: 'relative' }}>
+        {execIn && <PinHandle pin={execIn} side="left" top={EXEC_ROW_H / 2} isConnected={connected.has('exec_in')} />}
+        {execOut && <PinHandle pin={execOut} side="right" top={EXEC_ROW_H / 2} isConnected={connected.has('exec_out')} />}
+      </div>
+
+      {/* Two-column body: fields (left) | format pin (right) */}
+      <div style={{ display: 'flex', position: 'relative', minHeight: bodyH, borderTop: `1px solid ${C.border}` }}>
+        {/* Left column — field editor */}
+        <div style={{ width: leftW, padding: '2px 6px 4px 8px', borderRight: `1px solid ${C.border}` }}>
+          {fields.map((f, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 3, height: FIELD_ROW_H }}>
+              <input
+                style={{ ...fieldBaseStyle, flex: 1, height: 18, marginTop: 0, fontFamily: 'monospace', fontSize: 10 }}
+                value={f.name}
+                placeholder="name"
+                onChange={e => { const n = [...fields]; n[i] = { ...f, name: e.target.value }; updateFields(n); }}
+              />
+              <select
+                style={{ ...selectStyle, width: 48, height: 18, marginTop: 0, fontSize: 9,
+                         color: FIELD_TYPE_COLOR[f.type] || C.text }}
+                value={f.type}
+                onChange={e => { const n = [...fields]; n[i] = { ...f, type: e.target.value }; updateFields(n); }}
+              >
+                {FIELD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+              <span
+                style={{ cursor: 'pointer', color: C.muted, fontSize: 10, lineHeight: 1, userSelect: 'none' }}
+                onClick={() => { const n = [...fields]; n.splice(i, 1); updateFields(n); }}
+              >✕</span>
+            </div>
+          ))}
+          <div
+            style={{ fontSize: 10, color: baseDef.accent, cursor: 'pointer', marginTop: 2, userSelect: 'none' }}
+            onClick={() => updateFields([...fields, { name: '', type: 'str' }])}
+          >+ field</div>
+        </div>
+
+        {/* Right column — format output */}
+        <div style={{ width: rightW, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', padding: '0 12px 0 4px' }}>
+          <span style={{ fontSize: 10, color: '#c06cdb99' }}>format</span>
+        </div>
+
+        {/* Format pin handle */}
+        {rightPin && (
+          <PinHandle pin={rightPin} side="right" top={formatPinY} isConnected={connected.has('data_format')} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  Read Reply — dynamic output pins from connected Reply Type          */
+/* ------------------------------------------------------------------ */
+
+function ReadReplyNodeComponent({ data, selected }: NodeProps) {
+  const baseDef = _nodeDefMap['read_reply'];
+  if (!baseDef) return null;
+
+  const replyTypeFields = (data._replyTypeFields || []) as { name: string; type: string }[];
+
+  const FIELD_TYPE_TO_PIN: Record<string, string> = {
+    str: 'string', string: 'string',
+    int: 'int', integer: 'int',
+    float: 'float', number: 'float',
+    bool: 'bool', boolean: 'bool',
+  };
+
+  const extraPins: PinDef[] = replyTypeFields
+    .filter(f => f.name)
+    .map(f => ({
+      id: `data_${f.name}`,
+      label: f.name,
+      color: FIELD_TYPE_COLOR[f.type] || C.cyan,
+      side: 'right' as const,
+      kind: 'data' as const,
+      pin_type: FIELD_TYPE_TO_PIN[f.type] || 'string',
+      optional: true,
+    }));
+
+  const mergedDef = extraPins.length > 0
+    ? { ...baseDef, pins: [...baseDef.pins, ...extraPins] }
+    : baseDef;
+
+  return <NodeShell def={mergedDef} selected={selected} {...nodeProps(data as Record<string, unknown>)} />;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Skill Call — dynamic pins from selected tool definition             */
+/* ------------------------------------------------------------------ */
+
+const JSON_TYPE_TO_PIN: Record<string, string> = {
+  string: 'string', integer: 'int', number: 'float', boolean: 'bool',
+  object: 'json', array: 'json',
+};
+const JSON_TYPE_TO_COLOR: Record<string, string> = {
+  string: C.green, integer: C.cyan, number: C.amber, boolean: C.purple,
+  object: C.amber, array: C.amber,
+};
+
+function SkillCallNodeComponent({ data, selected }: NodeProps) {
+  const baseDef = _nodeDefMap['skill_call'];
+  if (!baseDef) return null;
+
+  const toolDefs = (data._toolDefs || []) as ToolDefinition[];
+  const selectedTool = String(data.tool || '');
+
+  const toolDef = selectedTool
+    ? toolDefs.find(t => t.function.name === selectedTool)
+    : undefined;
+
+  const extraPins: PinDef[] = [];
+  if (toolDef) {
+    const props = toolDef.function.parameters?.properties || {};
+    const req = new Set(toolDef.function.parameters?.required || []);
+    for (const [name, schema] of Object.entries(props)) {
+      const jtype = schema.type || 'string';
+      extraPins.push({
+        id: `data_${name}`,
+        label: name,
+        color: JSON_TYPE_TO_COLOR[jtype] || C.green,
+        side: 'left' as const,
+        kind: 'data' as const,
+        pin_type: JSON_TYPE_TO_PIN[jtype] || 'string',
+        optional: !req.has(name),
+      });
+    }
+  }
+
+  const mergedDef = extraPins.length > 0
+    ? { ...baseDef, pins: [...baseDef.pins, ...extraPins] }
+    : baseDef;
+
+  return <NodeShell def={mergedDef} selected={selected} {...nodeProps(data as Record<string, unknown>)} />;
+}
+
 function buildNodeTypes(): NodeTypes {
   const types: NodeTypes = {
     start: StartNode,
     fetch_conversation: FetchConversationNode,
     agent: AgentNodeComponent('agent'),
     agent_call: AgentNodeComponent('agent_call'),
+    reply_type: ReplyTypeNodeComponent,
+    read_reply: ReadReplyNodeComponent,
+    skill_call: SkillCallNodeComponent,
   };
   for (const def of _nodeDefs) {
     if (types[def.type]) continue;
@@ -746,6 +1002,12 @@ const UnlockIcon = () => (
 const ChatIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
     <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+  </svg>
+);
+const BuildIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    <path d="M12 3l9 4.5v9L12 21l-9-4.5v-9L12 3z" />
+    <path d="M12 12l9-4.5M12 12v9M12 12L3 7.5" />
   </svg>
 );
 /* ================================================================== */
@@ -925,6 +1187,11 @@ const PropPanel: FC<PropPanelProps> = ({ node, onUpdate, onDelete }) => {
           </Text>
         </div>
       )}
+      {ntype === 'reply_type' && (
+        <Text fontSize="12px" color={C.muted}>
+          Add fields directly on the node
+        </Text>
+      )}
       {ntype === 'condition' && (
         <>
           {field('Expression', 'expression', { placeholder: 'len(input) > 100', mono: true })}
@@ -1018,9 +1285,11 @@ const WorkflowEditor: FC = () => {
   /* Context menu */
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; flowX: number; flowY: number } | null>(null);
 
-  /* Chat panel */
+  /* Chat panels */
   const [showChat, setShowChat] = useState(false);
+  const [showBuildChat, setShowBuildChat] = useState(false);
   const [testChatKey, setTestChatKey] = useState(0);
+  const [buildChatKey, setBuildChatKey] = useState(0);
   const [runLog, setRunLog] = useState<string[]>([]);
   const [expandedCat, setExpandedCat] = useState<string | null>('Agent');
   const [nodeDefsVersion, setNodeDefsVersion] = useState(0);
@@ -1032,7 +1301,7 @@ const WorkflowEditor: FC = () => {
   const [lastAudit, setLastAudit] = useState<any>(null);
 
   /* Validation */
-  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([]);
+  const [validationErrors, setValidationErrors] = useState<Diagnostic[]>([]);
   const [showValidation, setShowValidation] = useState(false);
 
   const handleRfInit = useCallback((instance: ReactFlowInstance) => {
@@ -1046,12 +1315,15 @@ const WorkflowEditor: FC = () => {
     }
   }, []);
 
+  const [toolDefs, setToolDefs] = useState<ToolDefinition[]>([]);
+
   useEffect(() => {
     getNodeTypes().then(defs => {
       setNodeDefs(defs);
       setNodeDefsVersion(v => v + 1);
     }).catch(() => {});
     listWorkflows().then(setSavedWorkflows).catch(() => {});
+    listToolDefinitions().then(setToolDefs).catch(() => {});
   }, []);
 
   const nodeTypes = useMemo(() => buildNodeTypes(), [nodeDefsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -1111,6 +1383,17 @@ const WorkflowEditor: FC = () => {
     return reachable;
   }, [nodes, edges]);
 
+  const replyTypeFieldsMap = useMemo(() => {
+    const map: Record<string, { name: string; type: string }[]> = {};
+    for (const e of edges) {
+      if (e.targetHandle !== 'data_reply_type') continue;
+      const srcNode = nodes.find(n => n.id === e.source);
+      if (!srcNode || srcNode.type !== 'reply_type') continue;
+      map[e.target] = parseFieldsData(srcNode.data as Record<string, unknown>);
+    }
+    return map;
+  }, [edges, nodes]);
+
   const enrichedNodes = useMemo(() =>
     nodes.map(n => ({
       ...n,
@@ -1123,9 +1406,11 @@ const WorkflowEditor: FC = () => {
         _timingMs: nodeTimings[n.id] ?? null,
         _maxTimingMs: maxNodeTime,
         _execUnreachable: !execReachable.has(n.id),
+        ...(n.type === 'read_reply' ? { _replyTypeFields: replyTypeFieldsMap[n.id] || [] } : {}),
+        ...(n.type === 'skill_call' ? { _toolDefs: toolDefs } : {}),
       },
     })),
-  [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime, execReachable]);
+  [nodes, connectedMap, updateNodeData, activeNodeId, completedNodeIds, nodeTimings, maxNodeTime, execReachable, replyTypeFieldsMap, toolDefs]);
 
   const enrichedEdges = useMemo(() =>
     edges.map(e => {
@@ -1134,8 +1419,8 @@ const WorkflowEditor: FC = () => {
         const srcNode = nodes.find(n => n.id === e.source);
         const tgtNode = nodes.find(n => n.id === e.target);
         if (srcNode && tgtNode) {
-          const srcType = getPinType(srcNode.type || '', e.sourceHandle);
-          const tgtType = getPinType(tgtNode.type || '', e.targetHandle);
+          const srcType = getPinType(srcNode.type || '', e.sourceHandle, srcNode.data as Record<string, unknown>);
+          const tgtType = getPinType(tgtNode.type || '', e.targetHandle, tgtNode.data as Record<string, unknown>);
           _invalid = !pinTypesCompatible(srcType, tgtType);
         }
       }
@@ -1156,6 +1441,24 @@ const WorkflowEditor: FC = () => {
     }, eds));
   }, [setEdges, nodes]);
 
+  const checkConnection = useCallback((conn: Connection | Edge): boolean => {
+    const src = conn.sourceHandle || '';
+    const tgt = conn.targetHandle || '';
+    const srcIsExec = src.startsWith('exec_');
+    const tgtIsExec = tgt.startsWith('exec_');
+    if (srcIsExec !== tgtIsExec) return false;
+    if (!srcIsExec && conn.source && conn.target) {
+      const srcNode = nodes.find(n => n.id === conn.source);
+      const tgtNode = nodes.find(n => n.id === conn.target);
+      if (srcNode?.type && tgtNode?.type) {
+        const srcPinType = getPinType(srcNode.type, src, srcNode.data as Record<string, unknown>);
+        const tgtPinType = getPinType(tgtNode.type, tgt, tgtNode.data as Record<string, unknown>);
+        if (!pinTypesCompatible(srcPinType, tgtPinType)) return false;
+      }
+    }
+    return true;
+  }, [nodes]);
+
   const onNodeClick = useCallback((_: React.MouseEvent, node: Node) => setSelectedNode(node), []);
   const onPaneClick = useCallback(() => { setSelectedNode(null); setCtxMenu(null); }, []);
 
@@ -1172,6 +1475,8 @@ const WorkflowEditor: FC = () => {
     if (type === 'condition') defaultData.expression = 'True';
     if (type === 'start') { defaultData.preview_message = 'Hello!'; }
     if (type === 'fetch_conversation') { defaultData.conversation_id = ''; defaultData.debug = true; }
+    if (type === 'reply_type') { defaultData.fields = '[]'; }
+    if (type === 'skill_call') { defaultData.tool = ''; }
     setNodes(nds => [...nds, { id: nid(), type, position, data: defaultData }]);
   }, [setNodes]);
 
@@ -1234,43 +1539,16 @@ const WorkflowEditor: FC = () => {
 
   /* Validate */
   const handleValidate = useCallback(async () => {
-    if (workflowId) {
-      try {
-        await handleSave();
-        const result = await validateWorkflow(workflowId);
-        setValidationErrors(result.errors);
-        setShowValidation(true);
-      } catch (err) { console.error('Validate failed', err); }
-    } else {
-      const clientErrors: ValidationError[] = [];
-      for (const e of edges) {
-        if (e.type !== 'data' || !e.sourceHandle || !e.targetHandle) continue;
-        const srcNode = nodes.find(n => n.id === e.source);
-        const tgtNode = nodes.find(n => n.id === e.target);
-        if (!srcNode || !tgtNode) continue;
-        const srcType = getPinType(srcNode.type || '', e.sourceHandle);
-        const tgtType = getPinType(tgtNode.type || '', e.targetHandle);
-        if (!pinTypesCompatible(srcType, tgtType)) {
-          const srcLabel = (srcNode.data as any)?.label || srcNode.id;
-          const tgtLabel = (tgtNode.data as any)?.label || tgtNode.id;
-          const srcPin = getPinDefs(srcNode.type || '').find(p => p.id === e.sourceHandle);
-          const tgtPin = getPinDefs(tgtNode.type || '').find(p => p.id === e.targetHandle);
-          clientErrors.push({
-            edge_id: e.id,
-            source_node: srcNode.id,
-            target_node: tgtNode.id,
-            source_pin: srcPin?.label || e.sourceHandle,
-            target_pin: tgtPin?.label || e.targetHandle,
-            source_type: srcType,
-            target_type: tgtType,
-            message: `${srcLabel}.${srcPin?.label || '?'} (${srcType}) \u2192 ${tgtLabel}.${tgtPin?.label || '?'} (${tgtType}): incompatible types`,
-          });
-        }
-      }
-      setValidationErrors(clientErrors);
-      setShowValidation(true);
+    try {
+      if (workflowId) await handleSave();
+      const spec = buildSpec();
+      const result = await validateWorkflowSpec(spec);
+      setValidationErrors(result.diagnostics);
+    } catch (err) {
+      console.error('Validate failed', err);
     }
-  }, [workflowId, edges, nodes, handleSave]);
+    setShowValidation(true);
+  }, [workflowId, buildSpec, handleSave]);
 
   /* Load */
   const loadSpec = useCallback((spec: any) => {
@@ -1389,11 +1667,17 @@ const WorkflowEditor: FC = () => {
               </Button>
             </HStack>
             <Button size="xs" onClick={handleValidate} variant="outline" w="100%" mt={1}
-              borderColor={validationErrors.length > 0 ? C.red + '88' : C.border}
-              color={validationErrors.length > 0 ? C.red : C.text}
+              borderColor={validationErrors.some(d => d.severity === 'error') ? C.red + '88' : validationErrors.some(d => d.severity === 'warning') ? C.amber + '88' : C.border}
+              color={validationErrors.some(d => d.severity === 'error') ? C.red : validationErrors.some(d => d.severity === 'warning') ? C.amber : C.text}
               _hover={{ bg: '#333' }}>
               <HStack gap={1}>
-                <Text>{validationErrors.length > 0 ? `\u26a0 ${validationErrors.length} error${validationErrors.length > 1 ? 's' : ''}` : '\u2713 Validate'}</Text>
+                <Text>{(() => {
+                  const errs = validationErrors.filter(d => d.severity === 'error').length;
+                  const warns = validationErrors.filter(d => d.severity === 'warning').length;
+                  if (errs > 0) return `\u26a0 ${errs} error${errs > 1 ? 's' : ''}${warns > 0 ? `, ${warns} warning${warns > 1 ? 's' : ''}` : ''}`;
+                  if (warns > 0) return `${warns} warning${warns > 1 ? 's' : ''}`;
+                  return '\u2713 Validate';
+                })()}</Text>
               </HStack>
             </Button>
           </Box>
@@ -1524,7 +1808,7 @@ const WorkflowEditor: FC = () => {
           onPaneContextMenu={onPaneContextMenu}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          isValidConnection={isValidConnection}
+          isValidConnection={checkConnection}
           defaultEdgeOptions={{ selectable: true, deletable: true }}
           deleteKeyCode={['Backspace', 'Delete']}
           colorMode="dark"
@@ -1544,7 +1828,11 @@ const WorkflowEditor: FC = () => {
               </Button>
               <Button size="xs" variant="ghost" onClick={() => setShowChat(!showChat)}
                 color={showChat ? C.cyan : C.muted} _hover={{ bg: '#333' }} fontSize="14px">
-                <HStack gap={1}><ChatIcon /><Text>{showChat ? 'Hide Chat' : 'Test Chat'}</Text></HStack>
+                <HStack gap={1}><ChatIcon /><Text>{showChat ? 'Hide Test' : 'Test'}</Text></HStack>
+              </Button>
+              <Button size="xs" variant="ghost" onClick={() => setShowBuildChat(!showBuildChat)}
+                color={showBuildChat ? C.amber : C.muted} _hover={{ bg: '#333' }} fontSize="14px">
+                <HStack gap={1}><BuildIcon /><Text>{showBuildChat ? 'Hide Build' : 'Build'}</Text></HStack>
               </Button>
             </HStack>
           </Panel>
@@ -1573,7 +1861,7 @@ const WorkflowEditor: FC = () => {
         {/* Run log */}
         {(runLog.length > 0 || lastAudit) && (
           <Box position="absolute" bottom={3} left={3}
-            right={currentSelectedNode ? '240px' : (showChat ? '320px' : '3px')}
+            right={currentSelectedNode ? '240px' : ((showChat || showBuildChat) ? '320px' : '3px')}
             maxH="200px" overflowY="auto"
             bg="#242424ee" border={`1px solid ${C.border}`} borderRadius="4px"
             p={2} fontSize="14px" fontFamily="monospace" zIndex={10}>
@@ -1613,20 +1901,31 @@ const WorkflowEditor: FC = () => {
           </Box>
         )}
 
-        {/* Validation errors */}
+        {/* Validation diagnostics */}
         {showValidation && (
           <Box position="absolute" bottom={(runLog.length > 0 || lastAudit) ? '210px' : '3px'} left={3}
-            right={currentSelectedNode ? '240px' : (showChat ? '320px' : '3px')}
+            right={currentSelectedNode ? '240px' : ((showChat || showBuildChat) ? '320px' : '3px')}
             maxH="180px" overflowY="auto"
-            bg={validationErrors.length > 0 ? '#2a1515ee' : '#1a2a1aee'}
-            border={`1px solid ${validationErrors.length > 0 ? C.red + '66' : C.green + '66'}`}
+            bg={validationErrors.some(d => d.severity === 'error') ? '#2a1515ee'
+              : validationErrors.some(d => d.severity === 'warning') ? '#2a2515ee'
+              : '#1a2a1aee'}
+            border={`1px solid ${validationErrors.some(d => d.severity === 'error') ? C.red + '66'
+              : validationErrors.some(d => d.severity === 'warning') ? C.amber + '66'
+              : C.green + '66'}`}
             borderRadius="4px"
             p={2} fontSize="14px" zIndex={11}>
             <HStack justify="space-between" mb={1}>
-              <Text fontWeight="bold" color={validationErrors.length > 0 ? C.red : C.green} fontSize="14px">
-                {validationErrors.length > 0
-                  ? `${validationErrors.length} type error${validationErrors.length > 1 ? 's' : ''}`
-                  : '\u2713 All edges valid'}
+              <Text fontWeight="bold" fontSize="14px"
+                color={validationErrors.some(d => d.severity === 'error') ? C.red
+                  : validationErrors.some(d => d.severity === 'warning') ? C.amber
+                  : C.green}>
+                {(() => {
+                  const errs = validationErrors.filter(d => d.severity === 'error').length;
+                  const warns = validationErrors.filter(d => d.severity === 'warning').length;
+                  if (errs > 0) return `${errs} error${errs > 1 ? 's' : ''}${warns > 0 ? `, ${warns} warning${warns > 1 ? 's' : ''}` : ''}`;
+                  if (warns > 0) return `${warns} warning${warns > 1 ? 's' : ''}`;
+                  return '\u2713 All checks passed';
+                })()}
               </Text>
               <Button size="xs" variant="ghost" onClick={() => setShowValidation(false)} color={C.muted}>Close</Button>
             </HStack>
@@ -1638,10 +1937,13 @@ const WorkflowEditor: FC = () => {
                       ...e,
                       selected: e.id === err.edge_id,
                     })));
+                  } else if (err.node_id) {
+                    const node = nodes.find(n => n.id === err.node_id);
+                    if (node) setSelectedNode(node);
                   }
                 }}>
-                <Text fontSize="13px" color={C.red}>
-                  {err.message}
+                <Text fontSize="13px" color={err.severity === 'error' ? C.red : C.amber}>
+                  {err.severity === 'warning' ? '\u26a0 ' : ''}{err.message}
                 </Text>
               </Box>
             ))}
@@ -1649,46 +1951,90 @@ const WorkflowEditor: FC = () => {
         )}
       </Box>
 
-      {/* Chat / Test panel — reuses the real ChatPanel */}
-      {showChat && (
+      {/* Chat panels — stacked vertically: Build on top, Test on bottom */}
+      {(showChat || showBuildChat) && (
         <Box w="420px" minW="420px" h="100%"
           borderLeft={`1px solid ${C.border}`} display="flex" flexDirection="column">
-          <Box p={1} borderBottom={`1px solid ${C.border}`} display="flex" justifyContent="space-between" alignItems="center">
-            <HStack gap={1} pl={2}>
-              <ChatIcon />
-              <Text fontSize="14px" fontWeight="bold" color={C.text}>
-                Test Chat
-              </Text>
-              {workflowId && (
-                <Text fontSize="12px" color={C.muted}>
-                  ({nodes.find(n => n.type === 'start')?.data?.label || workflowId})
-                </Text>
-              )}
-            </HStack>
-            <HStack gap={1}>
-              <Button size="xs" variant="ghost" color={C.muted}
-                onClick={() => { setTestChatKey(k => k + 1); setRunLog([]); }}
-                _hover={{ bg: '#333' }} fontSize="13px">New</Button>
-              <Button size="xs" variant="ghost" color={C.muted}
-                onClick={() => setShowChat(false)}
-                _hover={{ bg: '#333' }} fontSize="14px">{'\u2715'}</Button>
-            </HStack>
-          </Box>
-          <Box flex={1} overflow="hidden">
-            <ChatPanel
-              key={`test-${workflowId}-${testChatKey}`}
-              conversationId={null}
-              compact
-              ephemeral
-              initialGraph={workflowId ? `workflow:${workflowId}` : undefined}
-              placeholder="Send a message to test the workflow..."
-            />
-          </Box>
+
+          {/* Build Chat — top */}
+          {showBuildChat && (
+            <Box flex={1} minH={0} display="flex" flexDirection="column"
+              borderBottom={showChat ? `1px solid ${C.border}` : undefined}>
+              <Box p={1} borderBottom={`1px solid ${C.border}`} display="flex" justifyContent="space-between" alignItems="center" flexShrink={0}>
+                <HStack gap={1} pl={2}>
+                  <BuildIcon />
+                  <Text fontSize="14px" fontWeight="bold" color={C.amber}>
+                    Build
+                  </Text>
+                  {workflowName && (
+                    <Text fontSize="12px" color={C.muted}>
+                      ({workflowName})
+                    </Text>
+                  )}
+                </HStack>
+                <HStack gap={1}>
+                  <Button size="xs" variant="ghost" color={C.muted}
+                    onClick={() => setBuildChatKey(k => k + 1)}
+                    _hover={{ bg: '#333' }} fontSize="13px">New</Button>
+                  <Button size="xs" variant="ghost" color={C.muted}
+                    onClick={() => setShowBuildChat(false)}
+                    _hover={{ bg: '#333' }} fontSize="14px">{'\u2715'}</Button>
+                </HStack>
+              </Box>
+              <Box flex={1} minH={0} overflow="hidden" display="flex" flexDirection="column">
+                <ChatPanel
+                  key={`build-${workflowId}-${buildChatKey}`}
+                  conversationId={null}
+                  compact
+                  ephemeral
+                  initialAgent="graph_builder"
+                  placeholder="Describe how to modify this workflow..."
+                />
+              </Box>
+            </Box>
+          )}
+
+          {/* Test Chat — bottom */}
+          {showChat && (
+            <Box flex={1} minH={0} display="flex" flexDirection="column">
+              <Box p={1} borderBottom={`1px solid ${C.border}`} display="flex" justifyContent="space-between" alignItems="center" flexShrink={0}>
+                <HStack gap={1} pl={2}>
+                  <ChatIcon />
+                  <Text fontSize="14px" fontWeight="bold" color={C.cyan}>
+                    Test
+                  </Text>
+                  {workflowId && (
+                    <Text fontSize="12px" color={C.muted}>
+                      ({nodes.find(n => n.type === 'start')?.data?.label || workflowId})
+                    </Text>
+                  )}
+                </HStack>
+                <HStack gap={1}>
+                  <Button size="xs" variant="ghost" color={C.muted}
+                    onClick={() => { setTestChatKey(k => k + 1); setRunLog([]); }}
+                    _hover={{ bg: '#333' }} fontSize="13px">New</Button>
+                  <Button size="xs" variant="ghost" color={C.muted}
+                    onClick={() => setShowChat(false)}
+                    _hover={{ bg: '#333' }} fontSize="14px">{'\u2715'}</Button>
+                </HStack>
+              </Box>
+              <Box flex={1} minH={0} overflow="hidden" display="flex" flexDirection="column">
+                <ChatPanel
+                  key={`test-${workflowId}-${testChatKey}`}
+                  conversationId={null}
+                  compact
+                  ephemeral
+                  initialGraph={workflowId ? `workflow:${workflowId}` : undefined}
+                  placeholder="Send a message to test the workflow..."
+                />
+              </Box>
+            </Box>
+          )}
         </Box>
       )}
 
       {/* Property panel */}
-      {currentSelectedNode && !showChat && (
+      {currentSelectedNode && !showChat && !showBuildChat && (
         <Box w="230px" minW="230px" h="100%" bg="#242424"
           borderLeft={`1px solid ${C.border}`} overflowY="auto">
           <PropPanel node={currentSelectedNode} onUpdate={updateNodeData} onDelete={deleteNode} />

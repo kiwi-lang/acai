@@ -246,6 +246,14 @@ export interface AuditConfig {
     dir: string;
 }
 
+export interface CIConfig {
+    platform: string;
+    token: string;
+    default_branch: string;
+    poll_interval: number;
+    auto_fix: boolean;
+}
+
 export interface SystemConfig {
     workspace: string;
     sandbox: SandboxConfig;
@@ -253,6 +261,7 @@ export interface SystemConfig {
     git: GitConfig;
     queue: QueueConfig;
     audit: AuditConfig;
+    ci: CIConfig;
 }
 
 export interface AgentDef {

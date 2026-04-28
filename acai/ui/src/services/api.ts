@@ -395,6 +395,24 @@ export async function listToolNamespaces(): Promise<ToolNamespace[]> {
     return request<ToolNamespace[]>('/tools/namespaces');
 }
 
+export interface ToolDefinition {
+    type: string;
+    function: {
+        name: string;
+        description: string;
+        parameters: {
+            type: string;
+            properties: Record<string, { type: string; description?: string }>;
+            required: string[];
+        };
+        permissions: string[];
+    };
+}
+
+export async function listToolDefinitions(): Promise<ToolDefinition[]> {
+    return request<ToolDefinition[]>('/workflows/tool-definitions');
+}
+
 // Node types (from server)
 
 export interface PinDef {
@@ -509,6 +527,20 @@ export async function runWorkflow(
     return response;
 }
 
+export interface Diagnostic {
+    severity: 'error' | 'warning';
+    code: string;
+    node_id: string;
+    message: string;
+    edge_id?: string;
+    source_node?: string;
+    target_node?: string;
+    source_pin?: string;
+    target_pin?: string;
+    source_type?: string;
+    target_type?: string;
+}
+
 export interface ValidationError {
     edge_id: string;
     source_node: string;
@@ -521,12 +553,21 @@ export interface ValidationError {
 }
 
 export interface ValidationResult {
-    errors: ValidationError[];
+    diagnostics: Diagnostic[];
+    errors: Diagnostic[];
+    warnings: Diagnostic[];
     valid: boolean;
 }
 
 export async function validateWorkflow(id: string): Promise<ValidationResult> {
     return request<ValidationResult>(`/workflows/${id}/validate`, { method: 'POST' });
+}
+
+export async function validateWorkflowSpec(spec: WorkflowSpec): Promise<ValidationResult> {
+    return request<ValidationResult>('/workflows/validate', {
+        method: 'POST',
+        body: JSON.stringify(spec),
+    });
 }
 
 export async function saveBuiltinWorkflow(id: string, spec: WorkflowSpec): Promise<WorkflowSpec> {

@@ -422,6 +422,9 @@ class OpenAICompatibleLLM(LLM):
         chat_template_kwargs = kwargs.get("chat_template_kwargs")
         if chat_template_kwargs:
             payload["chat_template_kwargs"] = chat_template_kwargs
+        response_format = kwargs.get("response_format")
+        if response_format:
+            payload["response_format"] = response_format
         return payload
 
     def complete(self, messages, **kwargs):

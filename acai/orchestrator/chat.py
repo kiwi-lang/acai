@@ -99,6 +99,7 @@ class ChatStore:
         self.workspace = workspace
         self.base = os.path.join(workspace, "conversations")
         self._projects_root = os.path.join(workspace, "projects")
+        self._tmp = os.path.join(workspace, "tmp")
         os.makedirs(self.base, exist_ok=True)
         self._lock = threading.Lock()
         self._index: dict[str, str] = {}
@@ -160,6 +161,8 @@ class ChatStore:
         self._rebuild_index()
         if conv_id in self._index:
             return self._index[conv_id]
+        if conv_id.startswith("ephemeral-"):
+            return os.path.join(self._tmp, conv_id)
         return os.path.join(self.base, conv_id)
 
     def _msg_path(self, conv_id: str) -> str:

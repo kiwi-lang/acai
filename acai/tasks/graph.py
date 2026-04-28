@@ -176,6 +176,7 @@ class TaskGraph:
         self._allowed_tools: set[str] | None = None
         self._last_work: dict | None = None
         self._agent_uses_sandbox: bool = False
+        self._workflow_dir: str | None = None
 
     @classmethod
     def from_work(
@@ -187,14 +188,29 @@ class TaskGraph:
         """Create a TaskGraph from a worker and a work dict."""
         kwargs.setdefault("conversation", work.get("conversation", ""))
         kwargs.setdefault("stream_id", work.get("stream_id", ""))
-        return cls(worker, **kwargs)
+        instance = cls(worker, **kwargs)
+        if work.get("workflow_dir"):
+            instance._workflow_dir = work["workflow_dir"]
+        return instance
 
     # ------------------------------------------------------------------
     # Agent helpers
     # ------------------------------------------------------------------
 
     def agent(self, name: str) -> AgentDef | None:
-        """Fetch an agent definition by name."""
+        """Fetch an agent definition by name.
+
+        When ``_workflow_dir`` is set, agents bundled inside the
+        workflow's ``agents/`` directory take precedence over globally
+        registered agents.
+        """
+        if self._workflow_dir:
+            import os
+            wf_agent_dir = os.path.join(self._workflow_dir, "agents", name)
+            if os.path.isfile(os.path.join(wf_agent_dir, "definition.json")):
+                local = self.agent_store._load_from(wf_agent_dir, builtin=False)
+                if local is not None:
+                    return local
         return self.agent_store.get(name)
 
     def _resolve_tools(self, agent_def: AgentDef) -> tuple[list[dict] | None, str]:

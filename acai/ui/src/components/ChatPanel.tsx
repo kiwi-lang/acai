@@ -882,7 +882,7 @@ const ChatPanel = ({
     const mx = compact ? undefined : 'auto';
 
     return (
-        <Box flex={1} display="flex" flexDirection="column" overflow="hidden">
+        <Box flex={1} display="flex" flexDirection="column" overflow="hidden" h="100%">
             {/* Messages */}
             <Box flex={1} overflowY="auto" w="100%" minH={0}>
                 {messages.length === 0 ? (

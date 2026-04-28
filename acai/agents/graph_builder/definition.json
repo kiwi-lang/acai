@@ -1,0 +1,7 @@
+{
+  "name": "graph_builder",
+  "description": "a workflow graph architect that designs and modifies task graphs",
+  "role": "system",
+  "provider": "auto",
+  "output_format": "text"
+}

@@ -320,6 +320,28 @@ class AuditConfig:
     dir: str = defaultfield("audit.dir", str, ".audit")
 
 
+@dataclass
+class CIConfig:
+    """CI / CD integration settings.
+
+    ``platform`` controls which backend the CI tools use.  Set to
+    ``"auto"`` (default) to detect from the git remote URL, or force
+    a specific platform (``"github"``, ``"gitlab"``, ``"codeberg"``).
+    """
+
+    platform: str = defaultfield("ci.platform", str, "auto")
+    token: str = defaultfield("ci.token", str, "")
+    default_branch: str = defaultfield("ci.default_branch", str, "main")
+    poll_interval: int = defaultfield("ci.poll_interval", int, 30)
+    auto_fix: bool = defaultfield("ci.auto_fix", bool, False)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> CIConfig:
+        import dataclasses as _dc
+        known = {f.name for f in _dc.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
+
+
 def _model_to_slug(model: str) -> str:
     """Derive a short slug from a model path like ``Org/Model-Name``."""
     return model.rsplit("/", 1)[-1].lower().replace("_", "-")
@@ -522,6 +544,7 @@ class AcaiConfig:
     git: GitConfig = field(default_factory=GitConfig)
     queue: QueueConfig = field(default_factory=QueueConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
+    ci: CIConfig = field(default_factory=CIConfig)
     providers: list[ProviderConfig] = field(default_factory=_load_providers_from_global)
     _active_name: str = ""
 
@@ -602,7 +625,7 @@ def load_providers(workspace: str) -> list[ProviderConfig]:
     return [ProviderConfig.from_dict(d) for d in raw if isinstance(d, dict)]
 
 
-_PERSISTABLE_SECTIONS = ("sandbox", "worker", "git", "queue", "audit")
+_PERSISTABLE_SECTIONS = ("sandbox", "worker", "git", "queue", "audit", "ci")
 
 
 def config_to_dict(config: AcaiConfig) -> dict:

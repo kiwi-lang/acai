@@ -249,7 +249,7 @@ class AgentStore:
 
     _STANDARD_VARS = frozenset({
         "agent", "task", "messages", "project", "spec",
-        "tools_description", "datetime",
+        "tools_description", "datetime", "node_registry",
         "range", "true", "false", "none", "loop",
     })
 
@@ -465,6 +465,8 @@ def hydrate_task(
     )
     tpl = env.from_string(template_src)
 
+    from acai.tasks.nodes import describe_registry
+
     ctx: dict = {
         "agent": agent,
         "task": resolved,
@@ -473,6 +475,7 @@ def hydrate_task(
         "spec": resolved.get("project_spec", ""),
         "tools_description": tools_description,
         "datetime": datetime.now(timezone.utc).isoformat(),
+        "node_registry": describe_registry(),
     }
     if extra_context:
         ctx.update(extra_context)

@@ -10,7 +10,7 @@
     "execute"
   ],
   "tools": [
-    "filesystem", "code", "git", "make", "meta", "notebook",
+    "ci", "filesystem", "code", "git", "make", "meta", "notebook",
     "project", "session", "search", "shell", "tasks", "ui", "web"
   ],
   "max_iterations": 40

@@ -10,7 +10,7 @@ import {
     triggerGitSync, testGitConnection,
 } from '../services/api';
 import type { VersionInfo, GitBackupStatus } from '../services/api';
-import type { SystemConfig, SandboxConfig } from '../services/types';
+import type { SystemConfig, SandboxConfig, CIConfig } from '../services/types';
 
 const SANDBOX_TYPES = ['none', 'docker', 'podman', 'firecracker', 'bubblewrap', 'nsjail'];
 
@@ -159,6 +159,11 @@ const SettingsPage = () => {
     const updateAudit = (key: string, value: any) => {
         if (!config) return;
         setConfig({ ...config, audit: { ...config.audit, [key]: value } });
+    };
+
+    const updateCI = (key: keyof CIConfig, value: any) => {
+        if (!config) return;
+        setConfig({ ...config, ci: { ...config.ci, [key]: value } });
     };
 
     if (loading) {
@@ -458,6 +463,82 @@ const SettingsPage = () => {
                                 </Field>
                             </Box>
                         </HStack>
+                    </SectionCard>
+                </Box>
+
+                {/* CI / CD */}
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
+                    <SectionCard
+                        title="CI / CD"
+                        busy={savingSection === 'ci'}
+                        onSave={() => saveSection('ci')}
+                        status={sectionStatus.ci || ''}
+                    >
+                        <HStack gap={3}>
+                            <Box flex="1 1 120px" minW="120px">
+                                <Field label="Platform">
+                                    <NativeSelect.Root size="sm">
+                                        <NativeSelect.Field
+                                            value={config.ci.platform}
+                                            onChange={e => updateCI('platform', e.target.value)}
+                                            {...inputProps}
+                                        >
+                                            {['auto', 'github', 'gitlab', 'codeberg'].map(p => (
+                                                <option key={p} value={p} style={{ background: 'var(--option-bg)' }}>
+                                                    {p === 'auto' ? 'Auto-detect' : p.charAt(0).toUpperCase() + p.slice(1)}
+                                                </option>
+                                            ))}
+                                        </NativeSelect.Field>
+                                    </NativeSelect.Root>
+                                </Field>
+                            </Box>
+                            <Box flex="1 1 100px" minW="100px">
+                                <Field label="Default Branch">
+                                    <Input
+                                        value={config.ci.default_branch}
+                                        onChange={e => updateCI('default_branch', e.target.value)}
+                                        placeholder="main"
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                            <Box flex="1 1 80px" minW="80px">
+                                <Field label="Poll (s)">
+                                    <Input
+                                        type="number"
+                                        value={config.ci.poll_interval}
+                                        onChange={e => updateCI('poll_interval', parseInt(e.target.value) || 30)}
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                        </HStack>
+
+                        <HStack gap={2}>
+                            <ToggleButton label="Auto-fix" value={config.ci.auto_fix} onChange={v => updateCI('auto_fix', v)} />
+                        </HStack>
+
+                        {(config.ci.platform === 'github' || config.ci.platform === 'auto') && (
+                            <Box p={3} bg="var(--bg-elevated)" borderRadius="md" border="1px solid" borderColor="var(--border-primary)">
+                                <Text fontSize="xs" fontWeight="medium" color="var(--text-secondary)" mb={2}>GitHub Options</Text>
+                                <VStack gap={2} align="stretch">
+                                    <Field label="Token (optional — leave empty to use gh CLI auth)">
+                                        <Input
+                                            type="password"
+                                            value={config.ci.token}
+                                            onChange={e => updateCI('token', e.target.value)}
+                                            placeholder="ghp_..."
+                                            {...inputProps}
+                                        />
+                                    </Field>
+                                    <Text fontSize="xs" color="var(--text-muted)">
+                                        The CI tools prefer the <Text as="span" fontFamily="mono" fontSize="xs">gh</Text> CLI for
+                                        authentication. A personal access token is only needed if <Text as="span" fontFamily="mono" fontSize="xs">gh</Text> is
+                                        not installed or not authenticated.
+                                    </Text>
+                                </VStack>
+                            </Box>
+                        )}
                     </SectionCard>
                 </Box>
 

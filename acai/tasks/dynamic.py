@@ -204,6 +204,20 @@ class DynamicGraph(TaskGraph):
                 if src_id in outputs and src_pin in outputs[src_id]:
                     resolved[pin_name] = outputs[src_id][src_pin]
 
+            # -- fill unconnected pins from inline node data ---------------
+            connected_handles = {
+                e.get("targetHandle", "")
+                for e in spec.data_inputs(current_id)
+            }
+            connected_names = {
+                (h.removeprefix("data_") if h.startswith("data_") else h)
+                for h in connected_handles
+            }
+            for key, value in data.items():
+                if key == "label" or key in resolved or key in connected_names:
+                    continue
+                resolved[key] = value
+
             # -- ForEach: handled by the executor, not the node ----------
             if ntype == "for_each":
                 array = resolved.get("array", [])

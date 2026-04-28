@@ -94,6 +94,9 @@ def create_worker_router(
     skill_store.register_all(registry)
     configure_skills(skill_store)
 
+    from acai.tools.ci import _configure as configure_ci
+    configure_ci(config.ci)
+
     log.info(
         "worker router created  model=%s  backend=%s  tools=%d  extern_llm=%s",
         provider.model, provider.backend, len(registry.all_tools()), extern_llm,
@@ -114,6 +117,7 @@ def create_worker_router(
         task_id = body.get("task_id", "")
         provider_override = body.get("provider")
         enable_thinking = body.get("enable_thinking")
+        response_format = body.get("response_format")
 
         log.info(
             "[%s] llm/complete  messages=%d  tools=%s  provider=%s",
@@ -149,6 +153,8 @@ def create_worker_router(
             stream_kwargs["tools"] = tools
         if enable_thinking is not None:
             stream_kwargs["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        if response_format:
+            stream_kwargs["response_format"] = response_format
 
         # FIXME(temporary): Qwen3 thinking control via message prefix/suffix
         # while vLLM template kwargs are unreliable.  Remove once upstream is fixed.

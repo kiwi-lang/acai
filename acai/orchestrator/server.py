@@ -254,6 +254,9 @@ def create_router(config: AcaiConfig | None = None,
     skill_store.register_all(tool_registry)
     configure_skills(skill_store)
 
+    from acai.tools.ci import _configure as configure_ci
+    configure_ci(config.ci)
+
     from acai.utils.audit import AuditTrail, NullAuditTrail
 
     def _make_audit(endpoint: str, **meta) -> AuditTrail | NullAuditTrail:
@@ -385,14 +388,15 @@ def create_router(config: AcaiConfig | None = None,
         for d in (workflows_dir, _builtin_wf_dir):
             if not os.path.isdir(d):
                 continue
-            for fname in os.listdir(d):
-                if not fname.endswith(".json"):
+            for entry in os.listdir(d):
+                defn = os.path.join(d, entry, "definition.json")
+                if not os.path.isfile(defn):
                     continue
-                wf_id = fname[:-5]
+                wf_id = entry
                 if any(g["kind"] == f"workflow:{wf_id}" for g in graphs):
                     continue
                 try:
-                    with open(os.path.join(d, fname)) as f:
+                    with open(defn) as f:
                         spec = json.load(f)
                     graphs.append({
                         "kind": f"workflow:{wf_id}",
@@ -417,14 +421,18 @@ def create_router(config: AcaiConfig | None = None,
         graph_kind = data.get("graph", "converse")
 
         workflow_spec = None
+        workflow_dir = None
         if graph_kind.startswith("workflow:"):
             wf_id = graph_kind[len("workflow:"):]
-            wf_path = os.path.join(workflows_dir, f"{wf_id}.json")
+            wf_dir = os.path.join(workflows_dir, wf_id)
+            wf_path = os.path.join(wf_dir, "definition.json")
             if not os.path.isfile(wf_path):
-                wf_path = os.path.join(_builtin_wf_dir, f"{wf_id}.json")
+                wf_dir = os.path.join(_builtin_wf_dir, wf_id)
+                wf_path = os.path.join(wf_dir, "definition.json")
             if os.path.isfile(wf_path):
                 with open(wf_path) as f:
                     workflow_spec = json.load(f)
+                workflow_dir = wf_dir
                 graph_kind = "workflow"
             else:
                 return JSONResponse({"error": f"workflow '{wf_id}' not found"}, status_code=404)
@@ -445,8 +453,7 @@ def create_router(config: AcaiConfig | None = None,
             )
             conversation = meta.id
 
-        if not ephemeral:
-            chat.append(conversation, {"role": "user", "content": message})
+        chat.append(conversation, {"role": "user", "content": message})
 
         provider_override = None
         if provider_name and provider_name != "auto":
@@ -459,15 +466,17 @@ def create_router(config: AcaiConfig | None = None,
 
         work = {
             "message": message,
-            "conversation": "" if ephemeral else conversation,
+            "conversation": conversation,
             "agent": agent_name,
             "project": project,
-            "spec_path": "" if ephemeral else chat._msg_path(conversation),
+            "spec_path": chat._msg_path(conversation),
             "stream_id": conversation,
             "provider_override": provider_override,
         }
         if workflow_spec:
             work["workflow_spec"] = workflow_spec
+        if workflow_dir:
+            work["workflow_dir"] = workflow_dir
 
         def _sse(event: str, data: dict) -> str:
             return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
@@ -615,23 +624,40 @@ def create_router(config: AcaiConfig | None = None,
     workflows_dir = os.path.join(config.workspace, "workflows")
     os.makedirs(workflows_dir, exist_ok=True)
 
-    _builtin_wf_dir = os.path.join(os.path.dirname(__file__), os.pardir, "agents", "dynamic")
+    # Migrate legacy flat-file user workflows (<id>.json -> <id>/definition.json)
+    for _fname in list(os.listdir(workflows_dir)):
+        if _fname.endswith(".json") and os.path.isfile(os.path.join(workflows_dir, _fname)):
+            _wf_id = _fname[:-5]
+            _new_dir = os.path.join(workflows_dir, _wf_id)
+            _new_path = os.path.join(_new_dir, "definition.json")
+            if not os.path.isfile(_new_path):
+                os.makedirs(_new_dir, exist_ok=True)
+                os.rename(
+                    os.path.join(workflows_dir, _fname),
+                    _new_path,
+                )
+                log.info("migrated user workflow %s to %s", _fname, _new_path)
+            else:
+                os.remove(os.path.join(workflows_dir, _fname))
+                log.info("removed stale flat-file workflow %s (directory already exists)", _fname)
+
+    _builtin_wf_dir = os.path.join(os.path.dirname(__file__), os.pardir, "workflows")
     _builtin_wf_dir = os.path.normpath(_builtin_wf_dir)
 
     def _scan_wf_dir(directory: str, builtin: bool) -> list[dict]:
         results = []
         if not os.path.isdir(directory):
             return results
-        for fname in sorted(os.listdir(directory)):
-            if not fname.endswith(".json"):
+        for entry in sorted(os.listdir(directory)):
+            defn = os.path.join(directory, entry, "definition.json")
+            if not os.path.isfile(defn):
                 continue
-            path = os.path.join(directory, fname)
             try:
-                with open(path) as f:
+                with open(defn) as f:
                     spec = json.load(f)
                 results.append({
-                    "id": spec.get("id", fname[:-5]),
-                    "name": spec.get("name", fname[:-5]),
+                    "id": spec.get("id", entry),
+                    "name": spec.get("name", entry),
                     "description": spec.get("description", ""),
                     "node_count": len(spec.get("nodes", [])),
                     "edge_count": len(spec.get("edges", [])),
@@ -653,6 +679,15 @@ def create_router(config: AcaiConfig | None = None,
         return {"agent": agent_name,
                 "inputs": agent_store.template_inputs(agent_name)}
 
+    @router.get("/workflows/tool-definitions")
+    def get_tool_definitions():
+        """Return all registered tools with their parameter schemas.
+
+        Used by the Skill Call node to populate its tool dropdown and
+        dynamically generate input pins.
+        """
+        return tool_registry.mcp_definitions()
+
     @router.get("/workflows")
     def list_workflows():
         user_wfs = _scan_wf_dir(workflows_dir, builtin=False)
@@ -663,13 +698,13 @@ def create_router(config: AcaiConfig | None = None,
 
     @router.get("/workflows/{workflow_id}")
     def get_workflow(workflow_id: str):
-        user_path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        user_path = os.path.join(workflows_dir, workflow_id, "definition.json")
         if os.path.isfile(user_path):
             with open(user_path) as f:
                 spec = json.load(f)
             spec["builtin"] = False
             return spec
-        builtin_path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
+        builtin_path = os.path.join(_builtin_wf_dir, workflow_id, "definition.json")
         if os.path.isfile(builtin_path):
             with open(builtin_path) as f:
                 spec = json.load(f)
@@ -684,7 +719,9 @@ def create_router(config: AcaiConfig | None = None,
         if not wf_id:
             return JSONResponse({"error": "id is required"}, status_code=400)
         data.setdefault("name", wf_id)
-        path = os.path.join(workflows_dir, f"{wf_id}.json")
+        wf_dir = os.path.join(workflows_dir, wf_id)
+        os.makedirs(wf_dir, exist_ok=True)
+        path = os.path.join(wf_dir, "definition.json")
         with open(path, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         return data
@@ -695,8 +732,9 @@ def create_router(config: AcaiConfig | None = None,
         data = await _json_body(request)
         data["id"] = workflow_id
         data.setdefault("name", workflow_id)
-        path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
-        os.makedirs(_builtin_wf_dir, exist_ok=True)
+        wf_dir = os.path.join(_builtin_wf_dir, workflow_id)
+        os.makedirs(wf_dir, exist_ok=True)
+        path = os.path.join(wf_dir, "definition.json")
         with open(path, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         return data
@@ -706,40 +744,70 @@ def create_router(config: AcaiConfig | None = None,
         data = await _json_body(request)
         data["id"] = workflow_id
         data.setdefault("name", workflow_id)
-        path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        wf_dir = os.path.join(workflows_dir, workflow_id)
+        os.makedirs(wf_dir, exist_ok=True)
+        path = os.path.join(wf_dir, "definition.json")
         with open(path, "w") as f:
             json.dump(data, f, indent=2, ensure_ascii=False)
         return data
 
     @router.delete("/workflows/{workflow_id}")
     def delete_workflow(workflow_id: str):
-        path = os.path.join(workflows_dir, f"{workflow_id}.json")
-        if os.path.isfile(path):
-            os.remove(path)
+        import shutil as _shutil
+        wf_dir = os.path.join(workflows_dir, workflow_id)
+        if os.path.isdir(wf_dir):
+            _shutil.rmtree(wf_dir)
         return {"deleted": True}
+
+    @router.post("/workflows/validate")
+    async def validate_workflow_spec(request: Request):
+        """Validate a workflow spec posted as JSON body."""
+        from acai.tasks.typecheck import typecheck
+
+        spec = await _json_body(request)
+        td = tool_registry.mcp_definitions() if tool_registry else []
+        diags = typecheck(spec, tool_defs=td)
+        errors = [d for d in diags if d.get("severity") == "error"]
+        warnings = [d for d in diags if d.get("severity") == "warning"]
+        return {
+            "diagnostics": diags,
+            "errors": errors,
+            "warnings": warnings,
+            "valid": len(errors) == 0,
+        }
 
     @router.post("/workflows/{workflow_id}/validate")
     def validate_workflow_endpoint(workflow_id: str):
-        """Validate pin-type compatibility for all data edges."""
-        from acai.tasks.nodes import validate_workflow
+        """Validate a saved workflow by id."""
+        from acai.tasks.typecheck import typecheck
 
-        user_path = os.path.join(workflows_dir, f"{workflow_id}.json")
-        builtin_path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
+        user_path = os.path.join(workflows_dir, workflow_id, "definition.json")
+        builtin_path = os.path.join(_builtin_wf_dir, workflow_id, "definition.json")
         path = user_path if os.path.isfile(user_path) else builtin_path
         if not os.path.isfile(path):
             return JSONResponse({"error": "not found"}, status_code=404)
         with open(path) as f:
             spec = json.load(f)
-        errors = validate_workflow(spec)
-        return {"errors": errors, "valid": len(errors) == 0}
+        td = tool_registry.mcp_definitions() if tool_registry else []
+        diags = typecheck(spec, tool_defs=td)
+        errors = [d for d in diags if d.get("severity") == "error"]
+        warnings = [d for d in diags if d.get("severity") == "warning"]
+        return {
+            "diagnostics": diags,
+            "errors": errors,
+            "warnings": warnings,
+            "valid": len(errors) == 0,
+        }
 
     @router.post("/workflows/{workflow_id}/run")
     async def run_workflow(workflow_id: str, request: Request):
         import traceback as _tb
 
-        path = os.path.join(workflows_dir, f"{workflow_id}.json")
+        wf_dir = os.path.join(workflows_dir, workflow_id)
+        path = os.path.join(wf_dir, "definition.json")
         if not os.path.isfile(path):
-            path = os.path.join(_builtin_wf_dir, f"{workflow_id}.json")
+            wf_dir = os.path.join(_builtin_wf_dir, workflow_id)
+            path = os.path.join(wf_dir, "definition.json")
         if not os.path.isfile(path):
             return JSONResponse({"error": "workflow not found"}, status_code=404)
         with open(path) as f:
@@ -777,6 +845,7 @@ def create_router(config: AcaiConfig | None = None,
             "conversation": conversation_id,
             "conversation_preview": conversation_preview,
             "workflow_spec": spec,
+            "workflow_dir": wf_dir,
             "stream_id": conversation_id or f"test-{workflow_id}",
         }
 
@@ -1666,7 +1735,7 @@ def create_router(config: AcaiConfig | None = None,
         from acai.orchestrator.config import config_to_dict, save_config
 
         data = await _json_body(request)
-        for section_name in ("sandbox", "worker", "git", "queue", "audit"):
+        for section_name in ("sandbox", "worker", "git", "queue", "audit", "ci"):
             patch = data.get(section_name)
             if not isinstance(patch, dict):
                 continue
