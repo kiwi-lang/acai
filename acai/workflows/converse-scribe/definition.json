@@ -7,8 +7,8 @@
       "id": "start",
       "type": "start",
       "position": {
-        "x": -2292.516932833612,
-        "y": -464.6575597176297
+        "x": -2144.2806184639167,
+        "y": -474.74166273597626
       },
       "data": {
         "label": "Start",
@@ -16,49 +16,11 @@
       }
     },
     {
-      "id": "n_1_mo4ugniq",
-      "type": "agent_call",
-      "position": {
-        "x": -2035.37763811031,
-        "y": -912.8292093372261
-      },
-      "data": {
-        "label": "Curator",
-        "agent": "curator",
-        "stream_mode": "token"
-      }
-    },
-    {
-      "id": "acc_curator",
-      "type": "accumulate",
-      "position": {
-        "x": -1688.4995142775547,
-        "y": -1027.7335064461693
-      },
-      "data": {
-        "label": "Accumulate",
-        "event_mode": "curator_token"
-      }
-    },
-    {
-      "id": "n_5_mo4uhk9u",
-      "type": "tool_followup_loop",
-      "position": {
-        "x": -1458.3276534140543,
-        "y": -961.501182813748
-      },
-      "data": {
-        "label": "Tool Loop",
-        "event_mode": "curator_token",
-        "follow_up": true
-      }
-    },
-    {
       "id": "converse",
       "type": "agent_call",
       "position": {
-        "x": -871.6137231138525,
-        "y": -696.3804263974879
+        "x": -1154.9770179293923,
+        "y": -716.5486324341812
       },
       "data": {
         "label": "Converse",
@@ -69,8 +31,8 @@
       "id": "acc_converse",
       "type": "accumulate",
       "position": {
-        "x": -617.6032437051018,
-        "y": -765.4816977932065
+        "x": -920.1263342555002,
+        "y": -729.1789269271587
       },
       "data": {
         "label": "Accumulate"
@@ -80,49 +42,12 @@
       "id": "n_5_mo4x3s85",
       "type": "tool_followup_loop",
       "position": {
-        "x": -332.5098572387104,
-        "y": -792.6645518815128
+        "x": -574.5283296790291,
+        "y": -572.8311060815566
       },
       "data": {
         "label": "Tool Loop",
         "follow_up": true
-      }
-    },
-    {
-      "id": "n_15_mo4ujmap",
-      "type": "agent_call",
-      "position": {
-        "x": 460.70960531147796,
-        "y": -510.70790391276387
-      },
-      "data": {
-        "label": "Scribe",
-        "agent": "scribe"
-      }
-    },
-    {
-      "id": "acc_scribe",
-      "type": "accumulate",
-      "position": {
-        "x": 709.7541304752177,
-        "y": -620.7800083941148
-      },
-      "data": {
-        "label": "Accumulate",
-        "event_mode": "scribe_token"
-      }
-    },
-    {
-      "id": "n_17_mo4ukej5",
-      "type": "tool_followup_loop",
-      "position": {
-        "x": 921.3970497730413,
-        "y": -510.6204174545663
-      },
-      "data": {
-        "label": "Tool Loop",
-        "event_mode": "scribe_token",
-        "follow_up": "true"
       }
     },
     {
@@ -140,30 +65,19 @@
       "id": "n_1_mo52z8n2",
       "type": "parse_knowledge",
       "position": {
-        "x": -1087.439685186288,
-        "y": -683.33839887204
+        "x": -1501.8963192403337,
+        "y": -716.6159388325839
       },
       "data": {
         "label": "Parse Knowledge"
       }
     },
     {
-      "id": "n_3_mo53gsxy",
-      "type": "content",
-      "position": {
-        "x": -1267.1087017079842,
-        "y": -963.7198082273511
-      },
-      "data": {
-        "label": "Content"
-      }
-    },
-    {
       "id": "n_5_mo53juaq",
       "type": "append",
       "position": {
-        "x": -112.70011673525175,
-        "y": -587.3139409689152
+        "x": -71.35529436003064,
+        "y": -655.8858414936722
       },
       "data": {
         "label": "Append"
@@ -186,8 +100,8 @@
       "id": "n_3_mo53qsly",
       "type": "background_agent",
       "position": {
-        "x": 703.8989609696225,
-        "y": -850.7646913264998
+        "x": 315.660994763278,
+        "y": -651.0994515632369
       },
       "data": {
         "label": "Background Agent",
@@ -197,54 +111,6 @@
     }
   ],
   "edges": [
-    {
-      "id": "e_curator_stream_acc",
-      "source": "n_1_mo4ugniq",
-      "target": "acc_curator",
-      "sourceHandle": "data_stream",
-      "targetHandle": "data_stream",
-      "type": "data"
-    },
-    {
-      "id": "e_curator_exec_acc",
-      "source": "n_1_mo4ugniq",
-      "target": "acc_curator",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "e_curator_payload_tl",
-      "source": "n_1_mo4ugniq",
-      "target": "n_5_mo4uhk9u",
-      "sourceHandle": "data_payload",
-      "targetHandle": "data_payload",
-      "type": "data"
-    },
-    {
-      "id": "e_acc_curator_exec_tl",
-      "source": "acc_curator",
-      "target": "n_5_mo4uhk9u",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "e_acc_curator_resp_tl",
-      "source": "acc_curator",
-      "target": "n_5_mo4uhk9u",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_response_in",
-      "type": "data"
-    },
-    {
-      "id": "e_acc_curator_tc_tl",
-      "source": "acc_curator",
-      "target": "n_5_mo4uhk9u",
-      "sourceHandle": "data_tool_calls",
-      "targetHandle": "data_tool_calls",
-      "type": "data"
-    },
     {
       "id": "e_converse_stream_acc",
       "source": "converse",
@@ -286,92 +152,12 @@
       "type": "data"
     },
     {
-      "id": "e_scribe_stream_acc",
-      "source": "n_15_mo4ujmap",
-      "target": "acc_scribe",
-      "sourceHandle": "data_stream",
-      "targetHandle": "data_stream",
-      "type": "data"
-    },
-    {
-      "id": "e_scribe_payload_tl",
-      "source": "n_15_mo4ujmap",
-      "target": "n_17_mo4ukej5",
-      "sourceHandle": "data_payload",
-      "targetHandle": "data_payload",
-      "type": "data"
-    },
-    {
-      "id": "e_acc_scribe_exec_tl",
-      "source": "acc_scribe",
-      "target": "n_17_mo4ukej5",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "e_acc_scribe_resp_tl",
-      "source": "acc_scribe",
-      "target": "n_17_mo4ukej5",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_response_in",
-      "type": "data"
-    },
-    {
-      "id": "e_acc_scribe_tc_tl",
-      "source": "acc_scribe",
-      "target": "n_17_mo4ukej5",
-      "sourceHandle": "data_tool_calls",
-      "targetHandle": "data_tool_calls",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_3_mo52abmjdata_result-n_15_mo4ujmapdata_context",
-      "source": "n_3_mo52abmj",
-      "target": "n_15_mo4ujmap",
-      "sourceHandle": "data_result",
-      "targetHandle": "data_context",
-      "type": "data"
-    },
-    {
       "id": "xy-edge__n_1_mo52z8n2data_knowledge_context-conversedata_knowledge_context",
       "source": "n_1_mo52z8n2",
       "target": "converse",
       "sourceHandle": "data_knowledge_context",
       "targetHandle": "data_knowledge_context",
       "type": "data"
-    },
-    {
-      "id": "xy-edge__n_5_mo4uhk9udata_response-n_3_mo53gsxydata_message",
-      "source": "n_5_mo4uhk9u",
-      "target": "n_3_mo53gsxy",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_message",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_5_mo4uhk9uexec_out-n_3_mo53gsxyexec_in",
-      "source": "n_5_mo4uhk9u",
-      "target": "n_3_mo53gsxy",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "xy-edge__n_3_mo53gsxydata_content-n_1_mo52z8n2data_text",
-      "source": "n_3_mo53gsxy",
-      "target": "n_1_mo52z8n2",
-      "sourceHandle": "data_content",
-      "targetHandle": "data_text",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_3_mo53gsxyexec_out-n_1_mo52z8n2exec_in",
-      "source": "n_3_mo53gsxy",
-      "target": "n_1_mo52z8n2",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
     },
     {
       "id": "xy-edge__n_1_mo52z8n2exec_out-converseexec_in",
@@ -462,28 +248,12 @@
       "type": "exec"
     },
     {
-      "id": "xy-edge__n_15_mo4ujmapexec_out-acc_scribeexec_in",
-      "source": "n_15_mo4ujmap",
-      "target": "acc_scribe",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
       "id": "xy-edge__startexec_out-n_1_mo53pssiexec_in",
       "source": "start",
       "target": "n_1_mo53pssi",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
-    },
-    {
-      "id": "xy-edge__startdata_conversation-n_1_mo4ugniqdata_context",
-      "source": "start",
-      "target": "n_1_mo4ugniq",
-      "sourceHandle": "data_conversation",
-      "targetHandle": "data_context",
-      "type": "data"
     },
     {
       "id": "xy-edge__startdata_conversation-n_1_mo53pssidata_context",

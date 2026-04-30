@@ -30,6 +30,11 @@ log = logging.getLogger(__name__)
 _PACKAGE_AGENTS_DIR = str(Path(__file__).resolve().parent.parent / "agents")
 
 
+def _read(path: str) -> str:
+    with open(path) as f:
+        return f.read()
+
+
 # ------------------------------------------------------------------
 # Dataclasses
 # ------------------------------------------------------------------
@@ -274,21 +279,35 @@ class AgentStore:
     def read_template(self, name: str) -> str:
         ws_path = self._tpl_path(self._ws_dir(name))
         if os.path.isfile(ws_path):
-            with open(ws_path) as f:
-                return f.read()
+            return _read(ws_path)
         bi = self._bi_dir(name)
         if bi is not None:
             bi_path = self._tpl_path(bi)
             if os.path.isfile(bi_path):
-                with open(bi_path) as f:
-                    return f.read()
+                return _read(bi_path)
         bi_default = self._bi_dir("default")
         if bi_default is not None:
             default_path = self._tpl_path(bi_default)
             if os.path.isfile(default_path):
-                with open(default_path) as f:
-                    return f.read()
+                log.warning(
+                    "!! MISSING TEMPLATE: agent '%s' has no system.j2 — "
+                    "falling back to default agent template. "
+                    "Create %s to fix this.",
+                    name,
+                    self._tpl_path(self._ws_dir(name)),
+                )
+                return _read(default_path)
         return ""
+
+    def has_template(self, name: str) -> bool:
+        """Return True if *name* has its own template (not the default fallback)."""
+        ws_path = self._tpl_path(self._ws_dir(name))
+        if os.path.isfile(ws_path):
+            return True
+        bi = self._bi_dir(name)
+        if bi is not None and os.path.isfile(self._tpl_path(bi)):
+            return True
+        return False
 
     def save_template(self, name: str, content: str) -> None:
         """Save a template to the workspace layer."""

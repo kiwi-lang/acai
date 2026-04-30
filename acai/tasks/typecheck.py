@@ -110,6 +110,8 @@ def typecheck(
     spec: dict,
     *,
     tool_defs: list[dict] | None = None,
+    agent_store: Any | None = None,
+    workflow_dir: str = "",
 ) -> list[dict]:
     """Run all checks on *spec* and return a list of diagnostics.
 
@@ -121,6 +123,10 @@ def typecheck(
         Optional MCP tool definitions (as returned by the
         ``/workflows/tool-definitions`` endpoint).  Forwarded to
         each node's ``dynamic_pins()`` method.
+    agent_store:
+        Optional :class:`AgentStore` used to check agent templates.
+    workflow_dir:
+        Optional workflow directory path for resolving workflow-local agents.
     """
     nodes_list: list[dict] = spec.get("nodes", [])
     edges_list: list[dict] = spec.get("edges", [])
@@ -304,5 +310,41 @@ def typecheck(
                 f"{_node_label(node)}: unreachable from any Start node"
             ),
         })
+
+    # ── 7. missing agent templates ────────────────────────────────
+    if agent_store is not None:
+        import os
+
+        _agent_node_types = {"agent_call", "background_agent"}
+
+        for node in nodes_list:
+            ntype = node.get("type", "")
+            if ntype not in _agent_node_types:
+                continue
+            agent_name = (node.get("data") or {}).get("agent", "")
+            if not agent_name:
+                continue
+
+            has_tpl = False
+            if workflow_dir:
+                wf_tpl = os.path.join(
+                    workflow_dir, "agents", agent_name, "system.j2")
+                if os.path.isfile(wf_tpl):
+                    has_tpl = True
+
+            if not has_tpl:
+                has_tpl = agent_store.has_template(agent_name)
+
+            if not has_tpl:
+                diags.append({
+                    "severity": "warning",
+                    "code": "missing_template",
+                    "node_id": node["id"],
+                    "message": (
+                        f"{_node_label(node)}: agent '{agent_name}' has no "
+                        f"system.j2 template — will fall back to the "
+                        f"default agent prompt"
+                    ),
+                })
 
     return diags

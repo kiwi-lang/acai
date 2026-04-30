@@ -1,0 +1,25 @@
+{%- set system_prompt -%}
+You are {{ agent.name }}{% if agent.description %}, {{ agent.description }}{% endif %}.
+{% if task.project_obj %}
+
+You are working on project **{{ task.project_obj.name }}** ({{ task.project_obj.language }}).
+{% if task.project_spec %}
+
+## Project Specification
+{{ task.project_spec }}
+{% endif %}
+{% endif %}
+{% if tools_description %}
+
+## Available Tools
+{{ tools_description }}
+{% endif %}
+
+Answer questions, suggest plans, and create tasks when asked.
+{%- endset -%}
+[
+  {"role": "system", "content": {{ system_prompt | tojson }}}
+{% for msg in messages %},
+  {"role": {{ msg.role | tojson }}, "content": {{ msg.content | tojson }}}
+{% endfor %}
+]

@@ -955,14 +955,35 @@ def create_router(config: AcaiConfig | None = None,
                 f.write(readme)
         return {"created": True, "qualified_name": f"{ns}.{name}"}
 
+    def _resolve_wf_dir(workflow_id: str) -> str:
+        """Return the workflow directory (user or builtin), or ''."""
+        for base in (workflows_dir, _builtin_wf_dir):
+            d = os.path.join(base, workflow_id)
+            if os.path.isdir(d):
+                return d
+        return ""
+
     @router.post("/workflows/validate")
     async def validate_workflow_spec(request: Request):
         """Validate a workflow spec posted as JSON body."""
         from acai.tasks.typecheck import typecheck
 
         spec = await _json_body(request)
+        wf_id = spec.get("id", "")
+        wf_dir = _resolve_wf_dir(wf_id) if wf_id else ""
         td = tool_registry.mcp_definitions() if tool_registry else []
-        diags = typecheck(spec, tool_defs=td)
+
+        extra_dirs = []
+        if wf_dir:
+            agents_sub = os.path.join(wf_dir, "agents")
+            if os.path.isdir(agents_sub):
+                extra_dirs.append(agents_sub)
+
+        with agent_store.scoped(*extra_dirs):
+            diags = typecheck(
+                spec, tool_defs=td,
+                agent_store=agent_store, workflow_dir=wf_dir,
+            )
         errors = [d for d in diags if d.get("severity") == "error"]
         warnings = [d for d in diags if d.get("severity") == "warning"]
         return {
@@ -985,7 +1006,18 @@ def create_router(config: AcaiConfig | None = None,
         with open(path) as f:
             spec = json.load(f)
         td = tool_registry.mcp_definitions() if tool_registry else []
-        diags = typecheck(spec, tool_defs=td)
+        wf_dir = os.path.dirname(path)
+
+        extra_dirs = []
+        agents_sub = os.path.join(wf_dir, "agents")
+        if os.path.isdir(agents_sub):
+            extra_dirs.append(agents_sub)
+
+        with agent_store.scoped(*extra_dirs):
+            diags = typecheck(
+                spec, tool_defs=td,
+                agent_store=agent_store, workflow_dir=wf_dir,
+            )
         errors = [d for d in diags if d.get("severity") == "error"]
         warnings = [d for d in diags if d.get("severity") == "warning"]
         return {
