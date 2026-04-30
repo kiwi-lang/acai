@@ -1,11 +1,11 @@
-"""Bubblewrap (bwrap) sandbox backend.
+"""Bubblewrap (bwrap) sandbox backend — **experimental**.
 
 Runs ``acai mcp`` inside a ``bwrap`` user-namespace sandbox on the
 host.  No container image is needed — the host Python environment is
 re-used with restricted filesystem and network access.
 
-Status: **stub** — raises ``NotImplementedError`` until the backend
-is fleshed out.
+Status: **experimental / stub** — raises ``NotImplementedError``.
+Use ``podman`` (the default) for production workloads.
 """
 
 from __future__ import annotations

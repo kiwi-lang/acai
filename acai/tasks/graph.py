@@ -176,6 +176,8 @@ class TaskGraph:
         self._allowed_tools: set[str] | None = None
         self._last_work: dict | None = None
         self._agent_uses_sandbox: bool = False
+        self._agent_scope: str = "global"
+        self._scope_context: dict = {}
         self._workflow_dir: str | None = None
 
     @classmethod
@@ -219,9 +221,11 @@ class TaskGraph:
             return None, ""
 
         allowed_perms = set(agent_def.tool_permissions) if agent_def.tool_permissions else None
+        allowed_res = set(agent_def.resource_permissions) if agent_def.resource_permissions else None
         tool_defs = self.tool_registry.mcp_definitions(
             namespaces=agent_def.tools,
             allowed_permissions=allowed_perms,
+            allowed_resources=allowed_res,
         )
         if not tool_defs:
             self._allowed_tools = set()
@@ -267,6 +271,9 @@ class TaskGraph:
             self._agent_uses_sandbox = bool(
                 agent_def and agent_def.uses_sandbox
             )
+
+            self._agent_scope = (agent_def.scope if agent_def else "global") or "global"
+            self._scope_context = self._build_scope_context(work, kwargs)
 
             task_proxy = _TaskProxy(
                 id=work.get("task_id", ""),
@@ -418,6 +425,9 @@ class TaskGraph:
         orchestrator always sends every tool call to the same worker
         endpoint.  Sandbox configuration is passed inside the
         ``context`` dict so the worker can start a sandbox lazily.
+
+        The ``project_path`` is included in context so the sandbox
+        proxy can scope each sandbox to a single project.
         """
         if self._allowed_tools is not None and tool_name not in self._allowed_tools:
             log.warning("blocked disallowed tool call: %s", tool_name)
@@ -425,6 +435,11 @@ class TaskGraph:
                 f"[Tool error] Tool '{tool_name}' is not permitted for this agent. "
                 "Check the agent's tool namespaces and permissions."
             )
+
+        scope_err = self._check_scope(tool_name, args)
+        if scope_err:
+            return scope_err
+
         from acai.orchestrator.dispatcher import dispatch_tool
 
         base_url = self.worker.url.rsplit("/worker", 1)[0]
@@ -434,10 +449,86 @@ class TaskGraph:
         }
         if self._agent_uses_sandbox:
             ctx["uses_sandbox"] = True
+
+        project_path = self._resolve_project_path()
+        if project_path:
+            ctx["project_path"] = project_path
+
         result = await dispatch_tool(base_url, tool_name, args, context=ctx)
         if result.error:
             return f"[Tool error] {result.error}"
         return result.text or ""
+
+    def _resolve_project_path(self) -> str:
+        """Resolve the project's filesystem path from the work dict."""
+        if self._last_work is None:
+            return ""
+        project_name = self._last_work.get("project", "")
+        if not project_name:
+            return ""
+        if self.projects is not None:
+            proj = self.projects.get(project_name)
+            if proj is not None and proj.path:
+                return proj.path
+        return ""
+
+    def _build_scope_context(self, work: dict, kwargs: dict) -> dict:
+        """Extract scope-binding identifiers from the work context.
+
+        When the agent has ``scope="project"``, this dict is used by
+        ``dispatch_tool`` to validate that tool arguments stay within
+        the current execution boundary.
+        """
+        import os
+
+        ctx: dict = {}
+
+        wf_dir = work.get("workflow_dir", "")
+        if wf_dir:
+            ctx["workflow_id"] = os.path.basename(wf_dir)
+
+        extra = kwargs.get("extra_context") or work.get("extra_context") or {}
+        if isinstance(extra, dict) and "workflow_id" in extra:
+            ctx["workflow_id"] = extra["workflow_id"]
+
+        if "workflow_id" in work:
+            ctx["workflow_id"] = work["workflow_id"]
+
+        project = work.get("project", "")
+        if project:
+            ctx["project"] = project
+
+        return ctx
+
+    def _check_scope(self, tool_name: str, args: dict) -> str:
+        """Validate tool arguments against the agent's scope context.
+
+        Returns an error string if the call is blocked, empty string
+        otherwise.
+        """
+        if self._agent_scope != "project" or not self._scope_context:
+            return ""
+        if self.tool_registry is None:
+            return ""
+        td = self.tool_registry.get(tool_name)
+        if td is None or not td.scope_key:
+            return ""
+
+        expected = self._scope_context.get(td.scope_key)
+        if not expected:
+            return ""
+
+        actual = args.get(td.scope_key)
+        if actual and actual != expected:
+            log.warning(
+                "scope violation: %s expected %s=%s, got %s",
+                tool_name, td.scope_key, expected, actual,
+            )
+            return (
+                f"[Scope error] Tool '{tool_name}' is scoped to the current project. "
+                f"Expected {td.scope_key}='{expected}', got '{actual}'."
+            )
+        return ""
 
     # ------------------------------------------------------------------
     # Helpers shared by all graph subclasses

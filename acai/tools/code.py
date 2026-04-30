@@ -14,7 +14,7 @@ import subprocess
 from acai.orchestrator.tools import tool
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("code:read",))
 def search(pattern: str, cwd: str = ".", file_glob: str = "", max_results: int = 50) -> str:
     """Search for a text pattern in project files using grep.
 
@@ -45,7 +45,7 @@ def search(pattern: str, cwd: str = ".", file_glob: str = "", max_results: int =
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("execute",), sandbox=True)
+@tool(permissions=("execute",), resources=("code:test",), sandbox=True)
 def run_tests(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     """Run the project test suite.
 
@@ -70,7 +70,7 @@ def run_tests(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     return _run(command, cwd, timeout)
 
 
-@tool(permissions=("execute",), sandbox=True)
+@tool(permissions=("execute",), resources=("code:lint",), sandbox=True)
 def lint(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     """Run the project linter.
 
@@ -92,7 +92,7 @@ def lint(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     return _run(command, cwd, timeout)
 
 
-@tool(permissions=("execute",), sandbox=True)
+@tool(permissions=("execute",), resources=("code:typecheck",), sandbox=True)
 def typecheck(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     """Run the project type checker.
 
@@ -114,7 +114,7 @@ def typecheck(cwd: str = ".", command: str = "", timeout: int = 120) -> str:
     return _run(command, cwd, timeout)
 
 
-@tool(permissions=("execute",), sandbox=True)
+@tool(permissions=("execute",), resources=("code:build",), sandbox=True)
 def build(cwd: str = ".", command: str = "", timeout: int = 300) -> str:
     """Build the project.
 

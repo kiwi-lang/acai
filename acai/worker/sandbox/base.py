@@ -104,18 +104,19 @@ def create_sandbox(cfg: SandboxConfig) -> Sandbox:
             image=cfg.image,
             container_port=port,
             runtime=runtime,
+            rootless=cfg.rootless,
         )
 
     if canonical == "bubblewrap":
-        from acai.worker.sandbox.bubblewrap import BubblewrapSandbox
+        from acai.worker.sandbox.experimental.bubblewrap import BubblewrapSandbox
         return BubblewrapSandbox(mcp_port=port)
 
     if canonical == "nsjail":
-        from acai.worker.sandbox.nsjail import NsjailSandbox
+        from acai.worker.sandbox.experimental.nsjail import NsjailSandbox
         return NsjailSandbox(mcp_port=port)
 
     if canonical == "firecracker":
-        from acai.worker.sandbox.firecracker import FirecrackerSandbox
+        from acai.worker.sandbox.experimental.firecracker import FirecrackerSandbox
         kwargs: dict = dict(mcp_port=port, vcpu_count=cfg.vcpu_count)
         if cfg.kernel:
             kwargs["kernel"] = cfg.kernel

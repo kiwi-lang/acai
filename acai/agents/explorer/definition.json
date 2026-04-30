@@ -1,9 +1,43 @@
 {
+  "id": "1141852e048a",
   "name": "explorer",
   "description": "a read-only codebase exploration specialist that rapidly finds files, searches code, and analyzes architecture",
   "role": "worker",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["search", "filesystem", "code", "meta", "shell"],
-  "max_iterations": 30
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "search",
+    "filesystem",
+    "code",
+    "meta",
+    "shell"
+  ],
+  "tool_permissions": [
+    "read"
+  ],
+  "resource_permissions": [
+    "code:build",
+    "files:delete",
+    "meta:read",
+    "shell:execute",
+    "files:read",
+    "code:lint",
+    "code:read",
+    "files:write",
+    "code:typecheck",
+    "code:test"
+  ],
+  "uses_sandbox": true,
+  "max_iterations": 30,
+  "approval_required": false,
+  "compressor": "compressor",
+  "created_at": "2026-04-29T21:36:17.074675+00:00",
+  "tags": []
 }

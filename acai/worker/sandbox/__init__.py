@@ -4,13 +4,16 @@ Each backend exposes an ``acai mcp`` tool server (HTTP) running
 inside a sandboxed environment.  The orchestrator routes tool calls
 to the sandbox endpoint instead of the worker's in-process tools.
 
-Supported backends:
+Backends:
 
-* **container** — Docker or Podman (auto-detected).
+* **container** — Podman *(default, recommended)* or Docker.
+* **none** — No sandbox; tools run in the worker process.
+
+Experimental (not production-ready):
+
 * **bubblewrap** — ``bwrap`` Linux user-namespace sandbox.
 * **nsjail** — Google nsjail process isolation.
 * **firecracker** — AWS Firecracker microVM isolation.
-* **none** — No sandbox; tools run in the worker process.
 
 Usage::
 

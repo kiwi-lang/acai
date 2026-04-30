@@ -1,8 +1,19 @@
-"""Docker / Podman sandbox backend.
+"""Podman / Docker sandbox backend.
 
 Starts a container running ``acai mcp`` and proxies tool calls to it.
-The container CLI (``docker`` or ``podman``) is auto-detected at
+The container CLI (``podman`` or ``docker``) is auto-detected at
 construction time but can be overridden.
+
+Rootless Podman
+~~~~~~~~~~~~~~~
+
+The default (and recommended) mode is **rootless Podman**.  This runs
+containers without root privileges.  Key adaptations:
+
+* ``--userns=keep-id`` maps the host UID/GID into the container so
+  bind-mounted files are owned by the current user.
+* Port resolution handles multi-line output (IPv4 + IPv6) from
+  ``podman port``.
 """
 
 from __future__ import annotations
@@ -20,11 +31,25 @@ log = logging.getLogger(__name__)
 
 
 def _detect_runtime() -> str:
-    """Return ``"docker"`` or ``"podman"`` depending on what is on PATH."""
+    """Return ``"podman"`` or ``"docker"`` depending on what is on PATH."""
     for candidate in ("podman", "docker"):
         if shutil.which(candidate):
             return candidate
-    raise RuntimeError("Neither docker nor podman found on PATH")
+    raise RuntimeError("Neither podman nor docker found on PATH")
+
+
+def _is_rootless(runtime: str) -> bool:
+    """Detect whether the runtime is running in rootless mode."""
+    if runtime != "podman":
+        return False
+    try:
+        proc = subprocess.run(
+            [runtime, "info", "--format", "{{.Host.Security.Rootless}}"],
+            capture_output=True, text=True, timeout=10,
+        )
+        return proc.stdout.strip().lower() == "true"
+    except Exception:
+        return os.getuid() != 0
 
 
 def _find_repo_root() -> str | None:
@@ -41,12 +66,16 @@ def _find_repo_root() -> str | None:
 
 
 class ContainerSandbox(Sandbox):
-    """Manages a Docker/Podman container running ``acai mcp``.
+    """Manages a Podman/Docker container running ``acai mcp``.
 
     The project worktree is bind-mounted at the **same absolute path**
     inside the container so that file paths are consistent between
     host and sandbox.  One container is started per *session_id* and
     reused until :meth:`stop` is called.
+
+    When *rootless* is ``True`` (the default for Podman), the
+    container uses ``--userns=keep-id`` so that files created inside
+    the container are owned by the host user — no root required.
     """
 
     def __init__(
@@ -54,9 +83,14 @@ class ContainerSandbox(Sandbox):
         image: str = "acai-sandbox",
         container_port: int = 9200,
         runtime: str | None = None,
+        rootless: bool | None = None,
     ):
         self.container_port = container_port
         self.runtime = runtime or _detect_runtime()
+        if rootless is None:
+            self.rootless = _is_rootless(self.runtime)
+        else:
+            self.rootless = rootless
         # Podman requires fully-qualified image names when no
         # unqualified-search registries are configured.
         if self.runtime == "podman" and "/" not in image:
@@ -198,6 +232,9 @@ class ContainerSandbox(Sandbox):
             "-w", abs_path,
         ]
 
+        if self.rootless:
+            cmd += ["--userns=keep-id"]
+
         if sandbox_config is not None:
             if sandbox_config.memory_limit:
                 cmd += ["--memory", sandbox_config.memory_limit]
@@ -214,15 +251,23 @@ class ContainerSandbox(Sandbox):
         return cmd
 
     def _resolve_host_port(self, name: str) -> int:
+        """Extract the host port from ``podman port`` / ``docker port``.
+
+        Rootless Podman may return multiple lines (IPv4 + IPv6)::
+
+            0.0.0.0:32768
+            [::]:32768
+
+        We take the first line and extract the port number.
+        """
         proc = subprocess.run(
             [self.runtime, "port", name, str(self.container_port)],
             capture_output=True, text=True,
         )
         if proc.returncode != 0:
             raise RuntimeError(f"failed to resolve port: {proc.stderr.strip()}")
-        mapping = proc.stdout.strip()
-        # "0.0.0.0:12345" or "[::]:12345"
-        port_str = mapping.rsplit(":", 1)[-1]
+        first_line = proc.stdout.strip().splitlines()[0]
+        port_str = first_line.rsplit(":", 1)[-1]
         return int(port_str)
 
     def _wait_healthy(self, retries: int = 60, interval: float = 1.0) -> None:

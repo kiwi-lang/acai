@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 # ── validation ────────────────────────────────────────────────────
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("workflows:validate",))
 def validate(workflow_spec: str) -> str:
     """Run the type checker / validator on a workflow spec and return diagnostics.
 
@@ -39,7 +39,7 @@ def validate(workflow_spec: str) -> str:
     return json.dumps(result, indent=2)
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("workflows:validate",), scope="project:workflow_id")
 def get_diagnostics(workflow_id: str) -> str:
     """Get validation diagnostics for a saved workflow.
 
@@ -56,7 +56,7 @@ def get_diagnostics(workflow_id: str) -> str:
 
 # ── workflow CRUD ─────────────────────────────────────────────────
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("workflows:update",), scope="project:workflow_id")
 def update(workflow_id: str, workflow_spec: str) -> str:
     """Save an updated workflow spec.  The spec must be the full JSON.
 
@@ -79,7 +79,7 @@ def update(workflow_id: str, workflow_spec: str) -> str:
 
 # ── test conversation ─────────────────────────────────────────────
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("conversations:read",))
 def read_test_conversation(conversation_id: str) -> str:
     """Read the messages from the test conversation.
 
@@ -130,7 +130,7 @@ def _workflow_dir(workflow_id: str) -> str:
     return os.path.join(workspace, "workflows", workflow_id)
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("agents:create",), scope="project:workflow_id")
 def create_agent(
     workflow_id: str,
     agent_name: str,
@@ -191,7 +191,7 @@ def create_agent(
     })
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("agents:update",), scope="project:workflow_id")
 def update_agent(
     workflow_id: str,
     agent_name: str,
@@ -248,7 +248,7 @@ def update_agent(
     return json.dumps({"updated": True, "agent": agent_name})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("agents:read",), scope="project:workflow_id")
 def read_agent(workflow_id: str, agent_name: str) -> str:
     """Read an agent definition and system prompt from a workflow.
 
@@ -279,7 +279,7 @@ def read_agent(workflow_id: str, agent_name: str) -> str:
 
 # ── skill management (inside workflow) ────────────────────────────
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("skills:create",), scope="project:workflow_id")
 def create_skill(
     workflow_id: str,
     namespace: str,
@@ -345,7 +345,7 @@ def create_skill(
     })
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("skills:update",), scope="project:workflow_id")
 def update_skill(
     workflow_id: str,
     namespace: str,
@@ -394,7 +394,7 @@ def update_skill(
     return json.dumps({"updated": True, "skill": f"{namespace}.{name}"})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("skills:read",), scope="project:workflow_id")
 def read_skill(workflow_id: str, namespace: str, name: str) -> str:
     """Read a skill's definition and code from a workflow.
 

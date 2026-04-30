@@ -36,7 +36,7 @@ class _StripHTML(HTMLParser):
         return raw.strip()
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("web:fetch",))
 def fetch_url(url: str, max_chars: int = 80000) -> str:
     """Fetch a URL and return visible text (HTML stripped to plain text).
 
@@ -71,7 +71,7 @@ def fetch_url(url: str, max_chars: int = 80000) -> str:
         return json.dumps({"error": str(exc), "url": url})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("web:search",))
 def search_web(query: str, max_related: int = 8) -> str:
     """Search the web using DuckDuckGo instant answers (no API key).
 

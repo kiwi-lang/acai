@@ -1,10 +1,34 @@
 {
+  "id": "9df9dcad9ae5",
   "name": "scribe",
   "description": "a knowledge management specialist that maintains persistent documents from conversations",
   "role": "system",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["knowledge"],
-  "tool_permissions": ["read", "write"],
-  "compressor": ""
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "knowledge"
+  ],
+  "tool_permissions": [
+    "read",
+    "write"
+  ],
+  "resource_permissions": [
+    "knowledge:create",
+    "knowledge:delete",
+    "knowledge:read",
+    "knowledge:update"
+  ],
+  "uses_sandbox": true,
+  "max_iterations": 20,
+  "approval_required": false,
+  "compressor": "",
+  "created_at": "2026-04-29T21:36:29.470030+00:00",
+  "tags": []
 }

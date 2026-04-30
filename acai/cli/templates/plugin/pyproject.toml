@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "acai-plugin-{{name}}"
+version = "0.1.0"
+description = "Acai plugin: {{name}}"
+requires-python = ">=3.10"
+dependencies = ["acai-swarm"]
+
+[tool.setuptools.packages.find]
+include = ["acai*"]
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.j2", "*.md"]

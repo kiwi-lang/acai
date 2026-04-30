@@ -277,6 +277,8 @@ export interface AgentDef {
     context_sources: string[];
     tools: string[];
     tool_permissions: string[];
+    resource_permissions: string[];
+    scope: string;
     uses_sandbox: boolean;
     max_iterations: number;
     approval_required: boolean;

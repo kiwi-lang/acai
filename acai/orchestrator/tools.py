@@ -55,12 +55,35 @@ log = logging.getLogger(__name__)
 VALID_PERMISSIONS = frozenset({"read", "write", "execute"})
 
 
+VALID_SCOPES = frozenset({"global", "project"})
+
+
+def _parse_scope(scope: str) -> tuple[str, str]:
+    """Parse a ``"level:key"`` scope string into ``(level, key)``.
+
+    Examples::
+
+        "project:workflow_id"  → ("project", "workflow_id")
+        "global"               → ("global", "")
+        ""                     → ("global", "")
+    """
+    if ":" in scope:
+        level, key = scope.split(":", 1)
+        if level in VALID_SCOPES:
+            return level, key
+    if scope in VALID_SCOPES:
+        return scope, ""
+    return "global", ""
+
+
 def tool(
     *,
     gpu: bool = False,
     name: str | None = None,
     permissions: tuple[str, ...] | list[str] = ("read",),
+    resources: tuple[str, ...] | list[str] = (),
     sandbox: bool = False,
+    scope: str = "",
 ):
     """Mark a function with tool constraints.
 
@@ -68,18 +91,39 @@ def tool(
     that automatically.  Use this only when you need to override
     defaults (e.g. ``gpu=True``, ``permissions=("read", "write")``).
 
-    Permissions:
+    Permissions (coarse, global):
         read    — inspects state without side effects
         write   — creates, modifies or deletes persistent state
         execute — runs arbitrary commands / subprocesses
+
+    Resources (fine-grained, scoped ``resource:verb``)::
+
+        @tool(resources=("agents:create", "agents:read"))
+
+    Scope (project isolation)::
+
+        @tool(scope="project:workflow_id")
+
+    The format is ``"<level>:<key>"`` where *level* is ``global``
+    or ``project`` and *key* is the function parameter that
+    identifies the scope-bound resource.  When omitted, the tool
+    has no scope restriction.
 
     When ``sandbox=True`` the tool must run inside an isolated sandbox
     when the agent has ``uses_sandbox`` enabled.
     """
     perms = tuple(p for p in permissions if p in VALID_PERMISSIONS) or ("read",)
+    res = tuple(r for r in resources if ":" in r)
 
     def decorator(fn: Callable) -> Callable:
-        fn._tool_meta = {"gpu": gpu, "name": name, "permissions": perms, "sandbox": sandbox}
+        fn._tool_meta = {
+            "gpu": gpu,
+            "name": name,
+            "permissions": perms,
+            "resources": res,
+            "sandbox": sandbox,
+            "scope": scope,
+        }
         return fn
     return decorator
 
@@ -157,7 +201,21 @@ class ToolDef:
     fn: Callable
     gpu: bool = False
     permissions: tuple[str, ...] = ("read",)
+    resources: tuple[str, ...] = ()
     sandbox: bool = False
+    scope: str = ""
+
+    @property
+    def scope_level(self) -> str:
+        """The scope level (``"global"`` or ``"project"``)."""
+        level, _ = _parse_scope(self.scope)
+        return level
+
+    @property
+    def scope_key(self) -> str:
+        """The parameter name bound to the scope (empty if unscoped)."""
+        _, key = _parse_scope(self.scope)
+        return key
 
 
 def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
@@ -166,7 +224,9 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
     tool_name = meta.get("name") or fn.__name__
     gpu = meta.get("gpu", False)
     permissions = tuple(meta.get("permissions", ("read",)))
+    resources = tuple(meta.get("resources", ()))
     sandbox_required = meta.get("sandbox", False)
+    scope = meta.get("scope", "")
     qualified = f"{namespace}.{tool_name}"
 
     hints = get_type_hints(fn)
@@ -209,7 +269,9 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
         fn=fn,
         gpu=gpu,
         permissions=permissions,
+        resources=resources,
         sandbox=sandbox_required,
+        scope=scope,
     )
 
 
@@ -240,6 +302,7 @@ class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolDef] = {}       # qualified_name → ToolDef
         self._namespaces: dict[str, list[str]] = {} # namespace → [qualified_name, …]
+        self.plugin_resources: list[dict] = []
 
     # ------------------------------------------------------------------
     # Registration
@@ -297,6 +360,18 @@ class ToolRegistry:
     def all_tools(self) -> list[ToolDef]:
         return list(self._tools.values())
 
+    def resource_permissions(self, namespace: str | None = None) -> list[str]:
+        """Return sorted unique ``resource:verb`` strings declared by tools.
+
+        If *namespace* is given, only tools in that namespace are
+        considered; otherwise all tools are scanned.
+        """
+        tools = self.tools_in(namespace) if namespace else self.all_tools()
+        perms: set[str] = set()
+        for td in tools:
+            perms.update(td.resources)
+        return sorted(perms)
+
     # ------------------------------------------------------------------
     # Call
     # ------------------------------------------------------------------
@@ -316,6 +391,7 @@ class ToolRegistry:
         self,
         namespaces: list[str] | None = None,
         allowed_permissions: set[str] | None = None,
+        allowed_resources: set[str] | None = None,
     ) -> list[dict]:
         """Return MCP-compatible tool definitions.
 
@@ -324,8 +400,12 @@ class ToolRegistry:
         namespaces.  For example, ``["skills"]`` matches ``skills``,
         ``skills.data``, ``skills.data.sub``, etc.
 
-        If *allowed_permissions* is given, only tools whose permissions
-        intersect with the allowed set are included.
+        If *allowed_permissions* is given, only tools whose global
+        permissions intersect with the allowed set are included.
+
+        If *allowed_resources* is given, only tools whose declared
+        ``resources`` are a **subset** of the allowed set are included
+        (tools with no resource requirements always pass).
         """
         defs: list[dict] = []
         for td in self._tools.values():
@@ -333,6 +413,9 @@ class ToolRegistry:
                 continue
             if allowed_permissions is not None:
                 if not set(td.permissions) & allowed_permissions:
+                    continue
+            if allowed_resources is not None and td.resources:
+                if not set(td.resources) <= allowed_resources:
                     continue
             defs.append({
                 "type": "function",
@@ -345,6 +428,8 @@ class ToolRegistry:
                         "required": td.required,
                     },
                     "permissions": list(td.permissions),
+                    "resources": list(td.resources),
+                    "scope": td.scope,
                 },
             })
         return defs
@@ -521,7 +606,7 @@ def _discover_in_package(package, registry: ToolRegistry) -> int:
     return count
 
 
-def _load_plugins(module, registry):
+def _load_plugins(module, registry, config=None):
     n_plugins = 0
     for finder, plugin_name, is_pkg in pkgutil.iter_modules(module.__path__, module.__name__ + "."):
         try:
@@ -541,9 +626,21 @@ def _load_plugins(module, registry):
             if added:
                 log.info("discovered %d tools from %s", added, plugin_name)
             n_plugins += added
+
+        register_fn = getattr(plugin_mod, "register", None)
+        if callable(register_fn):
+            try:
+                result = register_fn(registry, config)
+                if isinstance(result, dict):
+                    registry.plugin_resources.append(result)
+                    log.info("plugin %s registered resources: %s",
+                             plugin_name, list(result.keys()))
+            except Exception:
+                log.warning("plugin %s register() failed", plugin_name, exc_info=True)
+
     return n_plugins
 
-def discover_tools(*packages) -> ToolRegistry:
+def discover_tools(*packages, config=None) -> ToolRegistry:
     """Auto-discover tools from built-in modules and plugins.
 
     Scans:
@@ -553,6 +650,9 @@ def discover_tools(*packages) -> ToolRegistry:
     Every public function (not starting with ``_``) defined in a
     scanned module becomes a tool.  The module's file name is the
     namespace.
+
+    If *config* is provided it is forwarded to each plugin's
+    ``register(registry, config)`` hook.
     """
     registry = ToolRegistry()
 
@@ -566,7 +666,7 @@ def discover_tools(*packages) -> ToolRegistry:
     try:
         import acai.plugins as plugins_pkg
 
-        n_plugins = _load_plugins(plugins_pkg, registry)
+        n_plugins = _load_plugins(plugins_pkg, registry, config=config)
     except ImportError:
         pass
 

@@ -1,11 +1,42 @@
 {
+  "id": "17df1842f572",
   "name": "refiner",
   "description": "a task refinement specialist that helps users define clear, actionable work items",
   "role": "planner",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["tasks", "project", "search", "session", "filesystem"],
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "filesystem",
+    "project",
+    "session",
+    "search",
+    "tasks"
+  ],
   "tool_permissions": [
     "read"
-  ]
+  ],
+  "resource_permissions": [
+    "files:delete",
+    "files:read",
+    "files:write",
+    "project:read",
+    "session:read",
+    "session:write",
+    "tasks:create",
+    "tasks:read",
+    "tasks:update"
+  ],
+  "uses_sandbox": true,
+  "max_iterations": 20,
+  "approval_required": false,
+  "compressor": "compressor",
+  "created_at": "2026-04-29T21:35:53.844690+00:00",
+  "tags": []
 }

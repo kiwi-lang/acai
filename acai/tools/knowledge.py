@@ -27,7 +27,7 @@ def _require_client():
     return client
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("knowledge:create",))
 def create(
     subject: str,
     subsubject: str,
@@ -59,7 +59,7 @@ def create(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("knowledge:update",))
 def update(
     subject: str,
     subsubject: str,
@@ -85,7 +85,7 @@ def update(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("knowledge:update",))
 def append(
     subject: str,
     subsubject: str,
@@ -112,7 +112,7 @@ def append(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("knowledge:read",))
 def get(
     subject: str,
     subsubject: str,
@@ -134,7 +134,7 @@ def get(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("knowledge:read",))
 def list_documents(
     subject: str = "",
     subsubject: str = "",
@@ -163,7 +163,7 @@ def list_documents(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("knowledge:read",))
 def search(
     query: str,
     subject: str = "",
@@ -193,7 +193,7 @@ def search(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("knowledge:delete",))
 def delete(
     subject: str,
     subsubject: str,

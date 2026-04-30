@@ -1,11 +1,11 @@
-"""nsjail sandbox backend.
+"""nsjail sandbox backend — **experimental**.
 
 Runs ``acai mcp`` inside an ``nsjail`` process-level sandbox.
 Provides fine-grained control over syscalls, cgroups, and resource
 limits.
 
-Status: **stub** — raises ``NotImplementedError`` until the backend
-is fleshed out.
+Status: **experimental / stub** — raises ``NotImplementedError``.
+Use ``podman`` (the default) for production workloads.
 """
 
 from __future__ import annotations

@@ -8,7 +8,7 @@ from typing import Optional
 from acai.orchestrator.tools import tool
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("notebooks:read",))
 def read_notebook(path: str) -> str:
     """Load a notebook and return cell indices, types, and source previews.
 
@@ -39,7 +39,7 @@ def read_notebook(path: str) -> str:
     return json.dumps({"path": path, "nbformat": nb.get("nbformat"), "cells": summary})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("notebooks:write",))
 def edit_notebook_cell(
     notebook_path: str,
     new_source: str,

@@ -242,15 +242,23 @@ def create_router(config: AcaiConfig | None = None,
     knowledge = KnowledgeStore(knowledge_dir)
 
     from acai.orchestrator.tools import discover_tools
-    tool_registry = discover_tools()
+    tool_registry = discover_tools(config=config)
     from acai.tools.meta import _configure as configure_meta_tools
 
     configure_meta_tools(tool_registry)
+
+    for res in tool_registry.plugin_resources:
+        if res.get("agents_dir"):
+            agent_store.add_builtin_dir(res["agents_dir"])
 
     from acai.orchestrator.skill_store import SkillStore
     from acai.tools.skills import _configure as configure_skills
 
     skill_store = SkillStore(os.path.join(config.workspace, "skills"))
+    for res in tool_registry.plugin_resources:
+        if res.get("skills_dir"):
+            extra_skills = SkillStore(res["skills_dir"])
+            extra_skills.register_all(tool_registry)
     skill_store.register_all(tool_registry)
     configure_skills(skill_store)
 
@@ -648,6 +656,12 @@ def create_router(config: AcaiConfig | None = None,
     _builtin_wf_dir = os.path.join(os.path.dirname(__file__), os.pardir, "workflows")
     _builtin_wf_dir = os.path.normpath(_builtin_wf_dir)
 
+    _extra_wf_dirs: list[str] = []
+    for _res in tool_registry.plugin_resources:
+        _pwd = _res.get("workflows_dir", "")
+        if _pwd and os.path.isdir(_pwd):
+            _extra_wf_dirs.append(_pwd)
+
     def _scan_wf_dir(directory: str, builtin: bool) -> list[dict]:
         results = []
         if not os.path.isdir(directory):
@@ -717,6 +731,10 @@ def create_router(config: AcaiConfig | None = None,
         user_ids = {w["id"] for w in user_wfs}
         builtin_wfs = [w for w in _scan_wf_dir(_builtin_wf_dir, builtin=True)
                        if w["id"] not in user_ids]
+        for _wd in _extra_wf_dirs:
+            for _w in _scan_wf_dir(_wd, builtin=True):
+                if _w["id"] not in user_ids and _w["id"] not in {b["id"] for b in builtin_wfs}:
+                    builtin_wfs.append(_w)
         return builtin_wfs + user_wfs
 
     @router.get("/workflows/{workflow_id}")
@@ -865,6 +883,8 @@ def create_router(config: AcaiConfig | None = None,
             definition["tools"] = data["tools"]
         if data.get("tool_permissions"):
             definition["tool_permissions"] = data["tool_permissions"]
+        if data.get("resource_permissions"):
+            definition["resource_permissions"] = data["resource_permissions"]
         if data.get("context_sources"):
             definition["context_sources"] = data["context_sources"]
         if "max_iterations" in data:
@@ -877,6 +897,8 @@ def create_router(config: AcaiConfig | None = None,
             definition["tags"] = data["tags"]
         if data.get("avatar"):
             definition["avatar"] = data["avatar"]
+        if data.get("scope"):
+            definition["scope"] = data["scope"]
         with open(os.path.join(agent_dir, "definition.json"), "w") as f:
             json.dump(definition, f, indent=2)
         template = data.get("system_template", "")
@@ -2077,7 +2099,8 @@ def create_router(config: AcaiConfig | None = None,
         updatable = (
             "description", "role", "avatar", "provider", "output_format",
             "model_overrides", "system_template", "context_sources",
-            "tools", "uses_sandbox", "max_iterations", "approval_required", "tags",
+            "tools", "tool_permissions", "resource_permissions", "scope",
+            "uses_sandbox", "max_iterations", "approval_required", "tags",
         )
         for key in updatable:
             if key in data:
@@ -2142,9 +2165,12 @@ def create_router(config: AcaiConfig | None = None,
         result = []
         for ns in tool_registry.namespaces():
             tools = tool_registry.tools_in(ns)
+            has_project_scope = any(t.scope_level == "project" for t in tools)
             result.append({
                 "namespace": ns,
                 "tools": [t.qualified_name for t in tools],
+                "resource_permissions": tool_registry.resource_permissions(ns),
+                "has_project_scope": has_project_scope,
             })
         return result
 

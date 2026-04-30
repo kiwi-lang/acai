@@ -391,6 +391,8 @@ export async function updateAgentTemplate(name: string, content: string): Promis
 export interface ToolNamespace {
     namespace: string;
     tools: string[];
+    resource_permissions: string[];
+    has_project_scope: boolean;
 }
 
 export async function listToolNamespaces(): Promise<ToolNamespace[]> {
@@ -408,6 +410,8 @@ export interface ToolDefinition {
             required: string[];
         };
         permissions: string[];
+        resources: string[];
+        scope: string;
     };
 }
 

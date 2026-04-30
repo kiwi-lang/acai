@@ -29,14 +29,14 @@ def _get_registry() -> "ToolRegistry":
     return discover_tools()
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("meta:read",))
 def list_namespaces() -> str:
     """List all tool namespace strings (for picking a subset to enable)."""
     reg = _get_registry()
     return json.dumps({"namespaces": reg.namespaces()})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("meta:read",))
 def list_tools(namespace: str = "") -> str:
     """List tools, optionally restricted to one namespace.
 
@@ -54,13 +54,14 @@ def list_tools(namespace: str = "") -> str:
             "namespace": t.namespace,
             "description": t.description[:500] if t.description else "",
             "permissions": list(t.permissions),
+            "resources": list(t.resources),
         }
         for t in tools
     ]
     return json.dumps({"tools": out, "count": len(out)})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("meta:read",))
 def search_tools(query: str, max_results: int = 12) -> str:
     """Find tools whose name or description matches a keyword (tool discovery).
 

@@ -1,17 +1,74 @@
 {
+  "id": "6d7f37f109d4",
   "name": "coder",
   "description": "a research-driven software engineer that explores broadly before implementing",
   "role": "worker",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "ci",
+    "code",
+    "filesystem",
+    "git",
+    "make",
+    "meta",
+    "notebook",
+    "project",
+    "search",
+    "session",
+    "shell",
+    "tasks",
+    "ui",
+    "web"
+  ],
   "tool_permissions": [
     "read",
     "write",
     "execute"
   ],
-  "tools": [
-    "ci", "filesystem", "code", "git", "make", "meta", "notebook",
-    "project", "session", "search", "shell", "tasks", "ui", "web"
+  "resource_permissions": [
+    "ci:cancel",
+    "ci:read",
+    "ci:trigger",
+    "code:build",
+    "code:lint",
+    "code:read",
+    "code:test",
+    "code:typecheck",
+    "files:delete",
+    "files:read",
+    "files:write",
+    "git:commit",
+    "git:push",
+    "git:read",
+    "git:worktree",
+    "make:execute",
+    "make:read",
+    "meta:read",
+    "notebooks:read",
+    "notebooks:write",
+    "project:read",
+    "session:read",
+    "session:write",
+    "shell:execute",
+    "tasks:create",
+    "tasks:read",
+    "tasks:update",
+    "ui:notify",
+    "web:fetch",
+    "web:search"
   ],
-  "max_iterations": 40
+  "uses_sandbox": true,
+  "max_iterations": 40,
+  "approval_required": false,
+  "compressor": "compressor",
+  "created_at": "2026-04-29T21:35:18.392138+00:00",
+  "tags": []
 }

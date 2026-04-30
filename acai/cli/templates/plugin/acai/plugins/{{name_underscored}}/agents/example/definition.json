@@ -1,0 +1,9 @@
+{
+  "name": "{{name_underscored}}-example",
+  "description": "Example agent from the {{name}} plugin.",
+  "role": "worker",
+  "provider": "auto",
+  "output_format": "text",
+  "tools": ["{{name_underscored}}"],
+  "tool_permissions": ["read"]
+}

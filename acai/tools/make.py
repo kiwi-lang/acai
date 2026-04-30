@@ -14,7 +14,7 @@ import subprocess
 from acai.orchestrator.tools import tool
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("make:read",))
 def list_targets(cwd: str = ".", makefile: str = "Makefile") -> str:
     """List all targets defined in a Makefile with their commands.
 
@@ -36,7 +36,7 @@ def list_targets(cwd: str = ".", makefile: str = "Makefile") -> str:
     return json.dumps({"makefile": path, "targets": targets, "count": len(targets)})
 
 
-@tool(permissions=("execute",))
+@tool(permissions=("execute",), resources=("make:execute",))
 def run_target(
     target: str,
     cwd: str = ".",

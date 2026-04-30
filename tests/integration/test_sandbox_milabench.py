@@ -218,9 +218,9 @@ def test_create_sandbox_factory():
     """Verify the factory handles all known backend names."""
     from acai.worker.sandbox import SandboxConfig, create_sandbox
     from acai.worker.sandbox.container import ContainerSandbox
-    from acai.worker.sandbox.bubblewrap import BubblewrapSandbox
-    from acai.worker.sandbox.nsjail import NsjailSandbox
-    from acai.worker.sandbox.firecracker import FirecrackerSandbox
+    from acai.worker.sandbox.experimental.bubblewrap import BubblewrapSandbox
+    from acai.worker.sandbox.experimental.nsjail import NsjailSandbox
+    from acai.worker.sandbox.experimental.firecracker import FirecrackerSandbox
 
     for name in ("docker", "podman", "container"):
         s = create_sandbox(SandboxConfig(type=name, image="test"))

@@ -16,7 +16,7 @@ from acai.orchestrator.tools import tool
 log = logging.getLogger(__name__)
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("ui:notify",))
 def toast(
     message: str,
     title: Optional[str] = None,

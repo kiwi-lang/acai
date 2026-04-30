@@ -30,7 +30,7 @@ def _get_store() -> SkillStore:
     return _store
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("skills:read",))
 def list_skills(namespace: str = "") -> str:
     """List available skills, optionally filtered by namespace.
 
@@ -54,7 +54,7 @@ def list_skills(namespace: str = "") -> str:
     return json.dumps({"skills": out, "count": len(out)})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("skills:create",))
 def create_skill(
     namespace: str,
     name: str,
@@ -105,7 +105,7 @@ def create_skill(
     })
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("skills:read",))
 def get_skill(namespace: str, name: str) -> str:
     """Get full details about a skill: definition, code, and README.
 
@@ -134,7 +134,7 @@ def get_skill(namespace: str, name: str) -> str:
     })
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("skills:update",))
 def update_skill_code(namespace: str, name: str, code: str) -> str:
     """Update a skill's run.py implementation.
 
@@ -152,7 +152,7 @@ def update_skill_code(namespace: str, name: str, code: str) -> str:
     return json.dumps({"updated": True, "path": path})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("skills:update",))
 def update_skill_definition(
     namespace: str,
     name: str,
@@ -192,7 +192,7 @@ def update_skill_definition(
     return json.dumps({"updated": True, "qualified_name": f"skills.{namespace}.{name}"})
 
 
-@tool(permissions=("write",))
+@tool(permissions=("write",), resources=("skills:update",))
 def update_skill_readme(namespace: str, name: str, readme: str) -> str:
     """Update a skill's README.md.
 

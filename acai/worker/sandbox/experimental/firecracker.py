@@ -1,4 +1,4 @@
-"""Firecracker microVM sandbox backend.
+"""Firecracker microVM sandbox backend — **experimental**.
 
 Launches an ``acai mcp`` tool server inside a Firecracker microVM.
 Firecracker provides hardware-level isolation via KVM with extremely

@@ -1,9 +1,46 @@
 {
+  "id": "e8a1a1889ce0",
   "name": "planner",
   "description": "a software architect that explores codebases and designs implementation plans",
   "role": "planner",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["search", "filesystem", "code", "meta", "session", "shell"],
-  "max_iterations": 30
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "shell",
+    "session",
+    "search",
+    "meta",
+    "filesystem",
+    "code"
+  ],
+  "tool_permissions": [
+    "read"
+  ],
+  "resource_permissions": [
+    "shell:execute",
+    "session:read",
+    "session:write",
+    "files:read",
+    "meta:read",
+    "files:delete",
+    "files:write",
+    "code:build",
+    "code:lint",
+    "code:read",
+    "code:test",
+    "code:typecheck"
+  ],
+  "uses_sandbox": true,
+  "max_iterations": 30,
+  "approval_required": false,
+  "compressor": "compressor",
+  "created_at": "2026-04-29T21:35:43.505554+00:00",
+  "tags": []
 }

@@ -226,7 +226,7 @@ class _GitHubBackend:
 _MAX_LOG_CHARS = 12_000
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("ci:read",))
 def list_workflows(cwd: str = ".", platform: str = "") -> str:
     """List available CI workflows / pipelines for the repository.
 
@@ -243,7 +243,7 @@ def list_workflows(cwd: str = ".", platform: str = "") -> str:
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("ci:read",))
 def list_runs(
     cwd: str = ".",
     branch: str = "",
@@ -271,7 +271,7 @@ def list_runs(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("ci:read",))
 def get_run(run_id: str, cwd: str = ".", platform: str = "") -> str:
     """Get detailed information about a specific CI run, including its jobs.
 
@@ -288,7 +288,7 @@ def get_run(run_id: str, cwd: str = ".", platform: str = "") -> str:
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("ci:read",))
 def get_logs(
     run_id: str,
     cwd: str = ".",
@@ -317,7 +317,7 @@ def get_logs(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("execute",), sandbox=True)
+@tool(permissions=("execute",), resources=("ci:trigger",), sandbox=True)
 def trigger(
     workflow: str,
     cwd: str = ".",
@@ -347,7 +347,7 @@ def trigger(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("execute",), sandbox=True)
+@tool(permissions=("execute",), resources=("ci:trigger",), sandbox=True)
 def rerun(
     run_id: str,
     cwd: str = ".",
@@ -370,7 +370,7 @@ def rerun(
         return json.dumps({"error": str(exc)})
 
 
-@tool(permissions=("execute",), sandbox=True)
+@tool(permissions=("execute",), resources=("ci:cancel",), sandbox=True)
 def cancel(run_id: str, cwd: str = ".", platform: str = "") -> str:
     """Cancel a running CI workflow run.
 

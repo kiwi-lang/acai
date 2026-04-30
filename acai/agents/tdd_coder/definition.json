@@ -1,14 +1,45 @@
 {
+  "id": "7e24ceba0f29",
   "name": "tdd_coder",
   "description": "a software engineer that implements features using test-driven development",
   "role": "worker",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["filesystem", "code", "git"],
-  "max_iterations": 40,
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "filesystem",
+    "code",
+    "git"
+  ],
   "tool_permissions": [
     "read",
     "write",
     "execute"
-  ]
+  ],
+  "resource_permissions": [
+    "code:build",
+    "files:delete",
+    "git:commit",
+    "git:push",
+    "files:read",
+    "code:lint",
+    "files:write",
+    "git:read",
+    "git:worktree",
+    "code:test",
+    "code:read",
+    "code:typecheck"
+  ],
+  "uses_sandbox": true,
+  "max_iterations": 40,
+  "approval_required": false,
+  "compressor": "compressor",
+  "created_at": "2026-04-29T21:36:37.534106+00:00",
+  "tags": []
 }

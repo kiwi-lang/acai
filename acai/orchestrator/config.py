@@ -204,6 +204,7 @@ class SandboxConfig:
     # -- Container (docker / podman) ----------------------------------------
     image: str = sandboxfield("acai-sandbox", backends=_CONTAINER)
     runtime: str = sandboxfield("podman", backends=_CONTAINER)
+    rootless: bool = sandboxfield(True, backends=_CONTAINER)
 
     # -- Firecracker (microVM) ----------------------------------------------
     kernel: str = sandboxfield("", backends=_FIRECRACKER)

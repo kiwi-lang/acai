@@ -48,6 +48,8 @@ class AgentDef:
     context_sources: list[str] = field(default_factory=list)
     tools: list[str] = field(default_factory=list)
     tool_permissions: list[str] = field(default_factory=lambda: ["read"])
+    resource_permissions: list[str] = field(default_factory=list)
+    scope: str = "global"
     uses_sandbox: bool = True
     max_iterations: int = 20
     approval_required: bool = False
@@ -89,11 +91,11 @@ class AgentDef:
 # ------------------------------------------------------------------
 
 class AgentStore:
-    """CRUD for agent definitions with a two-layer layout.
+    """CRUD for agent definitions with a multi-layer layout.
 
-    *Builtin* agents ship inside the ``acai`` package and are
-    **read-only**.  *Workspace* agents live in the user's workspace and
-    can be freely created, edited, and deleted.
+    *Builtin* agents ship inside the ``acai`` package (and optionally
+    from plugins) and are **read-only**.  *Workspace* agents live in
+    the user's workspace and can be freely created, edited, and deleted.
 
     When a builtin agent is modified, the updated copy is written to
     the workspace layer, shadowing the builtin.  Deleting a workspace
@@ -118,16 +120,31 @@ class AgentStore:
         builtin_dir: str = _PACKAGE_AGENTS_DIR,
     ):
         self.workspace_dir = workspace_dir
-        self.builtin_dir = builtin_dir
+        self._builtin_dirs: list[str] = [builtin_dir]
         os.makedirs(self.workspace_dir, exist_ok=True)
+
+    @property
+    def builtin_dir(self) -> str:
+        """Primary builtin directory (backward compat)."""
+        return self._builtin_dirs[0]
+
+    def add_builtin_dir(self, path: str) -> None:
+        """Register an additional read-only agent directory (e.g. from a plugin)."""
+        if path and os.path.isdir(path) and path not in self._builtin_dirs:
+            self._builtin_dirs.append(path)
 
     # -- path helpers ------------------------------------------------
 
     def _ws_dir(self, name: str) -> str:
         return os.path.join(self.workspace_dir, name)
 
-    def _bi_dir(self, name: str) -> str:
-        return os.path.join(self.builtin_dir, name)
+    def _bi_dir(self, name: str) -> str | None:
+        """Return the first builtin directory containing *name*, or ``None``."""
+        for d in self._builtin_dirs:
+            candidate = os.path.join(d, name)
+            if os.path.isfile(self._def_path(candidate)):
+                return candidate
+        return None
 
     @staticmethod
     def _def_path(directory: str) -> str:
@@ -138,7 +155,7 @@ class AgentStore:
         return os.path.join(directory, "system.j2")
 
     def _is_builtin(self, name: str) -> bool:
-        return os.path.isfile(self._def_path(self._bi_dir(name)))
+        return self._bi_dir(name) is not None
 
     def _has_workspace_override(self, name: str) -> bool:
         return os.path.isfile(self._def_path(self._ws_dir(name)))
@@ -159,16 +176,16 @@ class AgentStore:
         ws = self._load_from(self._ws_dir(name), builtin=False)
         if ws is not None:
             return ws
-        return self._load_from(self._bi_dir(name), builtin=True)
+        bi = self._bi_dir(name)
+        if bi is not None:
+            return self._load_from(bi, builtin=True)
+        return None
 
     def list(self) -> list[AgentDef]:
         """Merge builtin and workspace agents. Workspace wins on conflict."""
         agents: dict[str, AgentDef] = {}
 
-        for root, builtin_flag in [
-            (self.builtin_dir, True),
-            (self.workspace_dir, False),
-        ]:
+        for root in self._builtin_dirs:
             if not os.path.isdir(root):
                 continue
             for entry in sorted(os.listdir(root)):
@@ -176,7 +193,16 @@ class AgentStore:
                 if os.path.isfile(defn):
                     with open(defn) as f:
                         agent = AgentDef.from_dict(json.load(f))
-                    agent.builtin = builtin_flag
+                    agent.builtin = True
+                    agents[agent.name] = agent
+
+        if os.path.isdir(self.workspace_dir):
+            for entry in sorted(os.listdir(self.workspace_dir)):
+                defn = os.path.join(self.workspace_dir, entry, "definition.json")
+                if os.path.isfile(defn):
+                    with open(defn) as f:
+                        agent = AgentDef.from_dict(json.load(f))
+                    agent.builtin = False
                     agents[agent.name] = agent
 
         return list(agents.values())
@@ -220,14 +246,18 @@ class AgentStore:
         if os.path.isfile(ws_path):
             with open(ws_path) as f:
                 return f.read()
-        bi_path = self._tpl_path(self._bi_dir(name))
-        if os.path.isfile(bi_path):
-            with open(bi_path) as f:
-                return f.read()
-        bi_default = self._tpl_path(self._bi_dir("default"))
-        if os.path.isfile(bi_default):
-            with open(bi_default) as f:
-                return f.read()
+        bi = self._bi_dir(name)
+        if bi is not None:
+            bi_path = self._tpl_path(bi)
+            if os.path.isfile(bi_path):
+                with open(bi_path) as f:
+                    return f.read()
+        bi_default = self._bi_dir("default")
+        if bi_default is not None:
+            default_path = self._tpl_path(bi_default)
+            if os.path.isfile(default_path):
+                with open(default_path) as f:
+                    return f.read()
         return ""
 
     def save_template(self, name: str, content: str) -> None:

@@ -1,0 +1,247 @@
+{
+  "id": "new-workflow",
+  "name": "Reply Type Test",
+  "description": "",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": {
+        "x": -299.0465527937271,
+        "y": -319.54909193971326
+      },
+      "data": {
+        "label": "Start",
+        "preview_message": "Hello!"
+      }
+    },
+    {
+      "id": "end",
+      "type": "output",
+      "position": {
+        "x": 1522.8037587495478,
+        "y": -167.76467666438606
+      },
+      "data": {
+        "label": "Done"
+      }
+    },
+    {
+      "id": "n_1_moj73i4b",
+      "type": "reply_type",
+      "position": {
+        "x": 121.60803643995189,
+        "y": -182.7464927005458
+      },
+      "data": {
+        "label": "Reply Type",
+        "fields": "[{\"name\":\"response\",\"type\":\"str\"},{\"name\":\"confidence\",\"type\":\"float\"}]"
+      }
+    },
+    {
+      "id": "n_3_moj73o6k",
+      "type": "agent_call",
+      "position": {
+        "x": 466.57552392373157,
+        "y": -349.62400714868136
+      },
+      "data": {
+        "label": "Agent Call",
+        "agent": "default"
+      }
+    },
+    {
+      "id": "n_5_moj73vrj",
+      "type": "append",
+      "position": {
+        "x": -124.75567724987137,
+        "y": -314.5179965536097
+      },
+      "data": {
+        "label": "Append"
+      }
+    },
+    {
+      "id": "n_7_moj75ct4",
+      "type": "accumulate",
+      "position": {
+        "x": 704.8720995221405,
+        "y": -348.8657094750062
+      },
+      "data": {
+        "label": "Accumulate"
+      }
+    },
+    {
+      "id": "n_9_moj75qgg",
+      "type": "read_reply",
+      "position": {
+        "x": 1030.535352276569,
+        "y": -181.70351028299865
+      },
+      "data": {
+        "label": "Read Reply"
+      }
+    },
+    {
+      "id": "n_11_moj766g1",
+      "type": "print",
+      "position": {
+        "x": 1266.983464687999,
+        "y": -187.0615643539026
+      },
+      "data": {
+        "label": "Print"
+      }
+    },
+    {
+      "id": "n_13_moj767g3",
+      "type": "print",
+      "position": {
+        "x": 1401.800949408984,
+        "y": -133.40879200724322
+      },
+      "data": {
+        "label": "Print"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "xy-edge__startdata_message-n_5_moj73vrjdata_b",
+      "source": "start",
+      "target": "n_5_moj73vrj",
+      "sourceHandle": "data_message",
+      "targetHandle": "data_b",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__startdata_conversation-n_5_moj73vrjdata_a",
+      "source": "start",
+      "target": "n_5_moj73vrj",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_a",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__startexec_out-n_5_moj73vrjexec_in",
+      "source": "start",
+      "target": "n_5_moj73vrj",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_5_moj73vrjexec_out-n_1_moj73i4bexec_in",
+      "source": "n_5_moj73vrj",
+      "target": "n_1_moj73i4b",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_1_moj73i4bexec_out-n_3_moj73o6kexec_in",
+      "source": "n_1_moj73i4b",
+      "target": "n_3_moj73o6k",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_5_moj73vrjdata_result-n_3_moj73o6kdata_context",
+      "source": "n_5_moj73vrj",
+      "target": "n_3_moj73o6k",
+      "sourceHandle": "data_result",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_moj73i4bdata_format-n_3_moj73o6kdata_format",
+      "source": "n_1_moj73i4b",
+      "target": "n_3_moj73o6k",
+      "sourceHandle": "data_format",
+      "targetHandle": "data_format",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_3_moj73o6kdata_stream-n_7_moj75ct4data_stream",
+      "source": "n_3_moj73o6k",
+      "target": "n_7_moj75ct4",
+      "sourceHandle": "data_stream",
+      "targetHandle": "data_stream",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_3_moj73o6kexec_out-n_7_moj75ct4exec_in",
+      "source": "n_3_moj73o6k",
+      "target": "n_7_moj75ct4",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_7_moj75ct4data_response-n_9_moj75qggdata_reply",
+      "source": "n_7_moj75ct4",
+      "target": "n_9_moj75qgg",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_reply",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_7_moj75ct4exec_out-n_9_moj75qggexec_in",
+      "source": "n_7_moj75ct4",
+      "target": "n_9_moj75qgg",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_1_moj73i4bdata_format-n_9_moj75qggdata_reply_type",
+      "source": "n_1_moj73i4b",
+      "target": "n_9_moj75qgg",
+      "sourceHandle": "data_format",
+      "targetHandle": "data_reply_type",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_9_moj75qggdata_response-n_11_moj766g1data_value",
+      "source": "n_9_moj75qgg",
+      "target": "n_11_moj766g1",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_value",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_9_moj75qggdata_confidence-n_13_moj767g3data_value",
+      "source": "n_9_moj75qgg",
+      "target": "n_13_moj767g3",
+      "sourceHandle": "data_confidence",
+      "targetHandle": "data_value",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_9_moj75qggexec_out-n_11_moj766g1exec_in",
+      "source": "n_9_moj75qgg",
+      "target": "n_11_moj766g1",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_11_moj766g1exec_out-n_13_moj767g3exec_in",
+      "source": "n_11_moj766g1",
+      "target": "n_13_moj767g3",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_13_moj767g3exec_out-endexec_in",
+      "source": "n_13_moj767g3",
+      "target": "end",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    }
+  ]
+}

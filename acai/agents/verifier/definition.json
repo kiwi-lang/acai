@@ -1,9 +1,47 @@
 {
+  "id": "060fae362d09",
   "name": "verifier",
   "description": "a verification specialist that tests implementations by trying to break them",
   "role": "worker",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["shell", "search", "filesystem", "code", "test", "web", "meta"],
-  "max_iterations": 40
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "shell",
+    "search",
+    "filesystem",
+    "code",
+    "test",
+    "web",
+    "meta"
+  ],
+  "tool_permissions": [
+    "read"
+  ],
+  "resource_permissions": [
+    "code:build",
+    "files:delete",
+    "meta:read",
+    "shell:execute",
+    "web:fetch",
+    "web:search",
+    "files:read",
+    "files:write",
+    "code:lint",
+    "code:read",
+    "code:test",
+    "code:typecheck"
+  ],
+  "uses_sandbox": true,
+  "max_iterations": 40,
+  "approval_required": false,
+  "compressor": "compressor",
+  "created_at": "2026-04-29T21:36:45.525702+00:00",
+  "tags": []
 }

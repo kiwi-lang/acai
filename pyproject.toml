@@ -81,4 +81,5 @@ acai = [
     "agents/*/system.j2",
     "ui/dist/**/*",
     "ui/dist/*",
+    "cli/templates/plugin/**/*",
 ]

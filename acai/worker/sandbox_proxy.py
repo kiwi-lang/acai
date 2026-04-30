@@ -9,6 +9,15 @@ The sandbox is started **lazily** — the first qualifying tool call
 ``uses_sandbox=True``) triggers sandbox startup.  The orchestrator
 only passes ``context["uses_sandbox"] = True``; the actual
 :class:`SandboxConfig` is a system-wide setting held by the worker.
+
+Project isolation
+~~~~~~~~~~~~~~~~~
+
+Sandboxes are scoped to a **project**.  The project path is carried
+in ``context["project_path"]`` (resolved by the orchestrator from
+``Project.path``).  When a tool call arrives for a different project,
+the running sandbox is stopped and a fresh one is started with the
+new project's worktree mounted.
 """
 
 from __future__ import annotations
@@ -31,6 +40,10 @@ log = logging.getLogger(__name__)
 class SandboxProxy:
     """Manages a sandbox and proxies qualifying tool calls to it.
 
+    One sandbox is active at a time, scoped to a single project.
+    If a tool call arrives for a different project, the running
+    sandbox is torn down and a new one is started.
+
     Parameters
     ----------
     default_config:
@@ -49,6 +62,7 @@ class SandboxProxy:
         self._sandbox_predicate = sandbox_predicate
         self._sandbox: Sandbox | None = None
         self._effective_config: SandboxConfig | None = None
+        self._active_project: str | None = None
 
     @property
     def running(self) -> bool:
@@ -60,39 +74,65 @@ class SandboxProxy:
             return self._sandbox.endpoint
         return None
 
-    def _ensure_started(self, ctx: dict) -> None:
-        """Start the sandbox if not already running, using context from the tool call."""
-        if self.running:
-            return
+    @property
+    def active_project(self) -> str | None:
+        """The project path the current sandbox is bound to, or ``None``."""
+        return self._active_project
 
+    def _resolve_project_path(self, ctx: dict) -> str:
+        """Extract the project workspace path from context."""
+        path = ctx.get("project_path", "")
+        if path:
+            return os.path.abspath(path)
+        return os.path.abspath(os.environ.get("ACAI_WORKSPACE", os.getcwd()))
+
+    def _ensure_started(self, ctx: dict) -> None:
+        """Start the sandbox if not already running for the current project.
+
+        If the sandbox is running but for a *different* project, it is
+        stopped first — sandboxes must not leak across projects.
+        """
         from acai.worker.sandbox import create_sandbox
 
         if self._default_config.type == "none":
             return
 
+        project_path = self._resolve_project_path(ctx)
+
+        if self.running and self._active_project == project_path:
+            return
+
+        if self.running and self._active_project != project_path:
+            log.info(
+                "project changed (%s → %s), recycling sandbox",
+                self._active_project, project_path,
+            )
+            self.stop()
+
         self._effective_config = self._default_config
         self._sandbox = create_sandbox(self._default_config)
 
-        workspace = os.environ.get("ACAI_WORKSPACE", os.getcwd())
         session_id = ctx.get("conversation", "default")
         agent_name = ctx.get("agent_name", "")
 
         log.info(
-            "lazy-starting sandbox  backend=%s  agent=%s  session=%s",
-            self._default_config.type, agent_name, session_id,
+            "lazy-starting sandbox  backend=%s  project=%s  agent=%s  session=%s",
+            self._default_config.type, project_path, agent_name, session_id,
         )
         self._sandbox.start(
-            workspace,
+            project_path,
             sandbox_config=self._default_config,
             session_id=session_id,
             agent_name=agent_name,
         )
+        self._active_project = project_path
 
     def stop(self) -> None:
         if self._sandbox is not None:
             self._sandbox.stop()
             self._sandbox = None
             self._effective_config = None
+            self._active_project = None
 
     def should_proxy(self, tool_name: str, ctx: dict | None = None) -> bool:
         """True when the tool should be forwarded to a sandbox.
@@ -129,8 +169,9 @@ class SandboxProxy:
             self._ensure_started(context or {})
         except Exception as exc:
             log.error("sandbox startup failed: %s", exc)
+            err_msg = f"Sandbox startup failed: {exc}"
             async def _startup_error():
-                yield f"event: error\ndata: {json.dumps({'tool': tool_name, 'error': f'Sandbox startup failed: {exc}'})}\n\n"
+                yield f"event: error\ndata: {json.dumps({'tool': tool_name, 'error': err_msg})}\n\n"
                 yield "event: done\ndata: {}\n\n"
             return StreamingResponse(_startup_error(), media_type="text/event-stream")
 

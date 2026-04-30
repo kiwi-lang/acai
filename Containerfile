@@ -1,8 +1,11 @@
 # acai-sandbox — generic container for running agent tools in isolation.
 #
 # Build (auto-built on first sandbox use if missing):
-#   docker build -t acai-sandbox -f Containerfile .
 #   podman build -t localhost/acai-sandbox -f Containerfile .
+#   docker build -t acai-sandbox -f Containerfile .
+#
+# Rootless Podman (default):
+#   podman run --userns=keep-id -v $PWD:$PWD -w $PWD localhost/acai-sandbox
 #
 # The agent sets up whatever project it needs at runtime via tool
 # calls (pip install, git clone, etc.) — do NOT bake project-specific
@@ -15,9 +18,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         curl \
     && rm -rf /var/lib/apt/lists/*
-
-# git identity is configured at runtime per-agent by the sandbox manager
-# so commits are attributable to the specific agent that produced them.
 
 WORKDIR /opt/acai
 COPY setup.py README.md ./
@@ -32,6 +32,12 @@ RUN pip install --no-cache-dir \
         argklass \
         importlib_resources \
     && pip install --no-cache-dir -e . --no-deps
+
+# Make pip cache and git config writable for any UID so rootless
+# Podman (--userns=keep-id) works without permission errors.
+RUN chmod -R a+rwX /opt/acai \
+    && mkdir -p /tmp/pip-cache && chmod 777 /tmp/pip-cache
+ENV PIP_CACHE_DIR=/tmp/pip-cache
 
 # Working directory is set at runtime via `podman run -w <host_path>`
 # to keep paths consistent between host and container.

@@ -1,9 +1,39 @@
 {
+  "id": "408674e13fd8",
   "name": "graph_builder",
   "description": "a workflow graph architect that designs and modifies task graphs",
   "role": "system",
+  "avatar": "",
   "provider": "auto",
   "output_format": "messages",
-  "tools": ["workflow"],
-  "tool_permissions": ["read", "write"]
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "workflow"
+  ],
+  "tool_permissions": [
+    "read",
+    "write"
+  ],
+  "resource_permissions": [
+    "agents:create",
+    "agents:read",
+    "agents:update",
+    "conversations:read",
+    "skills:create",
+    "skills:read",
+    "skills:update",
+    "workflows:update",
+    "workflows:validate"
+  ],
+  "uses_sandbox": true,
+  "max_iterations": 20,
+  "approval_required": false,
+  "compressor": "compressor",
+  "created_at": "2026-04-29T21:35:26.014672+00:00",
+  "tags": []
 }

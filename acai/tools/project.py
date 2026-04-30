@@ -25,7 +25,7 @@ def _is_ignored_dir(name: str) -> bool:
     return name in _IGNORED_DIRS or name.endswith(".egg-info")
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("project:read",))
 def tree(
     cwd: str = ".",
     subpath: str = "",
@@ -86,7 +86,7 @@ def tree(
     })
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("project:read",))
 def summary(cwd: str = ".", subpath: str = "") -> str:
     """Show a high-level summary: directory tree (folders only) plus file counts per directory.
 
@@ -136,7 +136,7 @@ def summary(cwd: str = ".", subpath: str = "") -> str:
     })
 
 
-@tool(permissions=("read",))
+@tool(permissions=("read",), resources=("project:read",))
 def find(
     pattern: str,
     cwd: str = ".",
