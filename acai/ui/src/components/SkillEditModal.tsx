@@ -50,12 +50,16 @@ export const emptySkillForm: SkillFormData = {
 export interface SkillEditModalProps {
     onSave: () => void;
     onClose: () => void;
-    /** When set, creates the skill inside this workflow directory. */
+    /** When set, creates/saves the skill inside this workflow directory. */
     workflowId?: string;
+    /** When set, the modal is in "edit" mode for an existing skill. */
+    editingName?: string | null;
+    /** Pre-populated form data for edit mode. */
+    initialForm?: SkillFormData;
 }
 
-const SkillEditModal = ({ onSave, onClose, workflowId }: SkillEditModalProps) => {
-    const [form, setForm] = useState<SkillFormData>({ ...emptySkillForm });
+const SkillEditModal = ({ onSave, onClose, workflowId, editingName, initialForm }: SkillEditModalProps) => {
+    const [form, setForm] = useState<SkillFormData>(initialForm ? { ...initialForm } : { ...emptySkillForm });
     const [formError, setFormError] = useState('');
     const [busy, setBusy] = useState(false);
     const [activeTab, setActiveTab] = useState<'config' | 'code' | 'parameters'>('config');
@@ -113,7 +117,7 @@ const SkillEditModal = ({ onSave, onClose, workflowId }: SkillEditModalProps) =>
                 {/* Header */}
                 <HStack px={5} py={4} borderBottom="1px solid" borderColor="var(--border-primary)" justify="space-between" flexShrink={0}>
                     <Heading size="sm" color="var(--text-heading)">
-                        {workflowId ? 'New Workflow Skill' : 'New Skill'}
+                        {editingName ? `Edit — ${editingName}` : workflowId ? 'New Workflow Skill' : 'New Skill'}
                     </Heading>
                     <IconButton aria-label="Close" variant="ghost" size="sm" color="var(--text-tertiary)"
                         _hover={{ color: 'var(--text-heading)' }} onClick={onClose}>
@@ -161,6 +165,8 @@ const SkillEditModal = ({ onSave, onClose, workflowId }: SkillEditModalProps) =>
                                         onChange={e => setField('namespace', e.target.value)}
                                         bg="var(--bg-input)" color="var(--text-primary)"
                                         borderColor="var(--border-input)"
+                                        readOnly={!!editingName}
+                                        opacity={editingName ? 0.6 : 1}
                                     />
                                 </Box>
                                 <Box flex={1}>
@@ -171,6 +177,8 @@ const SkillEditModal = ({ onSave, onClose, workflowId }: SkillEditModalProps) =>
                                         onChange={e => setField('name', e.target.value)}
                                         bg="var(--bg-input)" color="var(--text-primary)"
                                         borderColor="var(--border-input)"
+                                        readOnly={!!editingName}
+                                        opacity={editingName ? 0.6 : 1}
                                     />
                                 </Box>
                             </HStack>
@@ -301,7 +309,7 @@ const SkillEditModal = ({ onSave, onClose, workflowId }: SkillEditModalProps) =>
                         Cancel
                     </Button>
                     <Button size="sm" colorScheme="green" onClick={handleSubmit} disabled={busy}>
-                        {busy ? <Spinner size="xs" /> : 'Create'}
+                        {busy ? <Spinner size="xs" /> : editingName ? 'Save' : 'Create'}
                     </Button>
                 </HStack>
             </Box>

@@ -907,6 +907,25 @@ def create_router(config: AcaiConfig | None = None,
                 f.write(template)
         return {"created": True, "name": name}
 
+    @router.get("/workflows/{workflow_id}/agents/{agent_name}")
+    def get_workflow_agent(workflow_id: str, agent_name: str):
+        """Return the full definition + template for a workflow-bundled agent."""
+        for base in (os.path.join(workflows_dir, workflow_id),
+                     os.path.join(_builtin_wf_dir, workflow_id)):
+            agent_dir = os.path.join(base, "agents", agent_name)
+            def_path = os.path.join(agent_dir, "definition.json")
+            if os.path.isfile(def_path):
+                with open(def_path) as f:
+                    defn = json.load(f)
+                tpl_path = os.path.join(agent_dir, "system.j2")
+                template = ""
+                if os.path.isfile(tpl_path):
+                    with open(tpl_path) as f:
+                        template = f.read()
+                defn["system_template_content"] = template
+                return defn
+        return JSONResponse({"error": "not found"}, status_code=404)
+
     _DEFAULT_SKILL_CODE = (
         "#!/usr/bin/env python3\n"
         "import json, sys\n\n"
@@ -954,6 +973,37 @@ def create_router(config: AcaiConfig | None = None,
             with open(os.path.join(skill_dir, "README.md"), "w") as f:
                 f.write(readme)
         return {"created": True, "qualified_name": f"{ns}.{name}"}
+
+    @router.get("/workflows/{workflow_id}/skills/{namespace}/{skill_name}")
+    def get_workflow_skill(workflow_id: str, namespace: str, skill_name: str):
+        """Return the definition + code for a workflow-bundled skill."""
+        for base in (os.path.join(workflows_dir, workflow_id),
+                     os.path.join(_builtin_wf_dir, workflow_id)):
+            skill_dir = os.path.join(base, "skills", namespace, skill_name)
+            tool_path = os.path.join(skill_dir, "tool.json")
+            if os.path.isfile(tool_path):
+                with open(tool_path) as f:
+                    defn = json.load(f)
+                code = ""
+                run_path = os.path.join(skill_dir, "run.py")
+                if os.path.isfile(run_path):
+                    with open(run_path) as f:
+                        code = f.read()
+                readme = ""
+                readme_path = os.path.join(skill_dir, "README.md")
+                if os.path.isfile(readme_path):
+                    with open(readme_path) as f:
+                        readme = f.read()
+                return {
+                    "namespace": namespace,
+                    "name": skill_name,
+                    "qualified_name": f"{namespace}.{skill_name}",
+                    "description": defn.get("description", ""),
+                    "parameters": defn.get("parameters", {}),
+                    "code": code,
+                    "readme": readme,
+                }
+        return JSONResponse({"error": "not found"}, status_code=404)
 
     def _resolve_wf_dir(workflow_id: str) -> str:
         """Return the workflow directory (user or builtin), or ''."""

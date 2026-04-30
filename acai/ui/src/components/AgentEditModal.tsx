@@ -859,8 +859,15 @@ const AgentEditModal = ({
         }
     };
 
-    const handleSaveTemplate = editingName && !workflowId
-        ? async () => { await updateAgentTemplate(editingName, templateContent); }
+    const handleSaveTemplate = editingName
+        ? workflowId
+            ? async () => {
+                await createWorkflowAgent(workflowId, {
+                    ...formToPayload(form),
+                    system_template: templateContent,
+                } as any);
+            }
+            : async () => { await updateAgentTemplate(editingName, templateContent); }
         : undefined;
 
     const handleBackdrop = (e: React.MouseEvent) => {
@@ -885,6 +892,7 @@ const AgentEditModal = ({
                 <HStack px={5} py={4} borderBottom="1px solid" borderColor="var(--border-primary)" justify="space-between" flexShrink={0}>
                     <Heading size="sm" color="var(--text-heading)">
                         {editingName ? `Edit — ${editingName}` : workflowId ? 'New Workflow Agent' : 'New Agent'}
+                        {workflowId && editingName && <Text as="span" fontSize="xs" color="var(--text-muted)" ml={2}>(workflow)</Text>}
                     </Heading>
                     <IconButton aria-label="Close" variant="ghost" size="sm" color="var(--text-tertiary)"
                         _hover={{ color: 'var(--text-heading)' }} onClick={onClose}>

@@ -62,10 +62,12 @@ import {
   type WorkflowAgent,
   type WorkflowSkill,
   type ToolNamespace,
+  getWorkflowAgent,
+  getWorkflowSkill,
 } from '../services/api';
 import type { AgentDef, Provider } from '../services/types';
-import AgentEditModal, { emptyForm as agentEmptyForm, DEFAULT_TEMPLATE } from './AgentEditModal';
-import SkillEditModal from './SkillEditModal';
+import AgentEditModal, { agentDefToForm, emptyForm as agentEmptyForm, DEFAULT_TEMPLATE } from './AgentEditModal';
+import SkillEditModal, { type SkillFormData } from './SkillEditModal';
 import ChatPanel from './ChatPanel';
 
 /* ================================================================== */
@@ -1350,6 +1352,12 @@ const WorkflowEditor: FC = () => {
   const [showWfDropdown, setShowWfDropdown] = useState(false);
   const [addAgentModal, setAddAgentModal] = useState(false);
   const [addSkillModal, setAddSkillModal] = useState(false);
+  const [editAgentState, setEditAgentState] = useState<{
+    name: string; form: ReturnType<typeof agentDefToForm>; template: string;
+  } | null>(null);
+  const [editSkillState, setEditSkillState] = useState<{
+    name: string; form: SkillFormData;
+  } | null>(null);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [toolNamespaces, setToolNamespaces] = useState<ToolNamespace[]>([]);
 
@@ -1375,6 +1383,59 @@ const WorkflowEditor: FC = () => {
   }, []);
 
   useEffect(() => { refreshWfAssets(workflowId); }, [workflowId, refreshWfAssets]);
+
+  const openAgentEditor = useCallback(async (agentName: string) => {
+    if (!workflowId) return;
+    try {
+      const detail = await getWorkflowAgent(workflowId, agentName);
+      const asDef = {
+        id: detail.name,
+        name: detail.name,
+        description: detail.description || '',
+        role: detail.role || 'system',
+        avatar: detail.avatar || '',
+        provider: detail.provider || 'auto',
+        output_format: (detail.output_format || 'messages') as 'text' | 'messages',
+        model_overrides: (detail.model_overrides ?? {}) as Record<string, number>,
+        system_template: '',
+        tools: detail.tools ?? [],
+        tool_permissions: detail.tool_permissions ?? ['read'],
+        resource_permissions: detail.resource_permissions ?? [],
+        context_sources: detail.context_sources ?? [],
+        max_iterations: detail.max_iterations ?? 20,
+        approval_required: detail.approval_required ?? true,
+        uses_sandbox: detail.uses_sandbox ?? false,
+        tags: detail.tags ?? [],
+        scope: detail.scope || 'global',
+        builtin: false,
+        created_at: '',
+      } satisfies AgentDef;
+      setEditAgentState({
+        name: agentName,
+        form: agentDefToForm(asDef),
+        template: detail.system_template_content || '',
+      });
+    } catch { /* ignore */ }
+  }, [workflowId]);
+
+  const openSkillEditor = useCallback(async (ns: string, skillName: string) => {
+    if (!workflowId) return;
+    try {
+      const detail = await getWorkflowSkill(workflowId, ns, skillName);
+      setEditSkillState({
+        name: `${ns}.${skillName}`,
+        form: {
+          namespace: detail.namespace,
+          name: detail.name,
+          description: detail.description || '',
+          code: detail.code || '',
+          parameters: detail.parameters
+            ? JSON.stringify(detail.parameters, null, 2)
+            : JSON.stringify({ type: 'object', properties: {}, required: [] }, null, 2),
+        },
+      });
+    } catch { /* ignore */ }
+  }, [workflowId]);
 
   const nodeTypes = useMemo(() => buildNodeTypes(), [nodeDefsVersion]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1942,7 +2003,9 @@ const WorkflowEditor: FC = () => {
                     <Box key={ag.name} px={2} py={1} borderRadius="3px"
                       border={`1px solid ${C.blue}33`}
                       _hover={{ bg: `${C.blue}18`, borderColor: `${C.blue}66` }}
-                      transition="all 0.1s">
+                      transition="all 0.1s"
+                      cursor="pointer"
+                      onClick={() => openAgentEditor(ag.name)}>
                       <HStack gap={2}>
                         <Box w="6px" h="6px" borderRadius="50%" bg={C.blue} flexShrink={0} />
                         <Box overflow="hidden">
@@ -2009,7 +2072,9 @@ const WorkflowEditor: FC = () => {
                   <Box key={sk.qualified_name} px={2} py={1} borderRadius="3px"
                     border={`1px solid ${C.cyan}33`}
                     _hover={{ bg: `${C.cyan}18`, borderColor: `${C.cyan}66` }}
-                    transition="all 0.1s">
+                    transition="all 0.1s"
+                    cursor="pointer"
+                    onClick={() => openSkillEditor(sk.namespace, sk.name)}>
                     <HStack gap={2}>
                       <Box w="6px" h="6px" borderRadius="1px" bg={C.cyan} flexShrink={0} />
                       <Box overflow="hidden">
@@ -2341,6 +2406,32 @@ const WorkflowEditor: FC = () => {
           workflowId={workflowId}
           onSave={() => { setAddSkillModal(false); refreshWfAssets(workflowId); }}
           onClose={() => setAddSkillModal(false)}
+        />
+      )}
+
+      {/* Edit Agent modal */}
+      {editAgentState && workflowId && (
+        <AgentEditModal
+          editingName={editAgentState.name}
+          initialForm={editAgentState.form}
+          initialTemplate={editAgentState.template}
+          providers={providers}
+          toolNamespaces={toolNamespaces}
+          skills={skillsList}
+          workflowId={workflowId}
+          onSave={() => { setEditAgentState(null); refreshWfAssets(workflowId); }}
+          onClose={() => setEditAgentState(null)}
+        />
+      )}
+
+      {/* Edit Skill modal */}
+      {editSkillState && workflowId && (
+        <SkillEditModal
+          editingName={editSkillState.name}
+          initialForm={editSkillState.form}
+          workflowId={workflowId}
+          onSave={() => { setEditSkillState(null); refreshWfAssets(workflowId); }}
+          onClose={() => setEditSkillState(null)}
         />
       )}
     </Box>

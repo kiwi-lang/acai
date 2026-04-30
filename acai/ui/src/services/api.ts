@@ -553,6 +553,47 @@ export async function createWorkflowSkill(
     });
 }
 
+export interface WorkflowAgentDetail extends WorkflowAgent {
+    role?: string;
+    avatar?: string;
+    model_overrides?: Record<string, unknown>;
+    tools?: string[];
+    tool_permissions?: string[];
+    resource_permissions?: string[];
+    context_sources?: string[];
+    max_iterations?: number;
+    approval_required?: boolean;
+    uses_sandbox?: boolean;
+    tags?: string[];
+    scope?: string;
+    system_template_content?: string;
+}
+
+export async function getWorkflowAgent(
+    workflowId: string,
+    agentName: string,
+): Promise<WorkflowAgentDetail> {
+    return request<WorkflowAgentDetail>(
+        `/workflows/${encodeURIComponent(workflowId)}/agents/${encodeURIComponent(agentName)}`,
+    );
+}
+
+export interface WorkflowSkillDetail extends WorkflowSkill {
+    parameters?: Record<string, unknown>;
+    code?: string;
+    readme?: string;
+}
+
+export async function getWorkflowSkill(
+    workflowId: string,
+    namespace: string,
+    skillName: string,
+): Promise<WorkflowSkillDetail> {
+    return request<WorkflowSkillDetail>(
+        `/workflows/${encodeURIComponent(workflowId)}/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(skillName)}`,
+    );
+}
+
 export async function runWorkflow(
     id: string,
     message = '',
