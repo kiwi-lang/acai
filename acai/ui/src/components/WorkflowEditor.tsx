@@ -1,4 +1,4 @@
-import { FC, useCallback, useRef, useState, useEffect, useMemo, DragEvent, CSSProperties } from 'react';
+import { FC, createContext, useCallback, useContext, useRef, useState, useEffect, useMemo, DragEvent, CSSProperties } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ReactFlow,
@@ -295,24 +295,35 @@ const selectStyle: CSSProperties = {
 
 type DropdownOption = { value: string; label: string };
 
-const _dynamicFetchers: Record<string, () => Promise<DropdownOption[]>> = {
-  agents: () => listAgents().then(list =>
-    list.map(a => ({ value: a.name, label: a.name })),
-  ),
-  conversations: () => listConversations().then(list =>
-    list.map(c => ({ value: c.id, label: c.title || c.id })),
-  ),
-  tools: () => listToolDefinitions().then(list =>
-    list.map(t => ({ value: t.function.name, label: t.function.name })),
-  ),
-};
+const WorkflowIdCtx = createContext<string>('');
+
+function _dynamicFetchers(source: string, workflowId: string): Promise<DropdownOption[]> | null {
+  switch (source) {
+    case 'agents':
+      return listAgents(workflowId || undefined).then(list =>
+        list.map(a => ({ value: a.name, label: a.name })),
+      );
+    case 'conversations':
+      return listConversations().then(list =>
+        list.map(c => ({ value: c.id, label: c.title || c.id })),
+      );
+    case 'tools':
+      return listToolDefinitions().then(list =>
+        list.map(t => ({ value: t.function.name, label: t.function.name })),
+      );
+    default:
+      return null;
+  }
+}
 
 function useDynamicOptions(source: string | undefined): DropdownOption[] {
+  const workflowId = useContext(WorkflowIdCtx);
   const [options, setOptions] = useState<DropdownOption[]>([]);
   useEffect(() => {
-    if (!source || !_dynamicFetchers[source]) return;
-    _dynamicFetchers[source]().then(setOptions).catch(() => {});
-  }, [source]);
+    if (!source) return;
+    const p = _dynamicFetchers(source, workflowId);
+    if (p) p.then(setOptions).catch(() => {});
+  }, [source, workflowId]);
   return options;
 }
 
@@ -1359,6 +1370,8 @@ const WorkflowEditor: FC = () => {
     if (!wfId) { setWfAgents([]); setWfSkills([]); return; }
     listWorkflowAgents(wfId).then(setWfAgents).catch(() => setWfAgents([]));
     listWorkflowSkills(wfId).then(setWfSkills).catch(() => setWfSkills([]));
+    listAgents(wfId).then(setAgentsList).catch(() => {});
+    listSkills(wfId).then(setSkillsList).catch(() => {});
   }, []);
 
   useEffect(() => { refreshWfAssets(workflowId); }, [workflowId, refreshWfAssets]);
@@ -1737,6 +1750,7 @@ const WorkflowEditor: FC = () => {
   /* ================================================================ */
 
   return (
+    <WorkflowIdCtx.Provider value={workflowId}>
     <Box h="100%" w="100%" display="flex" bg={C.bg}>
       <style>{`
 .pin-label-row:hover .pin-label-name { opacity: 0 !important; }
@@ -2330,6 +2344,7 @@ const WorkflowEditor: FC = () => {
         />
       )}
     </Box>
+    </WorkflowIdCtx.Provider>
   );
 };
 

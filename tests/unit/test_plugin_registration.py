@@ -369,6 +369,53 @@ class TestAgentStoreMultiDir:
 
         assert store.builtin_dir == bi
 
+    def test_scoped_adds_and_removes(self, tmp_path):
+        from acai.orchestrator.agent_store import AgentStore
+
+        ws = str(tmp_path / "workspace")
+        bi = str(tmp_path / "builtin")
+        os.makedirs(bi)
+        store = AgentStore(ws, builtin_dir=bi)
+
+        wf_agents = str(tmp_path / "wf_agents")
+        agent_dir = os.path.join(wf_agents, "wf-only")
+        os.makedirs(agent_dir)
+        with open(os.path.join(agent_dir, "definition.json"), "w") as f:
+            json.dump({"name": "wf-only", "description": "workflow scoped"}, f)
+
+        assert store.get("wf-only") is None
+
+        with store.scoped(wf_agents):
+            agent = store.get("wf-only")
+            assert agent is not None
+            assert agent.name == "wf-only"
+            names = [a.name for a in store.list()]
+            assert "wf-only" in names
+
+        assert store.get("wf-only") is None
+        assert "wf-only" not in [a.name for a in store.list()]
+        assert wf_agents not in store._builtin_dirs
+
+    def test_scoped_cleans_up_on_exception(self, tmp_path):
+        from acai.orchestrator.agent_store import AgentStore
+
+        ws = str(tmp_path / "workspace")
+        bi = str(tmp_path / "builtin")
+        os.makedirs(bi)
+        store = AgentStore(ws, builtin_dir=bi)
+
+        wf_agents = str(tmp_path / "wf_agents")
+        os.makedirs(wf_agents)
+
+        try:
+            with store.scoped(wf_agents):
+                assert wf_agents in store._builtin_dirs
+                raise RuntimeError("simulated error")
+        except RuntimeError:
+            pass
+
+        assert wf_agents not in store._builtin_dirs
+
 
 # ---------------------------------------------------------------------------
 # End-to-end: scaffold → discover → AgentStore

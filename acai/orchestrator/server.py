@@ -1656,18 +1656,28 @@ def create_router(config: AcaiConfig | None = None,
     # ==================================================================
 
     @router.get("/skills")
-    def list_skills_endpoint():
-        skills = skill_store.all_skills()
-        return [
-            {
-                "qualified_name": f"skills.{s.namespace}.{s.name}",
-                "namespace": s.namespace,
-                "name": s.name,
-                "description": s.description,
-                "path": s.path,
-            }
-            for s in skills
-        ]
+    def list_skills_endpoint(workflow_id: str = ""):
+        def _fmt(skills):
+            return [
+                {
+                    "qualified_name": f"skills.{s.namespace}.{s.name}",
+                    "namespace": s.namespace,
+                    "name": s.name,
+                    "description": s.description,
+                    "path": s.path,
+                }
+                for s in skills
+            ]
+        if workflow_id:
+            wf_skills_dirs = [
+                os.path.join(d, workflow_id, "skills")
+                for d in (workflows_dir, _builtin_wf_dir)
+            ]
+            dirs = [d for d in wf_skills_dirs if os.path.isdir(d)]
+            if dirs:
+                with skill_store.scoped(*dirs):
+                    return _fmt(skill_store.all_skills())
+        return _fmt(skill_store.all_skills())
 
     @router.get("/skills/{namespace}/{name}")
     def get_skill_endpoint(namespace: str, name: str):
@@ -2065,7 +2075,16 @@ def create_router(config: AcaiConfig | None = None,
         return a.to_dict()
 
     @router.get("/agents")
-    def list_agents():
+    def list_agents(workflow_id: str = ""):
+        if workflow_id:
+            wf_agents_dirs = [
+                os.path.join(d, workflow_id, "agents")
+                for d in (workflows_dir, _builtin_wf_dir)
+            ]
+            dirs = [d for d in wf_agents_dirs if os.path.isdir(d)]
+            if dirs:
+                with agent_store.scoped(*dirs):
+                    return [_agent_json(a) for a in agent_store.list()]
         return [_agent_json(a) for a in agent_store.list()]
 
     @router.post("/agents", status_code=201)

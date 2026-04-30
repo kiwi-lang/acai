@@ -264,3 +264,63 @@ class TestSkillFileOps:
         store = SkillStore(str(skills_dir))
         result = store.read_file("math", "add_numbers", "nonexistent.txt")
         assert result is None
+
+
+class TestSkillStoreScoped:
+    """Verify scoped() temporarily adds and removes skill directories."""
+
+    def _make_extra_skill(self, tmp_path, ns="extra", name="greet"):
+        d = tmp_path / ns / name
+        d.mkdir(parents=True)
+        (d / "tool.json").write_text(json.dumps({
+            "name": name,
+            "description": f"A {name} skill.",
+            "parameters": {"type": "object", "properties": {}, "required": []},
+        }))
+        (d / "run.py").write_text("import json, sys\njson.dump({'ok': True}, sys.stdout)\n")
+        return str(tmp_path)
+
+    def test_scoped_adds_and_removes(self, skills_dir, tmp_path):
+        extra = self._make_extra_skill(tmp_path / "wf_skills")
+        store = SkillStore(str(skills_dir))
+        store.discover()
+
+        assert store.get("skills.extra.greet") is None
+
+        with store.scoped(extra):
+            sd = store.get("skills.extra.greet")
+            assert sd is not None
+            assert sd.name == "greet"
+            assert any(s.name == "greet" for s in store.all_skills())
+
+        assert store.get("skills.extra.greet") is None
+        assert not any(s.name == "greet" for s in store.all_skills())
+
+    def test_scoped_cleans_up_on_exception(self, skills_dir, tmp_path):
+        extra = self._make_extra_skill(tmp_path / "wf_skills")
+        store = SkillStore(str(skills_dir))
+        store.discover()
+
+        try:
+            with store.scoped(extra):
+                assert store.get("skills.extra.greet") is not None
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+
+        assert store.get("skills.extra.greet") is None
+        assert extra not in store._extra_dirs
+
+    def test_scoped_does_not_shadow_existing(self, skills_dir, tmp_path):
+        store = SkillStore(str(skills_dir))
+        store.discover()
+        original = store.get("skills.math.add_numbers")
+        assert original is not None
+
+        # Create an extra dir with the same qualified name
+        extra = self._make_extra_skill(tmp_path / "wf_skills", ns="math", name="add_numbers")
+
+        with store.scoped(extra):
+            sd = store.get("skills.math.add_numbers")
+            assert sd is not None
+            assert sd.path == original.path

@@ -346,8 +346,9 @@ export async function activateProvider(name: string): Promise<Provider> {
 }
 
 // Agents
-export async function listAgents(): Promise<AgentDef[]> {
-    return request<AgentDef[]>('/agents');
+export async function listAgents(workflowId?: string): Promise<AgentDef[]> {
+    const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : '';
+    return request<AgentDef[]>(`/agents${qs}`);
 }
 
 export async function createAgent(data: Partial<AgentDef>): Promise<AgentDef> {
@@ -812,8 +813,9 @@ export interface SkillDetail {
     readme: string;
 }
 
-export async function listSkills(): Promise<SkillSummary[]> {
-    return request<SkillSummary[]>('/skills');
+export async function listSkills(workflowId?: string): Promise<SkillSummary[]> {
+    const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : '';
+    return request<SkillSummary[]>(`/skills${qs}`);
 }
 
 export async function getSkill(namespace: string, name: string): Promise<SkillDetail> {

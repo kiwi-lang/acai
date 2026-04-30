@@ -57,10 +57,51 @@ class SkillStore:
     def __init__(self, skills_dir: str) -> None:
         self.skills_dir = skills_dir
         self._skills: dict[str, SkillDef] = {}
+        self._extra_dirs: list[str] = []
 
     @property
     def dir(self) -> str:
         return self.skills_dir
+
+    def scoped(self, *extra_dirs: str):
+        """Context manager that temporarily adds skill directories.
+
+        Skills from *extra_dirs* are discovered and merged into
+        ``_skills`` on entry and removed on exit.
+
+        Usage::
+
+            with skill_store.scoped(workflow_skills_dir):
+                skills = skill_store.all_skills()
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            added_keys: list[str] = []
+            added_dirs: list[str] = []
+            for d in extra_dirs:
+                if d and os.path.isdir(d) and d not in self._extra_dirs:
+                    self._extra_dirs.append(d)
+                    added_dirs.append(d)
+                    tmp = SkillStore(d)
+                    for sd in tmp.discover():
+                        key = f"skills.{sd.namespace}.{sd.name}"
+                        if key not in self._skills:
+                            self._skills[key] = sd
+                            added_keys.append(key)
+            try:
+                yield self
+            finally:
+                for key in added_keys:
+                    self._skills.pop(key, None)
+                for d in added_dirs:
+                    try:
+                        self._extra_dirs.remove(d)
+                    except ValueError:
+                        pass
+
+        return _ctx()
 
     def discover(self) -> list[SkillDef]:
         """Scan *skills_dir* for valid skill directories.

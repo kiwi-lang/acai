@@ -133,6 +133,36 @@ class AgentStore:
         if path and os.path.isdir(path) and path not in self._builtin_dirs:
             self._builtin_dirs.append(path)
 
+    def scoped(self, *extra_dirs: str):
+        """Context manager that temporarily adds directories to the builtin list.
+
+        On exit the directories are removed so the global state stays clean.
+
+        Usage::
+
+            with agent_store.scoped(workflow_agents_dir):
+                agents = agent_store.list()   # includes workflow agents
+        """
+        from contextlib import contextmanager
+
+        @contextmanager
+        def _ctx():
+            added: list[str] = []
+            for d in extra_dirs:
+                if d and os.path.isdir(d) and d not in self._builtin_dirs:
+                    self._builtin_dirs.append(d)
+                    added.append(d)
+            try:
+                yield self
+            finally:
+                for d in added:
+                    try:
+                        self._builtin_dirs.remove(d)
+                    except ValueError:
+                        pass
+
+        return _ctx()
+
     # -- path helpers ------------------------------------------------
 
     def _ws_dir(self, name: str) -> str:
@@ -476,6 +506,7 @@ def hydrate_task(
     *,
     tools_description: str = "",
     extra_context: dict | None = None,
+    template_src: str | None = None,
 ) -> list[dict]:
     """Render the agent's template with the resolved task.
 
@@ -487,8 +518,12 @@ def hydrate_task(
 
     ``extra_context``, when provided, is passed as additional top-level
     variables to the Jinja2 template render call.
+
+    ``template_src``, when provided, overrides the template loaded from
+    the store (used for workflow-local agents).
     """
-    template_src = store.read_template(agent.name)
+    if template_src is None:
+        template_src = store.read_template(agent.name)
 
     env = jinja2.Environment(
         undefined=jinja2.Undefined,

@@ -179,6 +179,7 @@ class TaskGraph:
         self._agent_scope: str = "global"
         self._scope_context: dict = {}
         self._workflow_dir: str | None = None
+        self._last_agent_dir: str | None = None
 
     @classmethod
     def from_work(
@@ -212,7 +213,9 @@ class TaskGraph:
             if os.path.isfile(os.path.join(wf_agent_dir, "definition.json")):
                 local = self.agent_store._load_from(wf_agent_dir, builtin=False)
                 if local is not None:
+                    self._last_agent_dir = wf_agent_dir
                     return local
+        self._last_agent_dir = None
         return self.agent_store.get(name)
 
     def _resolve_tools(self, agent_def: AgentDef) -> tuple[list[dict] | None, str]:
@@ -288,12 +291,22 @@ class TaskGraph:
             resolved = resolve_task(task_proxy, self.config, self.chat, self.projects)
 
             extra_context = kwargs.get("extra_context") or work.get("extra_context")
+
+            wf_template_src = None
+            if self._last_agent_dir:
+                import os
+                tpl_path = os.path.join(self._last_agent_dir, agent_def.system_template)
+                if os.path.isfile(tpl_path):
+                    with open(tpl_path) as _f:
+                        wf_template_src = _f.read()
+
             messages = hydrate_task(
                 agent_def,
                 self.agent_store,
                 resolved,
                 tools_description=tools_desc,
                 extra_context=extra_context,
+                template_src=wf_template_src,
             )
 
             payload: dict = {
