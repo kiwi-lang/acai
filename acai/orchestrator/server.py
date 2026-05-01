@@ -234,6 +234,7 @@ def create_router(config: AcaiConfig | None = None,
     projects = ProjectStore(projects_dir)
     chat = ChatStore(config.workspace)
     scheduler = ProviderScheduler(config.providers)
+    worker_provider = config.local_provider() or config.active_provider()
 
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
@@ -463,14 +464,20 @@ def create_router(config: AcaiConfig | None = None,
 
         chat.append(conversation, {"role": "user", "content": message})
 
+        from dataclasses import asdict as _asdict
+
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
-            if prov:
-                from dataclasses import asdict as _asdict
-                active = config.active_provider()
-                if prov.name != active.name:
-                    provider_override = _asdict(prov)
+            if prov and prov.name != worker_provider.name:
+                provider_override = _asdict(prov)
+
+        enable_thinking = data.get("enable_thinking")
+
+        resolved_provider = (
+            config.get_provider(provider_name) if provider_name and provider_name != "auto"
+            else worker_provider
+        ) or worker_provider
 
         work = {
             "message": message,
@@ -480,6 +487,9 @@ def create_router(config: AcaiConfig | None = None,
             "spec_path": chat._msg_path(conversation),
             "stream_id": conversation,
             "provider_override": provider_override,
+            "provider": provider_name,
+            "model": resolved_provider.model if resolved_provider else "",
+            "enable_thinking": enable_thinking,
         }
         if workflow_spec:
             work["workflow_spec"] = workflow_spec
@@ -1186,6 +1196,7 @@ def create_router(config: AcaiConfig | None = None,
     @router.post("/think/converse")
     async def think_converse(request: Request):
         import traceback as _tb
+        from dataclasses import asdict as _asdict
 
         data = await _json_body(request)
         message = data.get("message", "")
@@ -1226,11 +1237,8 @@ def create_router(config: AcaiConfig | None = None,
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
-            if prov:
-                from dataclasses import asdict as _asdict
-                active = config.active_provider()
-                if prov.name != active.name:
-                    provider_override = _asdict(prov)
+            if prov and prov.name != worker_provider.name:
+                provider_override = _asdict(prov)
 
         work = {
             "message": message,
@@ -1296,6 +1304,7 @@ def create_router(config: AcaiConfig | None = None,
     @router.post("/scribe/converse")
     async def scribe_converse(request: Request):
         import traceback as _tb
+        from dataclasses import asdict as _asdict
 
         data = await _json_body(request)
         message = data.get("message", "")
@@ -1336,11 +1345,8 @@ def create_router(config: AcaiConfig | None = None,
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
-            if prov:
-                from dataclasses import asdict as _asdict
-                active = config.active_provider()
-                if prov.name != active.name:
-                    provider_override = _asdict(prov)
+            if prov and prov.name != worker_provider.name:
+                provider_override = _asdict(prov)
 
         work = {
             "message": message,
@@ -1932,6 +1938,7 @@ def create_router(config: AcaiConfig | None = None,
         from dataclasses import asdict as _asdict
         d = _asdict(p)
         d["active"] = (p.name == active_name)
+        d["supports_thinking"] = p.supports_thinking
         return d
 
     @router.get("/providers")

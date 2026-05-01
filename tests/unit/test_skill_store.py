@@ -107,7 +107,7 @@ class TestSkillStoreRegistration:
         assert count == 1
         assert "skills.math" in registry.namespaces()
 
-        td = registry.get("skills.math.add_numbers")
+        td = registry.get("skills.math_add_numbers")
         assert td is not None
         assert td.description == "Add two numbers together."
         assert td.sandbox is True
@@ -120,7 +120,7 @@ class TestSkillStoreRegistration:
 
         defs = registry.mcp_definitions(namespaces=["skills"])
         assert len(defs) == 1
-        assert defs[0]["function"]["name"] == "skills.math.add_numbers"
+        assert defs[0]["function"]["name"] == "skills.math_add_numbers"
 
     def test_prefix_matching_includes_skill_namespaces(self, skills_dir):
         store = SkillStore(str(skills_dir))
@@ -179,7 +179,7 @@ class TestSkillExecution:
         registry = ToolRegistry()
         store.register_all(registry)
 
-        result = registry.call("skills.math.add_numbers", {"a": 10, "b": 5})
+        result = registry.call("skills.math_add_numbers", {"a": 10, "b": 5})
         parsed = json.loads(result)
         assert parsed == {"sum": 15}
 

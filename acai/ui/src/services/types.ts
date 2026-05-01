@@ -115,6 +115,7 @@ export interface Provider {
     priority: number;
     roles: string[];
     active?: boolean;
+    supports_thinking?: boolean;
 }
 
 export interface Worktree {

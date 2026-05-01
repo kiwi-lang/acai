@@ -227,7 +227,7 @@ def _build_tool_def(fn: Callable, namespace: str) -> ToolDef:
     resources = tuple(meta.get("resources", ()))
     sandbox_required = meta.get("sandbox", False)
     scope = meta.get("scope", "")
-    qualified = f"{namespace}.{tool_name}"
+    qualified = f"{namespace}_{tool_name}"
 
     hints = get_type_hints(fn)
     sig = inspect.signature(fn)
@@ -448,7 +448,7 @@ class ToolRegistry:
 
         ``POST <url_prefix>/call`` with JSON body::
 
-            {"tool": "namespace.function_name", "args": { … }}
+            {"tool": "namespace_function_name", "args": { … }}
 
         ``GET <url_prefix>/list`` returns the MCP definitions.
 

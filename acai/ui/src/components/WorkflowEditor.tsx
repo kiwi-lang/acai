@@ -982,6 +982,8 @@ function buildNodeTypes(): NodeTypes {
     fetch_conversation: FetchConversationNode,
     agent: AgentNodeComponent('agent'),
     agent_call: AgentNodeComponent('agent_call'),
+    simple_agent: AgentNodeComponent('simple_agent'),
+    background_agent: AgentNodeComponent('background_agent'),
     reply_type: ReplyTypeNodeComponent,
     read_reply: ReadReplyNodeComponent,
     skill_call: ToolNodeComponent('skill_call'),
@@ -1643,7 +1645,7 @@ const WorkflowEditor: FC = () => {
   /* Add node (used by both drag-drop and context menu) */
   const addNode = useCallback((type: string, position: { x: number; y: number }) => {
     const defaultData: Record<string, unknown> = { label: _nodeDefMap[type]?.label || type };
-    if (type === 'agent' || type === 'agent_call') defaultData.agent = 'default';
+    if (type === 'agent' || type === 'agent_call' || type === 'simple_agent' || type === 'background_agent') defaultData.agent = 'default';
     if (type === 'condition') defaultData.expression = 'True';
     if (type === 'start') { defaultData.preview_message = 'Hello!'; }
     if (type === 'fetch_conversation') { defaultData.conversation_id = ''; defaultData.debug = true; }

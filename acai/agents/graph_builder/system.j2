@@ -61,7 +61,7 @@ There are two kinds of edges:
 - **reply_type** stores fields as a JSON array in its `fields` data key: `[{"name":"reasoning","type":"str"},{"name":"answer","type":"str"}]`. Supported types: `str`, `int`, `float`, `bool`.
 - Wire `reply_type.data_format` into `simple_agent.data_format` (or `agent_call.data_format`) to enable structured output, and/or into `read_reply.data_reply_type` to parse the response.
 - **read_reply** dynamically exposes output pins for each field defined in the connected Reply Type (e.g. `data_reasoning`, `data_answer`).
-- **skill_call** stores the tool name in `data.tool` (e.g. `"skills.data.my_tool"`). The frontend dynamically generates input pins matching the tool's parameters. Each parameter becomes a `data_<param_name>` input pin. The `data_result` output carries the tool's text output.
+- **skill_call** stores the tool name in `data.tool`. The frontend dynamically generates input pins matching the tool's parameters. Each parameter becomes a `data_<param_name>` input pin. The `data_result` output carries the tool's text output.
 
 ## Common Patterns
 

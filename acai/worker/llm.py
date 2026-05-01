@@ -1,13 +1,10 @@
-"""Unified LLM interface for agent use.
+"""Unified LLM interface with per-provider adapters.
 
-All agents talk to models through this abstraction.  The default
-implementation speaks the OpenAI-compatible ``/v1/chat/completions``
-protocol, which covers OpenAI, llama.cpp, vLLM, and any compatible
-endpoint.
+All agents talk to models through the :class:`LLM` interface.  Each
+backend (vLLM, OpenAI, Anthropic, …) has its own adapter that
+translates the standard request into the provider's wire format.
 
-``LLMServer`` manages a local server process (vLLM, llama.cpp, …) on
-the GPU.  The serve command is resolved via
-``ProviderConfig.build_command()``.
+``LLMServer`` manages a local server process (vLLM, llama.cpp, …).
 """
 
 from __future__ import annotations
@@ -63,7 +60,6 @@ log = logging.getLogger(__name__)
 
 
 def _pid_alive(pid: int) -> bool:
-    """Check whether a process with *pid* is still alive."""
     try:
         os.kill(pid, 0)
         return True
@@ -72,10 +68,6 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _kill_tree(pid: int, sig: int = signal.SIGTERM) -> None:
-    """Send *sig* to the process group rooted at *pid*.
-
-    Falls back to killing just the pid if the pgid doesn't match.
-    """
     try:
         pgid = os.getpgid(pid)
         if pgid == pid:
@@ -100,12 +92,7 @@ class LLMServerError(RuntimeError):
 # ---------------------------------------------------------------------------
 
 class LLMServer:
-    """Manages the lifecycle of a local LLM server process.
-
-    The launch command is resolved via ``ProviderConfig.build_command()``.
-    Providers whose ``managed`` property is False (no launch command)
-    are treated as remote endpoints and no process is spawned.
-    """
+    """Manages the lifecycle of a local LLM server process."""
 
     def __init__(self, config: ProviderConfig, workspace: str = "workspace"):
         self.config = config
@@ -122,7 +109,6 @@ class LLMServer:
 
     @property
     def managed(self) -> bool:
-        """True if this server manages a local process (not a remote endpoint)."""
         return self.config.managed
 
     def is_running(self) -> bool:
@@ -139,7 +125,6 @@ class LLMServer:
     # ------------------------------------------------------------------
 
     def latest_log_path(self) -> str | None:
-        """Return the path to the most recent LLM server log file."""
         if self._current_log_path and os.path.isfile(self._current_log_path):
             return self._current_log_path
         pattern = os.path.join(self._log_dir, "llm_server_*.log")
@@ -147,7 +132,6 @@ class LLMServer:
         return files[-1] if files else None
 
     def read_log(self, tail: int = 200) -> str:
-        """Read the last *tail* lines of the latest log file."""
         path = self.latest_log_path()
         if path is None:
             return "(no log file found)"
@@ -183,7 +167,6 @@ class LLMServer:
             pass
 
     def _kill_stale_lock(self) -> None:
-        """If a lock file exists with a live process, kill it and clean up."""
         other_pid = self._read_lock()
         if other_pid is None:
             return
@@ -207,11 +190,6 @@ class LLMServer:
     # ------------------------------------------------------------------
 
     def start(self) -> None:
-        """Start the LLM server if not already running.
-
-        Raises :class:`LLMServerError` if the process crashes during
-        startup (e.g. OOM, bad arguments).
-        """
         if self.is_running():
             log.info("LLM server already running (pid %s)", self.pid or self._read_lock())
             return
@@ -245,7 +223,6 @@ class LLMServer:
         self.wait_healthy()
 
     def stop(self, timeout: float = 30) -> None:
-        """Terminate the LLM server and all its child processes."""
         if self.process is None:
             return
         pid = self.process.pid
@@ -274,7 +251,6 @@ class LLMServer:
     _RE_WEIGHTS_DONE = re.compile(r"Loading weights took")
 
     def _check_alive(self) -> None:
-        """Raise if the subprocess has exited."""
         if self.process is not None and self.process.poll() is not None:
             rc = self.process.returncode
             self._clear_lock()
@@ -291,11 +267,6 @@ class LLMServer:
             raise LLMServerError(msg)
 
     def _wait_model_loaded(self, timeout: float = 1800) -> None:
-        """Tail the log file and wait for checkpoint loading to finish.
-
-        Logs progress like ``Loading shards: 25% | 10/40`` so the user
-        can see what's happening instead of silence during the 5-min load.
-        """
         path = self._current_log_path
         if path is None:
             return
@@ -341,14 +312,6 @@ class LLMServer:
         log.warning("timed out waiting for checkpoint loading after %.0fs", timeout)
 
     def wait_healthy(self, retries: int = 120, interval: float = 2.0) -> None:
-        """Wait for the LLM server to become healthy.
-
-        Phase 1 — monitor the log for checkpoint loading progress.
-        Phase 2 — poll ``/health`` once loading is done.
-
-        Raises :class:`LLMServerError` if the process exits or never
-        becomes healthy.
-        """
         self._wait_model_loaded()
 
         url = f"{self.config.endpoint}/health"
@@ -374,11 +337,11 @@ class LLMServer:
 
 
 # ---------------------------------------------------------------------------
-# LLM client
+# LLM client interface
 # ---------------------------------------------------------------------------
 
 class LLM:
-    """Base class — override ``complete`` / ``stream`` for new backends."""
+    """Base class — each provider adapter implements this."""
 
     def complete(self, messages: list[dict], **kwargs) -> str:
         raise NotImplementedError
@@ -392,93 +355,418 @@ class LLM:
         raise NotImplementedError
 
 
-class OpenAICompatibleLLM(LLM):
-    """Talks to any OpenAI-compatible endpoint (OpenAI, llama.cpp, vLLM)."""
+# ---------------------------------------------------------------------------
+# Helpers shared across OpenAI-protocol adapters
+# ---------------------------------------------------------------------------
 
-    def __init__(self, endpoint: str, model: str = "",
-                 max_tokens: int = 4096, temperature: float = 0.7,
-                 api_key: str = "", timeout: int = 300):
-        self.endpoint = endpoint.rstrip("/")
-        self.model = model
-        self.max_tokens = max_tokens
-        self.temperature = temperature
-        self.api_key = api_key
-        self.timeout = timeout
+def _strip_endpoint(endpoint: str) -> str:
+    """Normalise an endpoint to a bare origin (no /v1/… suffix)."""
+    ep = endpoint.rstrip("/")
+    if ep.endswith("/v1/chat/completions"):
+        ep = ep[: -len("/v1/chat/completions")]
+    elif ep.endswith("/v1"):
+        ep = ep[: -len("/v1")]
+    return ep
 
-    def _headers(self):
-        h = {"Content-Type": "application/json"}
+
+def _parse_openai_sse(resp: requests.Response) -> Generator[StreamEvent, None, None]:
+    """Parse an OpenAI-format SSE stream into :class:`StreamEvent` objects."""
+    for line in resp.iter_lines(decode_unicode=True):
+        if not line or not line.startswith("data: "):
+            continue
+        data_str = line[6:]
+        if data_str.strip() == "[DONE]":
+            break
+        try:
+            data = json.loads(data_str)
+            delta = data.get("choices", [{}])[0].get("delta", {})
+
+            reasoning = delta.get("reasoning") or delta.get("reasoning_content") or ""
+            if reasoning:
+                yield ReasoningToken(text=reasoning)
+
+            content = delta.get("content", "")
+            if content:
+                yield ContentToken(text=content)
+
+            for tc in delta.get("tool_calls", []):
+                yield ToolCallDelta(
+                    index=tc.get("index", 0),
+                    id=tc.get("id"),
+                    name=tc.get("function", {}).get("name"),
+                    arguments=tc.get("function", {}).get("arguments"),
+                )
+        except (json.JSONDecodeError, IndexError):
+            continue
+
+    yield StreamDone()
+
+
+def _error_or_raise(resp: requests.Response) -> None:
+    """Log the response body on error, then raise."""
+    if resp.ok:
+        return
+    try:
+        body = resp.json()
+    except Exception:
+        body = resp.text[:2000]
+    log.error("LLM request failed  status=%s  body=%s", resp.status_code, body)
+    resp.raise_for_status()
+
+
+
+
+# ===================================================================
+# Provider adapters
+# ===================================================================
+
+class VLLMAdapter(LLM):
+    """Adapter for vLLM and other local OpenAI-compatible servers.
+
+    Supports vLLM extensions: ``chat_template_kwargs`` for thinking
+    control, Qwen3 thinking prefix hack.
+    """
+
+    def __init__(self, config: ProviderConfig):
+        self.endpoint = _strip_endpoint(config.endpoint)
+        self.model = config.slug
+        self.max_tokens = config.max_tokens
+        self.temperature = config.temperature
+        self.api_key = config.api_key
+        self.timeout = 300
+
+    def _url(self) -> str:
+        return f"{self.endpoint}/v1/chat/completions"
+
+    def _headers(self) -> dict:
+        h: dict[str, str] = {"Content-Type": "application/json"}
         if self.api_key:
             h["Authorization"] = f"Bearer {self.api_key}"
         return h
 
-    def _payload(self, messages, stream=False, **kwargs):
-        payload = {
+    def _prepare_messages(self, messages: list[dict], **kwargs) -> list[dict]:
+        """Apply Qwen3 thinking prefix hack if needed."""
+        enable_thinking = kwargs.get("enable_thinking")
+        if enable_thinking is None or not messages:
+            return messages
+        msgs = [dict(m) for m in messages]
+        if enable_thinking:
+            prefix = "<think>\n"
+            suffix = "\nI have to give the solution based on the reasoning directly now."
+        else:
+            prefix = "</think>\n"
+            suffix = ""
+        for msg in reversed(msgs):
+            if msg.get("role") == "user":
+                msg["content"] = prefix + (msg.get("content") or "") + suffix
+                break
+        return msgs
+
+    def _payload(self, messages: list[dict], stream: bool = False, **kwargs) -> dict:
+        payload: dict = {
             "model": kwargs.get("model", self.model),
             "messages": messages,
             "temperature": kwargs.get("temperature", self.temperature),
             "max_tokens": kwargs.get("max_tokens", self.max_tokens),
             "stream": stream,
         }
-        chat_template_kwargs = kwargs.get("chat_template_kwargs")
-        if chat_template_kwargs:
-            payload["chat_template_kwargs"] = chat_template_kwargs
-        response_format = kwargs.get("response_format")
-        if response_format:
-            payload["response_format"] = response_format
+        enable_thinking = kwargs.get("enable_thinking")
+        if enable_thinking is not None:
+            payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+        if kwargs.get("response_format"):
+            payload["response_format"] = kwargs["response_format"]
+        if kwargs.get("tools"):
+            payload["tools"] = kwargs["tools"]
         return payload
 
     def complete(self, messages, **kwargs):
-        payload = self._payload(messages, stream=False, **kwargs)
-        resp = requests.post(
-            f"{self.endpoint}/v1/chat/completions",
-            json=payload,
-            headers=self._headers(),
-            timeout=self.timeout,
-        )
+        msgs = self._prepare_messages(messages, **kwargs)
+        payload = self._payload(msgs, stream=False, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
 
     def complete_raw(self, messages, tools=None, **kwargs):
-        payload = self._payload(messages, stream=False, **kwargs)
+        msgs = self._prepare_messages(messages, **kwargs)
         if tools:
-            payload["tools"] = tools
-        resp = requests.post(
-            f"{self.endpoint}/v1/chat/completions",
-            json=payload,
-            headers=self._headers(),
-            timeout=self.timeout,
-        )
+            kwargs["tools"] = tools
+        payload = self._payload(msgs, stream=False, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]
 
     def stream(self, messages, **kwargs):
-        """Stream structured events from the LLM.
+        msgs = self._prepare_messages(messages, **kwargs)
+        payload = self._payload(msgs, stream=True, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), stream=True,
+                             timeout=self.timeout)
+        _error_or_raise(resp)
+        yield from _parse_openai_sse(resp)
 
-        Yields :class:`ReasoningToken` for thinking/reasoning deltas,
-        :class:`ContentToken` for text deltas,
-        :class:`ToolCallDelta` for each raw tool-call chunk, and
-        :class:`StreamDone` when the stream is complete.
-        """
-        payload = self._payload(messages, stream=True, **kwargs)
+
+class OpenAIAdapter(LLM):
+    """Adapter for the OpenAI API.
+
+    Key differences from vLLM:
+    - Uses ``max_completion_tokens`` instead of ``max_tokens``
+    - No ``chat_template_kwargs``
+    - No thinking prefix hack
+    """
+
+    def __init__(self, config: ProviderConfig):
+        self.endpoint = _strip_endpoint(config.endpoint)
+        self.model = config.slug or config.model
+        self.max_tokens = config.max_tokens
+        self.temperature = config.temperature
+        self.api_key = config.api_key
+        self.timeout = 300
+
+    def _url(self) -> str:
+        return f"{self.endpoint}/v1/chat/completions"
+
+    def _headers(self) -> dict:
+        h: dict[str, str] = {"Content-Type": "application/json"}
+        if self.api_key:
+            h["Authorization"] = f"Bearer {self.api_key}"
+        return h
+
+    def _payload(self, messages: list[dict], stream: bool = False, **kwargs) -> dict:
+        payload: dict = {
+            "model": kwargs.get("model", self.model),
+            "messages": messages,
+            "temperature": kwargs.get("temperature", self.temperature),
+            "max_completion_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "stream": stream,
+        }
+        if stream:
+            payload["stream_options"] = {"include_usage": True}
+        if kwargs.get("response_format"):
+            payload["response_format"] = kwargs["response_format"]
         if kwargs.get("tools"):
             payload["tools"] = kwargs["tools"]
-        resp = requests.post(
-            f"{self.endpoint}/v1/chat/completions",
-            json=payload,
-            headers=self._headers(),
-            stream=True,
-            timeout=self.timeout,
-        )
-        if not resp.ok:
-            try:
-                body = resp.json()
-            except Exception:
-                body = resp.text[:2000]
-            log.error(
-                "LLM request failed  status=%s  body=%s",
-                resp.status_code, body,
-            )
-            resp.raise_for_status()
+        return payload
+
+    def complete(self, messages, **kwargs):
+        payload = self._payload(messages, stream=False, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), timeout=self.timeout)
+        _error_or_raise(resp)
+        return resp.json()["choices"][0]["message"]["content"]
+
+    def complete_raw(self, messages, tools=None, **kwargs):
+        if tools:
+            kwargs["tools"] = tools
+        payload = self._payload(messages, stream=False, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), timeout=self.timeout)
+        _error_or_raise(resp)
+        return resp.json()["choices"][0]["message"]
+
+    def stream(self, messages, **kwargs):
+        payload = self._payload(messages, stream=True, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), stream=True,
+                             timeout=self.timeout)
+        _error_or_raise(resp)
+        yield from _parse_openai_sse(resp)
+
+
+class AnthropicAdapter(LLM):
+    """Adapter for the Anthropic Messages API.
+
+    Translates the standard OpenAI-style messages list into
+    Anthropic's wire format and parses the SSE stream back into
+    the common :class:`StreamEvent` types.
+    """
+
+    ANTHROPIC_VERSION = "2023-06-01"
+
+    def __init__(self, config: ProviderConfig):
+        ep = config.endpoint.rstrip("/")
+        if ep.endswith("/v1/messages"):
+            ep = ep[: -len("/v1/messages")]
+        elif ep.endswith("/v1"):
+            ep = ep[: -len("/v1")]
+        self.endpoint = ep
+        self.model = config.slug or config.model
+        self.max_tokens = config.max_tokens
+        self.temperature = config.temperature
+        self.api_key = config.api_key
+        self.timeout = 300
+
+    def _url(self) -> str:
+        return f"{self.endpoint}/v1/messages"
+
+    def _headers(self) -> dict:
+        return {
+            "Content-Type": "application/json",
+            "x-api-key": self.api_key,
+            "anthropic-version": self.ANTHROPIC_VERSION,
+        }
+
+    @staticmethod
+    def _split_system(messages: list[dict]) -> tuple[str, list[dict]]:
+        """Extract system messages into a single string; return the rest."""
+        system_parts: list[str] = []
+        rest: list[dict] = []
+        for m in messages:
+            if m.get("role") == "system":
+                system_parts.append(m.get("content", ""))
+            else:
+                rest.append(m)
+        return "\n\n".join(system_parts), rest
+
+    def _convert_messages(self, messages: list[dict]) -> list[dict]:
+        """Convert OpenAI-style messages to Anthropic format.
+
+        Merges consecutive same-role messages (Anthropic requires
+        strict alternation) and maps tool_calls / tool results.
+        """
+        out: list[dict] = []
+        for m in messages:
+            role = m.get("role", "user")
+            if role == "system":
+                continue
+            if role == "tool":
+                out.append({
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": m.get("tool_call_id", ""),
+                        "content": m.get("content", ""),
+                    }],
+                })
+                continue
+            if role == "assistant" and m.get("tool_calls"):
+                content: list[dict] = []
+                if m.get("content"):
+                    content.append({"type": "text", "text": m["content"]})
+                for tc in m["tool_calls"]:
+                    fn = tc.get("function", {})
+                    try:
+                        args = json.loads(fn.get("arguments", "{}"))
+                    except (json.JSONDecodeError, TypeError):
+                        args = {}
+                    content.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", ""),
+                        "name": fn.get("name", ""),
+                        "input": args,
+                    })
+                out.append({"role": "assistant", "content": content})
+                continue
+
+            out.append({"role": role, "content": m.get("content", "")})
+
+        # Merge consecutive same-role messages
+        merged: list[dict] = []
+        for msg in out:
+            if merged and merged[-1]["role"] == msg["role"]:
+                prev = merged[-1]["content"]
+                cur = msg["content"]
+                if isinstance(prev, str) and isinstance(cur, str):
+                    merged[-1]["content"] = prev + "\n\n" + cur
+                elif isinstance(prev, list) and isinstance(cur, list):
+                    merged[-1]["content"] = prev + cur
+                elif isinstance(prev, str) and isinstance(cur, list):
+                    merged[-1]["content"] = [{"type": "text", "text": prev}] + cur
+                elif isinstance(prev, list) and isinstance(cur, str):
+                    merged[-1]["content"] = prev + [{"type": "text", "text": cur}]
+            else:
+                merged.append(msg)
+        return merged
+
+    @staticmethod
+    def _convert_tools(tools: list[dict]) -> list[dict]:
+        """Convert OpenAI tool definitions to Anthropic format."""
+        out: list[dict] = []
+        for t in tools:
+            fn = t.get("function", {})
+            out.append({
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get("parameters", {"type": "object", "properties": {}}),
+            })
+        return out
+
+    def _payload(self, messages: list[dict], stream: bool = False, **kwargs) -> dict:
+        system_text, user_msgs = self._split_system(messages)
+        converted = self._convert_messages(user_msgs)
+        payload: dict = {
+            "model": kwargs.get("model", self.model),
+            "messages": converted,
+            "max_tokens": kwargs.get("max_tokens", self.max_tokens),
+            "temperature": kwargs.get("temperature", self.temperature),
+            "stream": stream,
+        }
+        if system_text:
+            payload["system"] = system_text
+        enable_thinking = kwargs.get("enable_thinking")
+        if enable_thinking:
+            payload["thinking"] = {"type": "enabled", "budget_tokens": self.max_tokens}
+        tools = kwargs.get("tools")
+        if tools:
+            payload["tools"] = self._convert_tools(tools)
+        return payload
+
+    def complete(self, messages, **kwargs):
+        payload = self._payload(messages, stream=False, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), timeout=self.timeout)
+        _error_or_raise(resp)
+        data = resp.json()
+        for block in data.get("content", []):
+            if block.get("type") == "text":
+                return block.get("text", "")
+        return ""
+
+    def complete_raw(self, messages, tools=None, **kwargs):
+        if tools:
+            kwargs["tools"] = tools
+        payload = self._payload(messages, stream=False, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), timeout=self.timeout)
+        _error_or_raise(resp)
+        return self._to_openai_message(resp.json())
+
+    @staticmethod
+    def _to_openai_message(data: dict) -> dict:
+        """Convert an Anthropic response to an OpenAI-style message dict."""
+        text_parts: list[str] = []
+        tool_calls: list[dict] = []
+        for block in data.get("content", []):
+            btype = block.get("type", "")
+            if btype == "text":
+                text_parts.append(block.get("text", ""))
+            elif btype == "tool_use":
+                tool_calls.append({
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(block.get("input", {})),
+                    },
+                })
+        msg: dict = {"role": "assistant", "content": "\n".join(text_parts) or None}
+        if tool_calls:
+            msg["tool_calls"] = tool_calls
+        return msg
+
+    def stream(self, messages, **kwargs):
+        payload = self._payload(messages, stream=True, **kwargs)
+        resp = requests.post(self._url(), json=payload,
+                             headers=self._headers(), stream=True,
+                             timeout=self.timeout)
+        _error_or_raise(resp)
+        yield from self._parse_anthropic_sse(resp)
+
+    def _parse_anthropic_sse(self, resp: requests.Response) -> Generator[StreamEvent, None, None]:
+        current_tool_id = ""
+        current_tool_name = ""
+        tool_index = 0
 
         for line in resp.iter_lines(decode_unicode=True):
             if not line or not line.startswith("data: "):
@@ -487,37 +775,76 @@ class OpenAICompatibleLLM(LLM):
             if data_str.strip() == "[DONE]":
                 break
             try:
-                data = json.loads(data_str)
-                delta = data.get("choices", [{}])[0].get("delta", {})
+                event = json.loads(data_str)
+            except json.JSONDecodeError:
+                continue
 
-                reasoning = delta.get("reasoning") or delta.get("reasoning_content") or ""
-                if reasoning:
-                    yield ReasoningToken(text=reasoning)
+            etype = event.get("type", "")
 
-                content = delta.get("content", "")
-                if content:
-                    yield ContentToken(text=content)
-
-                for tc in delta.get("tool_calls", []):
+            if etype == "content_block_start":
+                block = event.get("content_block", {})
+                if block.get("type") == "tool_use":
+                    current_tool_id = block.get("id", "")
+                    current_tool_name = block.get("name", "")
                     yield ToolCallDelta(
-                        index=tc.get("index", 0),
-                        id=tc.get("id"),
-                        name=tc.get("function", {}).get("name"),
-                        arguments=tc.get("function", {}).get("arguments"),
+                        index=tool_index,
+                        id=current_tool_id,
+                        name=current_tool_name,
+                        arguments="",
                     )
 
-            except (json.JSONDecodeError, IndexError):
-                continue
+            elif etype == "content_block_delta":
+                delta = event.get("delta", {})
+                dtype = delta.get("type", "")
+                if dtype == "text_delta":
+                    text = delta.get("text", "")
+                    if text:
+                        yield ContentToken(text=text)
+                elif dtype == "thinking_delta":
+                    thinking = delta.get("thinking", "")
+                    if thinking:
+                        yield ReasoningToken(text=thinking)
+                elif dtype == "input_json_delta":
+                    partial = delta.get("partial_json", "")
+                    if partial:
+                        yield ToolCallDelta(
+                            index=tool_index,
+                            id=None,
+                            name=None,
+                            arguments=partial,
+                        )
+
+            elif etype == "content_block_stop":
+                if current_tool_name:
+                    tool_index += 1
+                    current_tool_id = ""
+                    current_tool_name = ""
+
+            elif etype == "message_stop":
+                break
 
         yield StreamDone()
 
 
+# ---------------------------------------------------------------------------
+# Backward-compatible alias
+# ---------------------------------------------------------------------------
+OpenAICompatibleLLM = VLLMAdapter
+
+
+# ---------------------------------------------------------------------------
+# Factory
+# ---------------------------------------------------------------------------
+
+_ADAPTER_MAP: dict[str, type[LLM]] = {
+    "vllm": VLLMAdapter,
+    "llamacpp": VLLMAdapter,
+    "openai": OpenAIAdapter,
+    "anthropic": AnthropicAdapter,
+}
+
+
 def create_llm(config: ProviderConfig) -> LLM:
-    """Factory: build an LLM client from a ``ProviderConfig``."""
-    return OpenAICompatibleLLM(
-        endpoint=config.endpoint,
-        model=config.slug,
-        max_tokens=config.max_tokens,
-        temperature=config.temperature,
-        api_key=config.api_key,
-    )
+    """Build the right LLM adapter for the given provider config."""
+    cls = _ADAPTER_MAP.get(config.backend, VLLMAdapter)
+    return cls(config)

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect, Image } from '@chakra-ui/react';
+import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect, Image, Button } from '@chakra-ui/react';
 import { uberConverse, listProviders, listAgents, type SSEStream } from '../services/api';
 import type { AgentDef, Provider } from '../services/types';
 
@@ -10,7 +10,7 @@ const SendIcon = ({ size = 20 }: { size?: number }) => (
     </svg>
 );
 
-type ThinkingMode = 'off' | 'native' | 'emulated';
+type ThinkingMode = 'off' | 'native';
 
 interface RoutePending {
     conversation: string;
@@ -33,9 +33,18 @@ const Home = () => {
     const [selectedAgent, setSelectedAgent] = useState(
         () => localStorage.getItem('acai.agent') || 'default',
     );
-    const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
-        () => (localStorage.getItem('acai.thinking') as ThinkingMode | null) || 'native',
+    const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(
+        () => {
+            const stored = localStorage.getItem('acai.thinking');
+            return stored ? stored === 'native' : true;
+        },
     );
+    const thinkingMode: ThinkingMode = thinkingEnabled ? 'native' : 'off';
+
+    const currentProvider = providers.find(p =>
+        selectedProvider === 'auto' ? p.active : p.name === selectedProvider,
+    );
+    const canThink = currentProvider?.supports_thinking ?? false;
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const routeTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const streamRef = useRef<SSEStream | null>(null);
@@ -206,19 +215,28 @@ const Home = () => {
                                 ))}
                             </NativeSelect.Field>
                         </NativeSelect.Root>
-                        <NativeSelect.Root size="xs" w="auto">
-                            <NativeSelect.Field
-                                value={thinkingMode}
-                                onChange={e => { const v = e.target.value as ThinkingMode; setThinkingMode(v); localStorage.setItem('acai.thinking', v); }}
-                                bg="var(--bg-input)"
-                                color={thinkingMode === 'off' ? 'var(--text-tertiary)' : 'var(--accent)'}
-                                borderColor="var(--border-input)"
-                                fontSize="xs" px={2} h="26px" borderRadius="md">
-                                <option value="off" style={{ background: 'var(--option-bg)' }}>Think: Off</option>
-                                <option value="native" style={{ background: 'var(--option-bg)' }}>Think: Native</option>
-                                <option value="emulated" style={{ background: 'var(--option-bg)' }}>Think: Emulated</option>
-                            </NativeSelect.Field>
-                        </NativeSelect.Root>
+                        {canThink && (
+                            <Button
+                                size="xs"
+                                variant="ghost"
+                                h="26px"
+                                px={2}
+                                fontSize="xs"
+                                borderRadius="md"
+                                border="1px solid"
+                                borderColor={thinkingEnabled ? 'var(--accent)' : 'var(--border-input)'}
+                                color={thinkingEnabled ? 'var(--accent)' : 'var(--text-tertiary)'}
+                                bg={thinkingEnabled ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : 'var(--bg-input)'}
+                                _hover={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                                onClick={() => {
+                                    const next = !thinkingEnabled;
+                                    setThinkingEnabled(next);
+                                    localStorage.setItem('acai.thinking', next ? 'native' : 'off');
+                                }}
+                            >
+                                Think{thinkingEnabled ? ': On' : ': Off'}
+                            </Button>
+                        )}
                     </HStack>
                     <HStack gap={2} align="flex-end">
                         <HStack

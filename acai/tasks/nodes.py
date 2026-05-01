@@ -167,6 +167,26 @@ class NodeContext:
     inputs: dict[str, Any]     # resolved data-pin inputs
     work: dict                 # top-level work dict
 
+    @property
+    def agent_name(self) -> str:
+        """Agent name selected in the chat input."""
+        return self.work.get("agent", "default")
+
+    @property
+    def provider(self) -> str:
+        """Provider name selected in the chat input (``"auto"`` if default)."""
+        return self.work.get("provider", "auto")
+
+    @property
+    def model(self) -> str:
+        """Resolved model identifier for the active provider."""
+        return self.work.get("model", "")
+
+    @property
+    def enable_thinking(self) -> bool | None:
+        """Thinking toggle state from the chat input (``None`` if unset)."""
+        return self.work.get("enable_thinking")
+
 
 # ===================================================================
 # NodeType — base class
@@ -373,6 +393,10 @@ class StartNode(NodeType):
                  pin_type="message_list"),
         Pin.data("data_message", "message", Colors.amber, "right",
                  pin_type="message"),
+        Pin.data("data_agent", "agent", Colors.purple, "right",
+                 pin_type="string"),
+        Pin.data("data_model", "model", Colors.cyan, "right",
+                 pin_type="string"),
     ]
 
     async def execute(self, ctx: NodeContext):
@@ -388,6 +412,8 @@ class StartNode(NodeType):
         yield {"type": "output", "data": {
             "message": message,
             "conversation": conversation,
+            "agent": ctx.agent_name,
+            "model": ctx.model,
         }}
 
 

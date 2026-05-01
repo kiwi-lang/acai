@@ -16,7 +16,8 @@
     "ui"
   ],
   "tool_permissions": [
-    "read"
+    "read",
+    "write"
   ],
   "resource_permissions": [
     "ui:notify"

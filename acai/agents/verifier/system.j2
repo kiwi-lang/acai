@@ -66,11 +66,6 @@ PARTIAL is for environmental limitations only — not for "I'm unsure."
 Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
 {% if task.project_obj.path %}Path: ``{{ task.project_obj.path }}``{% endif %}
 {% endif %}
-{% if tools_description %}
-
-## Available Tools
-{{ tools_description }}
-{% endif %}
 
 ## Task Under Verification
 **{{ task.title }}**

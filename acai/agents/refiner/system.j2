@@ -7,7 +7,7 @@ Through conversation you should:
 1. **Clarify the goal** — ask questions until the objective is unambiguous.
 2. **Break it down** — split large requests into small, independently testable tasks.
 3. **Define acceptance criteria** — each task description should state what "done" looks like.
-4. **Create the tasks** — use ``tasks.create`` to add them to the queue.
+4. **Create the tasks** — add them to the queue using your task tools.
 
 Guidelines:
 - Keep task titles short (< 80 chars) and imperative ("Add user login endpoint").
@@ -25,11 +25,6 @@ Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
 
 ## Project Specification
 {{ task.project_spec }}
-{% endif %}
-{% if tools_description %}
-
-## Available Tools
-{{ tools_description }}
 {% endif %}
 {%- endset -%}
 [

@@ -152,27 +152,9 @@ def create_worker_router(
         if tools:
             stream_kwargs["tools"] = tools
         if enable_thinking is not None:
-            stream_kwargs["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
+            stream_kwargs["enable_thinking"] = enable_thinking
         if response_format:
             stream_kwargs["response_format"] = response_format
-
-        # FIXME(temporary): Qwen3 thinking control via message prefix/suffix
-        # while vLLM template kwargs are unreliable.  Remove once upstream is fixed.
-        if True:
-            if enable_thinking is not None and messages:
-                if enable_thinking:
-                    prefix = "<think>\n"
-                    suffix = "\nI have to give the solution based on the reasoning directly now."
-
-                else:
-                    prefix = "</think>\n"
-                    suffix = ""
-
-                for msg in reversed(messages):
-                    if msg.get("role") == "user":
-                        content = msg.get("content") or ""
-                        msg["content"] = prefix + content + suffix
-                        break
 
         def generate():
             idx = 0

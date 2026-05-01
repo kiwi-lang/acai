@@ -131,7 +131,7 @@ def test_sandbox_tool_list():
         tool_names = [t["function"]["name"] for t in tools_resp.json()]
         log.info("Available tools (%d): %s", len(tool_names), tool_names)
 
-        for expected in ("shell.run", "filesystem.read_file", "git.status"):
+        for expected in ("shell_run", "filesystem_read_file", "git_status"):
             assert expected in tool_names, f"{expected} not found in tools"
     finally:
         sandbox.stop()

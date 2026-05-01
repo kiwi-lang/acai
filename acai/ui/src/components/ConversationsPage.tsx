@@ -29,7 +29,7 @@ const ConversationsPage = () => {
             message: s.pendingMessage,
             provider: s.provider,
             agent: s.agent,
-            thinkingMode: s.thinkingMode as 'off' | 'native' | 'emulated' | undefined,
+            thinkingMode: s.thinkingMode as 'off' | 'native' | undefined,
         };
     });
 

@@ -19,8 +19,8 @@
       "id": "converse",
       "type": "agent_call",
       "position": {
-        "x": -1154.9770179293923,
-        "y": -716.5486324341812
+        "x": -1257.3685911055943,
+        "y": -760.9156212153254
       },
       "data": {
         "label": "Converse",
@@ -31,8 +31,8 @@
       "id": "acc_converse",
       "type": "accumulate",
       "position": {
-        "x": -920.1263342555002,
-        "y": -729.1789269271587
+        "x": -902.4810308391156,
+        "y": -758.0902527812549
       },
       "data": {
         "label": "Accumulate"
@@ -42,8 +42,8 @@
       "id": "n_5_mo4x3s85",
       "type": "tool_followup_loop",
       "position": {
-        "x": -574.5283296790291,
-        "y": -572.8311060815566
+        "x": -542.5283296790291,
+        "y": -519.8311060815566
       },
       "data": {
         "label": "Tool Loop",
@@ -65,8 +65,8 @@
       "id": "n_1_mo52z8n2",
       "type": "parse_knowledge",
       "position": {
-        "x": -1501.8963192403337,
-        "y": -716.6159388325839
+        "x": -1571.2618563998012,
+        "y": -755.720980152543
       },
       "data": {
         "label": "Parse Knowledge"
@@ -76,8 +76,8 @@
       "id": "n_5_mo53juaq",
       "type": "append",
       "position": {
-        "x": -71.35529436003064,
-        "y": -655.8858414936722
+        "x": -90.35529436003064,
+        "y": -691.8858414936722
       },
       "data": {
         "label": "Append"
@@ -87,8 +87,8 @@
       "id": "n_1_mo53pssi",
       "type": "background_agent",
       "position": {
-        "x": -1733.935262542876,
-        "y": -705.7366733188408
+        "x": -1774.935262542876,
+        "y": -757.7366733188408
       },
       "data": {
         "label": "Background Agent",
@@ -107,6 +107,18 @@
         "label": "Background Agent",
         "agent": "scribe",
         "phase": "scribe"
+      }
+    },
+    {
+      "id": "n_1_monfent2",
+      "type": "simple_agent",
+      "position": {
+        "x": -1109.7926995511023,
+        "y": -520.1909995029357
+      },
+      "data": {
+        "label": "Simple Agent",
+        "agent": "default"
       }
     }
   ],
@@ -160,28 +172,12 @@
       "type": "data"
     },
     {
-      "id": "xy-edge__n_1_mo52z8n2exec_out-converseexec_in",
-      "source": "n_1_mo52z8n2",
-      "target": "converse",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
       "id": "xy-edge__converseexec_out-acc_converseexec_in",
       "source": "converse",
       "target": "acc_converse",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
-    },
-    {
-      "id": "xy-edge__acc_conversedata_response-n_5_mo53juaqdata_b",
-      "source": "acc_converse",
-      "target": "n_5_mo53juaq",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_b",
-      "type": "data"
     },
     {
       "id": "xy-edge__n_5_mo4x3s85exec_out-n_5_mo53juaqexec_in",
@@ -277,6 +273,86 @@
       "target": "n_5_mo53juaq",
       "sourceHandle": "data_conversation",
       "targetHandle": "data_a",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__startdata_agent-conversedata_agent",
+      "source": "start",
+      "target": "converse",
+      "sourceHandle": "data_agent",
+      "targetHandle": "data_agent",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_monfent2data_payload-n_5_mo4x3s85data_payload",
+      "source": "n_1_monfent2",
+      "target": "n_5_mo4x3s85",
+      "sourceHandle": "data_payload",
+      "targetHandle": "data_payload",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_monfent2data_tool_calls-n_5_mo4x3s85data_tool_calls",
+      "source": "n_1_monfent2",
+      "target": "n_5_mo4x3s85",
+      "sourceHandle": "data_tool_calls",
+      "targetHandle": "data_tool_calls",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_monfent2data_response-n_5_mo4x3s85data_response_in",
+      "source": "n_1_monfent2",
+      "target": "n_5_mo4x3s85",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_response_in",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_monfent2exec_out-n_5_mo4x3s85exec_in",
+      "source": "n_1_monfent2",
+      "target": "n_5_mo4x3s85",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__n_1_mo52z8n2exec_out-n_1_monfent2exec_in",
+      "source": "n_1_mo52z8n2",
+      "target": "n_1_monfent2",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "xy-edge__startdata_conversation-n_1_monfent2data_context",
+      "source": "start",
+      "target": "n_1_monfent2",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_mo52z8n2data_knowledge_context-n_1_monfent2data_knowledge_context",
+      "source": "n_1_mo52z8n2",
+      "target": "n_1_monfent2",
+      "sourceHandle": "data_knowledge_context",
+      "targetHandle": "data_knowledge_context",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__startdata_agent-n_1_monfent2data_agent",
+      "source": "start",
+      "target": "n_1_monfent2",
+      "sourceHandle": "data_agent",
+      "targetHandle": "data_agent",
+      "type": "data"
+    },
+    {
+      "id": "xy-edge__n_1_monfent2data_response-n_5_mo53juaqdata_b",
+      "source": "n_1_monfent2",
+      "target": "n_5_mo53juaq",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_b",
       "type": "data"
     }
   ]

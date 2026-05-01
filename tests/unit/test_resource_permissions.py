@@ -103,7 +103,7 @@ class TestMcpDefinitionsResourceFiltering:
         reg = _build_registry()
         defs = reg.mcp_definitions(allowed_resources=set())
         names = _tool_names(defs)
-        assert "meta.list_tools" in names
+        assert "meta_list_tools" in names
 
     def test_exact_subset_passes(self):
         reg = _build_registry()
@@ -111,8 +111,8 @@ class TestMcpDefinitionsResourceFiltering:
             allowed_resources={"agents:read", "agents:create"},
         )
         names = _tool_names(defs)
-        assert "workflow.read_agent" in names
-        assert "workflow.create_agent" in names
+        assert "workflow_read_agent" in names
+        assert "workflow_create_agent" in names
 
     def test_superset_passes(self):
         """Having more permissions than required is fine."""
@@ -121,9 +121,9 @@ class TestMcpDefinitionsResourceFiltering:
             allowed_resources={"agents:read", "agents:create", "agents:update", "extra:perm"},
         )
         names = _tool_names(defs)
-        assert "workflow.read_agent" in names
-        assert "workflow.create_agent" in names
-        assert "workflow.update_agent" in names
+        assert "workflow_read_agent" in names
+        assert "workflow_create_agent" in names
+        assert "workflow_update_agent" in names
 
     def test_missing_resource_excludes_tool(self):
         """A tool is excluded when its resources are not a subset of allowed."""
@@ -132,16 +132,16 @@ class TestMcpDefinitionsResourceFiltering:
             allowed_resources={"agents:read"},
         )
         names = _tool_names(defs)
-        assert "workflow.read_agent" in names
-        assert "workflow.create_agent" not in names
-        assert "workflow.update_agent" not in names
+        assert "workflow_read_agent" in names
+        assert "workflow_create_agent" not in names
+        assert "workflow_update_agent" not in names
 
     def test_empty_allowed_resources_excludes_all_annotated(self):
         """An empty allowed_resources set blocks every tool that declares resources."""
         reg = _build_registry()
         defs = reg.mcp_definitions(allowed_resources=set())
         names = _tool_names(defs)
-        assert names == {"meta.list_tools"}
+        assert names == {"meta_list_tools"}
 
     def test_cross_namespace_filtering(self):
         """Resources from different namespaces are correctly handled."""
@@ -150,12 +150,12 @@ class TestMcpDefinitionsResourceFiltering:
             allowed_resources={"agents:read", "files:read"},
         )
         names = _tool_names(defs)
-        assert "workflow.read_agent" in names
-        assert "filesystem.read_file" in names
-        assert "workflow.create_agent" not in names
-        assert "filesystem.write_file" not in names
-        assert "filesystem.delete_file" not in names
-        assert "meta.list_tools" in names
+        assert "workflow_read_agent" in names
+        assert "filesystem_read_file" in names
+        assert "workflow_create_agent" not in names
+        assert "filesystem_write_file" not in names
+        assert "filesystem_delete_file" not in names
+        assert "meta_list_tools" in names
 
     def test_namespace_plus_resource_filter(self):
         """Namespace and resource filters are applied together."""
@@ -165,7 +165,7 @@ class TestMcpDefinitionsResourceFiltering:
             allowed_resources={"agents:read"},
         )
         names = _tool_names(defs)
-        assert names == {"workflow.read_agent"}
+        assert names == {"workflow_read_agent"}
 
     def test_permission_plus_resource_filter(self):
         """Global permission and resource filters are applied together."""
@@ -175,12 +175,12 @@ class TestMcpDefinitionsResourceFiltering:
             allowed_resources={"agents:read", "files:read"},
         )
         names = _tool_names(defs)
-        assert "workflow.read_agent" in names
-        assert "filesystem.read_file" in names
-        assert "meta.list_tools" in names
+        assert "workflow_read_agent" in names
+        assert "filesystem_read_file" in names
+        assert "meta_list_tools" in names
         # write-permission tools excluded by allowed_permissions
-        assert "workflow.create_agent" not in names
-        assert "filesystem.write_file" not in names
+        assert "workflow_create_agent" not in names
+        assert "filesystem_write_file" not in names
 
     def test_resource_field_included_in_output(self):
         """Each MCP definition includes the resources list."""
@@ -188,9 +188,9 @@ class TestMcpDefinitionsResourceFiltering:
         defs = reg.mcp_definitions()
         by_name = {d["function"]["name"]: d for d in defs}
 
-        assert by_name["workflow.read_agent"]["function"]["resources"] == ["agents:read"]
-        assert by_name["workflow.create_agent"]["function"]["resources"] == ["agents:create"]
-        assert by_name["meta.list_tools"]["function"]["resources"] == []
+        assert by_name["workflow_read_agent"]["function"]["resources"] == ["agents:read"]
+        assert by_name["workflow_create_agent"]["function"]["resources"] == ["agents:create"]
+        assert by_name["meta_list_tools"]["function"]["resources"] == []
 
 
 # =====================================================================
@@ -255,8 +255,8 @@ class TestTaskGraphResourceEnforcement:
         assert tool_defs is not None
         names = _tool_names(tool_defs)
         assert len(names) == 8
-        assert "workflow.read_agent" in names
-        assert "filesystem.write_file" in names
+        assert "workflow_read_agent" in names
+        assert "filesystem_write_file" in names
 
     def test_resolve_tools_restricts_by_resources(self):
         """Agent with partial resource permissions sees only allowed tools."""
@@ -274,13 +274,13 @@ class TestTaskGraphResourceEnforcement:
         tool_defs, desc = graph._resolve_tools(agent)
 
         names = _tool_names(tool_defs)
-        assert "workflow.read_agent" in names
-        assert "filesystem.read_file" in names
-        assert "meta.list_tools" in names
-        assert "workflow.create_agent" not in names
-        assert "workflow.update_agent" not in names
-        assert "filesystem.write_file" not in names
-        assert "filesystem.delete_file" not in names
+        assert "workflow_read_agent" in names
+        assert "filesystem_read_file" in names
+        assert "meta_list_tools" in names
+        assert "workflow_create_agent" not in names
+        assert "workflow_update_agent" not in names
+        assert "filesystem_write_file" not in names
+        assert "filesystem_delete_file" not in names
 
     def test_resolve_tools_populates_allowed_tools(self):
         """_allowed_tools is set to the filtered tool names."""
@@ -297,7 +297,7 @@ class TestTaskGraphResourceEnforcement:
         graph = self._make_graph(reg)
         graph._resolve_tools(agent)
 
-        assert graph._allowed_tools == {"workflow.read_agent"}
+        assert graph._allowed_tools == {"workflow_read_agent"}
 
     @pytest.mark.asyncio
     async def test_dispatch_tool_blocks_disallowed(self):
@@ -315,9 +315,9 @@ class TestTaskGraphResourceEnforcement:
         graph = self._make_graph(reg)
         graph._resolve_tools(agent)
 
-        result = await graph.dispatch_tool("workflow.create_agent", {"name": "evil"})
+        result = await graph.dispatch_tool("workflow_create_agent", {"name": "evil"})
         assert "not permitted" in result
-        assert "workflow.create_agent" in result
+        assert "workflow_create_agent" in result
 
     @pytest.mark.asyncio
     async def test_dispatch_tool_blocks_unknown_tool(self):
@@ -335,7 +335,7 @@ class TestTaskGraphResourceEnforcement:
         graph = self._make_graph(reg)
         graph._resolve_tools(agent)
 
-        result = await graph.dispatch_tool("admin.destroy_everything", {})
+        result = await graph.dispatch_tool("admin_destroy_everything", {})
         assert "not permitted" in result
 
     def test_empty_resource_permissions_means_no_filter(self):
@@ -360,9 +360,9 @@ class TestTaskGraphResourceEnforcement:
 
         assert tool_defs is not None
         names = _tool_names(tool_defs)
-        assert "workflow.read_agent" in names
-        assert "workflow.create_agent" in names
-        assert "meta.list_tools" in names
+        assert "workflow_read_agent" in names
+        assert "workflow_create_agent" in names
+        assert "meta_list_tools" in names
 
     def test_no_resource_permissions_field_means_no_filter(self):
         """When resource_permissions is not set (None-ish), no resource filtering occurs."""
@@ -512,7 +512,7 @@ class TestScopeEnforcement:
         graph._agent_scope = "global"
         graph._scope_context = {"workflow_id": "my-workflow"}
 
-        result = graph._check_scope("workflow.update_workflow", {"workflow_id": "other-workflow", "spec": "{}"})
+        result = graph._check_scope("workflow_update_workflow", {"workflow_id": "other-workflow", "spec": "{}"})
         assert result == ""
 
     # --- scope=project agent: validates scope key ---
@@ -535,7 +535,7 @@ class TestScopeEnforcement:
         graph._agent_scope = "project"
         graph._scope_context = {"workflow_id": "my-workflow"}
 
-        result = graph._check_scope("workflow.update_workflow", {"workflow_id": "other-workflow", "spec": "{}"})
+        result = graph._check_scope("workflow_update_workflow", {"workflow_id": "other-workflow", "spec": "{}"})
         assert "Scope error" in result
         assert "other-workflow" in result
 
@@ -557,7 +557,7 @@ class TestScopeEnforcement:
         graph._agent_scope = "project"
         graph._scope_context = {"workflow_id": "my-workflow"}
 
-        result = graph._check_scope("workflow.update_workflow", {"workflow_id": "my-workflow", "spec": "{}"})
+        result = graph._check_scope("workflow_update_workflow", {"workflow_id": "my-workflow", "spec": "{}"})
         assert result == ""
 
     # --- no scope context: graceful fallback ---
@@ -569,7 +569,7 @@ class TestScopeEnforcement:
         graph._agent_scope = "project"
         graph._scope_context = {}
 
-        result = graph._check_scope("workflow.update_workflow", {"workflow_id": "anything", "spec": "{}"})
+        result = graph._check_scope("workflow_update_workflow", {"workflow_id": "anything", "spec": "{}"})
         assert result == ""
 
     def test_no_scope_context_key_allows_all(self):
@@ -579,7 +579,7 @@ class TestScopeEnforcement:
         graph._agent_scope = "project"
         graph._scope_context = {"project": "some-project"}
 
-        result = graph._check_scope("workflow.update_workflow", {"workflow_id": "anything", "spec": "{}"})
+        result = graph._check_scope("workflow_update_workflow", {"workflow_id": "anything", "spec": "{}"})
         assert result == ""
 
     # --- unscoped tools: unaffected ---
@@ -591,7 +591,7 @@ class TestScopeEnforcement:
         graph._agent_scope = "project"
         graph._scope_context = {"workflow_id": "my-workflow"}
 
-        result = graph._check_scope("meta.list_tools", {})
+        result = graph._check_scope("meta_list_tools", {})
         assert result == ""
 
     def test_tool_with_resources_but_unscoped(self):
@@ -601,7 +601,7 @@ class TestScopeEnforcement:
         graph._agent_scope = "project"
         graph._scope_context = {"workflow_id": "my-workflow"}
 
-        result = graph._check_scope("filesystem.read_file", {"path": "/etc/passwd"})
+        result = graph._check_scope("filesystem_read_file", {"path": "/etc/passwd"})
         assert result == ""
 
     # --- dispatch_tool integration ---
@@ -625,7 +625,7 @@ class TestScopeEnforcement:
         graph._scope_context = {"workflow_id": "my-workflow"}
 
         result = await graph.dispatch_tool(
-            "workflow.update_workflow",
+            "workflow_update_workflow",
             {"workflow_id": "evil-workflow", "spec": "{}"},
         )
         assert "Scope error" in result
@@ -730,12 +730,12 @@ class TestParseScope:
         reg.register(scoped_tool, "test")
         reg.register(unscoped_tool, "test")
 
-        td = reg.get("test.scoped_tool")
+        td = reg.get("test_scoped_tool")
         assert td.scope == "project:workflow_id"
         assert td.scope_level == "project"
         assert td.scope_key == "workflow_id"
 
-        td2 = reg.get("test.unscoped_tool")
+        td2 = reg.get("test_unscoped_tool")
         assert td2.scope == ""
         assert td2.scope_level == "global"
         assert td2.scope_key == ""

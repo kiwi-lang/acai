@@ -21,7 +21,9 @@
     "code"
   ],
   "tool_permissions": [
-    "read"
+    "read",
+    "write",
+    "execute"
   ],
   "resource_permissions": [
     "shell:execute",

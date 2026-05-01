@@ -20,7 +20,8 @@
     "tasks"
   ],
   "tool_permissions": [
-    "read"
+    "read",
+    "write"
   ],
   "resource_permissions": [
     "files:delete",

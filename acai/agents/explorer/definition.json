@@ -20,7 +20,8 @@
     "shell"
   ],
   "tool_permissions": [
-    "read"
+    "read",
+    "execute"
   ],
   "resource_permissions": [
     "code:build",

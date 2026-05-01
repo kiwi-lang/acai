@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
-import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect } from '@chakra-ui/react';
-import { converse, uberConverse, thinkConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, type SSEStream, type GraphDef } from '../services/api';
+import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect, Button } from '@chakra-ui/react';
+import { converse, uberConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, type SSEStream, type GraphDef } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentDef, AgentMessage, Provider } from '../services/types';
 import Markdown from './Markdown';
@@ -64,7 +64,7 @@ const ToolIcon = () => (
     </svg>
 );
 
-type ThinkingMode = 'off' | 'native' | 'emulated';
+type ThinkingMode = 'off' | 'native';
 
 export const ContextRing = ({ tokens, maxTokens }: { tokens: number; maxTokens: number }) => {
     const ratio = Math.min(tokens / maxTokens, 1);
@@ -243,12 +243,20 @@ const ChatPanel = ({
         () => initialGraph || localStorage.getItem('acai.graph') || 'converse',
     );
     const [contextStats, setContextStats] = useState<{ estimated_tokens: number; max_context: number } | null>(null);
-    const [thinkingMode, setThinkingMode] = useState<ThinkingMode>(
-        () => initialThinkingMode
-            ?? (initialThinking === false ? 'off' : undefined)
-            ?? (localStorage.getItem('acai.thinking') as ThinkingMode | null)
-            ?? 'native',
+    const [thinkingEnabled, setThinkingEnabled] = useState<boolean>(
+        () => {
+            if (initialThinkingMode) return initialThinkingMode === 'native';
+            if (initialThinking !== undefined) return initialThinking !== false;
+            const stored = localStorage.getItem('acai.thinking');
+            return stored ? stored === 'native' : true;
+        },
     );
+    const thinkingMode: ThinkingMode = thinkingEnabled ? 'native' : 'off';
+
+    const currentProvider = providers.find(p =>
+        selectedProvider === 'auto' ? p.active : p.name === selectedProvider,
+    );
+    const canThink = currentProvider?.supports_thinking ?? false;
 
     interface RoutePending {
         conversation: string;
@@ -583,21 +591,13 @@ const ChatPanel = ({
 
         try {
             const think = initialThinkingMode ?? (initialThinking === false ? 'off' : 'native');
-            if (think === 'emulated') {
-                const r = await thinkConverse(pending, convId, project || '', '',
-                    initialProviderRef.current, initialAgentRef.current, taskId);
-                if (signal?.cancelled) { r.stream.close(); return; }
-                setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
-                attachListeners(r.stream);
-            } else {
-                const r = await converse(pending, convId, project || '', '',
-                    initialProviderRef.current, initialAgentRef.current,
-                    think === 'native' ? true : undefined, selectedGraph,
-                    ephemeral || undefined, taskId, contextRef.current);
-                if (signal?.cancelled) { r.stream.close(); return; }
-                setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
-                attachListeners(r.stream);
-            }
+            const r = await converse(pending, convId, project || '', '',
+                initialProviderRef.current, initialAgentRef.current,
+                think === 'native' ? true : undefined, selectedGraph,
+                ephemeral || undefined, taskId, contextRef.current);
+            if (signal?.cancelled) { r.stream.close(); return; }
+            setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
+            attachListeners(r.stream);
         } catch (err) {
             if (signal?.cancelled) return;
             const detail = err instanceof Error ? err.message : String(err);
@@ -621,7 +621,7 @@ const ChatPanel = ({
 
         setSelectedProvider(initialProviderRef.current);
         setSelectedAgent(initialAgentRef.current);
-        setThinkingMode(initialThinkingMode ?? (initialThinking === false ? 'off' : 'native'));
+        setThinkingEnabled(initialThinkingMode ? initialThinkingMode === 'native' : initialThinking !== false);
         setMessages([]);
         setIsLoading(false);
         setRoutePending(null);
@@ -778,23 +778,14 @@ const ChatPanel = ({
 
         setIsLoading(true);
         try {
-            if (thinkingMode === 'emulated') {
-                const resp = await thinkConverse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent, taskId);
-                setMessages(prev => [
-                    ...prev,
-                    { role: 'assistant', content: '', isStreaming: true },
-                ]);
-                attachListeners(resp.stream);
-            } else {
-                const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
-                    thinkingMode === 'native' ? true : undefined, selectedGraph,
-                    ephemeral || undefined, taskId, contextRef.current);
-                setMessages(prev => [
-                    ...prev,
-                    { role: 'assistant', content: '', isStreaming: true },
-                ]);
-                attachListeners(resp.stream);
-            }
+            const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
+                thinkingMode === 'native' ? true : undefined, selectedGraph,
+                ephemeral || undefined, taskId, contextRef.current);
+            setMessages(prev => [
+                ...prev,
+                { role: 'assistant', content: '', isStreaming: true },
+            ]);
+            attachListeners(resp.stream);
         } catch (err) {
             const detail = err instanceof Error ? err.message : String(err);
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
@@ -823,21 +814,6 @@ const ChatPanel = ({
             if (mode === 'uber') {
                 pendingMessageRef.current = text;
                 const resp = await uberConverse(text, prevConvId || '', selectedAgent);
-                attachListeners(resp.stream);
-            } else if (thinkingMode === 'emulated') {
-                const resp = await thinkConverse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent, taskId);
-                convIdRef.current = resp.conversation;
-                joinConversation(resp.conversation);
-                const convChanged = resp.conversation !== (prevConvId || '');
-                if (convChanged) {
-                    if (prevConvId) leaveConversation(prevConvId);
-                    justCreatedRef.current = true;
-                    onConversationCreated?.(resp.conversation);
-                }
-                setMessages(prev => [
-                    ...prev,
-                    { role: 'assistant', content: '', isStreaming: true },
-                ]);
                 attachListeners(resp.stream);
             } else {
                 const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
@@ -1221,19 +1197,28 @@ const ChatPanel = ({
                             ))}
                         </NativeSelect.Field>
                     </NativeSelect.Root>
-                    <NativeSelect.Root size="xs" w="auto">
-                        <NativeSelect.Field
-                            value={thinkingMode}
-                            onChange={e => { const v = e.target.value as ThinkingMode; setThinkingMode(v); localStorage.setItem('acai.thinking', v); }}
-                            bg="var(--bg-input)"
-                            color={thinkingMode === 'off' ? 'var(--text-tertiary)' : 'var(--accent)'}
-                            borderColor="var(--border-input)"
-                            fontSize="xs" px={2} h={compact ? '24px' : '26px'} borderRadius="md">
-                            <option value="off" style={{ background: 'var(--option-bg)' }}>Think: Off</option>
-                            <option value="native" style={{ background: 'var(--option-bg)' }}>Think: Native</option>
-                            <option value="emulated" style={{ background: 'var(--option-bg)' }}>Think: Emulated</option>
-                        </NativeSelect.Field>
-                    </NativeSelect.Root>
+                    {canThink && (
+                        <Button
+                            size="xs"
+                            variant="ghost"
+                            h={compact ? '24px' : '26px'}
+                            px={2}
+                            fontSize="xs"
+                            borderRadius="md"
+                            border="1px solid"
+                            borderColor={thinkingEnabled ? 'var(--accent)' : 'var(--border-input)'}
+                            color={thinkingEnabled ? 'var(--accent)' : 'var(--text-tertiary)'}
+                            bg={thinkingEnabled ? 'color-mix(in srgb, var(--accent) 10%, transparent)' : 'var(--bg-input)'}
+                            _hover={{ borderColor: 'var(--accent)', color: 'var(--accent)' }}
+                            onClick={() => {
+                                const next = !thinkingEnabled;
+                                setThinkingEnabled(next);
+                                localStorage.setItem('acai.thinking', next ? 'native' : 'off');
+                            }}
+                        >
+                            Think{thinkingEnabled ? ': On' : ': Off'}
+                        </Button>
+                    )}
                     {graphs.length > 1 && !initialGraph && (
                         <NativeSelect.Root size="xs" w="auto">
                             <NativeSelect.Field

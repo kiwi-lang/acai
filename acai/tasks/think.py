@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import traceback as _tb
 from typing import AsyncIterator
 
@@ -11,6 +12,10 @@ from acai.tasks.graph import Acc, TaskGraph
 log = logging.getLogger(__name__)
 
 THINKER_AGENT = "thinker"
+
+_WORKFLOW_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), os.pardir, "workflows", "think-then-reply")
+)
 
 
 class ThinkGraph(TaskGraph):
@@ -21,6 +26,12 @@ class ThinkGraph(TaskGraph):
     the reasoning injected, then enters the standard tool-call
     follow-up loop.
     """
+
+    @classmethod
+    def from_work(cls, worker, work, **kwargs):
+        work = dict(work)
+        work.setdefault("workflow_dir", _WORKFLOW_DIR)
+        return super().from_work(worker, work, **kwargs)
 
     async def run(self, work: dict) -> AsyncIterator[dict]:
         thinker_agent = work.get("thinker_agent", THINKER_AGENT)

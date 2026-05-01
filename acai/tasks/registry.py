@@ -40,7 +40,7 @@ _GRAPHS: dict[str, GraphDef] = {
     ),
     "converse_scribe": GraphDef(
         "converse_scribe", ConverseScribeGraph,
-        "Converse + Knowledge",
+        "Converse + Knowledge (Python)",
         "Curates knowledge before replying, then updates the knowledge base after.",
     ),
     "think": GraphDef(

@@ -320,7 +320,7 @@ def _skill_to_tooldef(sd: SkillDef) -> "ToolDef":
     return ToolDef(
         namespace=namespace,
         name=sd.name,
-        qualified_name=f"{namespace}.{sd.name}",
+        qualified_name=f"{namespace}_{sd.name}",
         description=sd.description,
         parameters=sd.parameters,
         required=sd.required,

@@ -11,12 +11,16 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import traceback as _tb
 from typing import AsyncIterator
 
 from acai.tasks.graph import Acc, TaskGraph
 
 log = logging.getLogger(__name__)
+
+_WORKFLOW_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "workflows", "converse-scribe")
+_WORKFLOW_DIR = os.path.normpath(_WORKFLOW_DIR)
 
 
 def _parse_curator_output(text: str) -> str:
@@ -55,6 +59,12 @@ def _parse_curator_output(text: str) -> str:
 
 class ConverseScribeGraph(TaskGraph):
     """Curator → Converse → Scribe, all in plain Python."""
+
+    @classmethod
+    def from_work(cls, worker, work, **kwargs):
+        work = dict(work)
+        work.setdefault("workflow_dir", _WORKFLOW_DIR)
+        return super().from_work(worker, work, **kwargs)
 
     async def _background_agent(
         self,

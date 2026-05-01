@@ -59,7 +59,7 @@ def mcp_list_tools():
         {
             "type": "function",
             "function": {
-                "name": "shell.run",
+                "name": "shell_run",
                 "description": "Execute a shell command",
                 "parameters": {
                     "type": "object",
@@ -71,7 +71,7 @@ def mcp_list_tools():
         {
             "type": "function",
             "function": {
-                "name": "filesystem.read_file",
+                "name": "filesystem_read_file",
                 "description": "Read a file",
                 "parameters": {
                     "type": "object",
@@ -83,7 +83,7 @@ def mcp_list_tools():
         {
             "type": "function",
             "function": {
-                "name": "git.status",
+                "name": "git_status",
                 "description": "Git status",
                 "parameters": {"type": "object", "properties": {}, "required": []},
             },
@@ -96,10 +96,8 @@ async def mcp_call_tool(request: Request):
     body = await request.json()
     tool_name = body.get("tool", "")
     args = body.get("args", {})
-    namespace = tool_name.rsplit(".", 1)[0] if "." in tool_name else ""
-
     async def generate():
-        if namespace == "shell":
+        if tool_name.startswith("shell_"):
             cmd = args.get("command", "")
             result = json.dumps({
                 "stdout": f"mock output of: {cmd}\n",
@@ -109,12 +107,12 @@ async def mcp_call_tool(request: Request):
             yield _sse("result", {"tool": tool_name, "result": result})
             yield _sse("done", {})
 
-        elif namespace == "filesystem":
+        elif tool_name.startswith("filesystem_"):
             path = args.get("path", "")
             yield _sse("result", {"tool": tool_name, "result": f"contents of {path}"})
             yield _sse("done", {})
 
-        elif tool_name == "fail.tool":
+        elif tool_name == "fail_tool":
             yield _sse("error", {"tool": tool_name, "error": "tool execution failed inside sandbox"})
             yield _sse("done", {})
 
@@ -312,14 +310,14 @@ class TestMockMcpServer:
         assert resp.status_code == 200
         tools = resp.json()
         names = [t["function"]["name"] for t in tools]
-        assert "shell.run" in names
-        assert "filesystem.read_file" in names
-        assert "git.status" in names
+        assert "shell_run" in names
+        assert "filesystem_read_file" in names
+        assert "git_status" in names
 
     def test_shell_run(self, mcp_server_url):
         resp = requests.post(
             f"{mcp_server_url}/tools/call",
-            json={"tool": "shell.run", "args": {"command": "echo hello"}},
+            json={"tool": "shell_run", "args": {"command": "echo hello"}},
             stream=True, timeout=10,
         )
         assert resp.status_code == 200
@@ -334,7 +332,7 @@ class TestMockMcpServer:
     def test_file_read(self, mcp_server_url):
         resp = requests.post(
             f"{mcp_server_url}/tools/call",
-            json={"tool": "filesystem.read_file", "args": {"path": "/etc/hosts"}},
+            json={"tool": "filesystem_read_file", "args": {"path": "/etc/hosts"}},
             stream=True, timeout=10,
         )
         events = _parse_sse_typed(resp)
@@ -344,7 +342,7 @@ class TestMockMcpServer:
     def test_unknown_tool(self, mcp_server_url):
         resp = requests.post(
             f"{mcp_server_url}/tools/call",
-            json={"tool": "nonexistent.tool", "args": {}},
+            json={"tool": "nonexistent_tool", "args": {}},
             stream=True, timeout=10,
         )
         events = _parse_sse_typed(resp)
@@ -355,7 +353,7 @@ class TestMockMcpServer:
     def test_tool_error(self, mcp_server_url):
         resp = requests.post(
             f"{mcp_server_url}/tools/call",
-            json={"tool": "fail.tool", "args": {}},
+            json={"tool": "fail_tool", "args": {}},
             stream=True, timeout=10,
         )
         events = _parse_sse_typed(resp)
@@ -377,7 +375,7 @@ class TestWorkerSandboxedToolCall:
         resp = requests.post(
             f"{worker_url}/tools/call",
             json={
-                "tool": "shell.sandboxed_run",
+                "tool": "shell_sandboxed_run",
                 "args": {"command": "ls -la"},
                 "context": {"uses_sandbox": True},
             },
@@ -399,7 +397,7 @@ class TestWorkerSandboxedToolCall:
         resp = requests.post(
             f"{worker_url}/tools/call",
             json={
-                "tool": "filesystem.local_read",
+                "tool": "filesystem_local_read",
                 "args": {"path": "/tmp/test.txt"},
                 "context": {"uses_sandbox": True},
             },
@@ -417,7 +415,7 @@ class TestWorkerSandboxedToolCall:
         resp = requests.post(
             f"{worker_url}/tools/call",
             json={
-                "tool": "shell.sandboxed_run",
+                "tool": "shell_sandboxed_run",
                 "args": {"command": "echo hi"},
             },
             stream=True, timeout=10,
@@ -433,7 +431,7 @@ class TestWorkerSandboxedToolCall:
     def test_unknown_tool_returns_404(self, worker_url):
         resp = requests.post(
             f"{worker_url}/tools/call",
-            json={"tool": "nope.does_not_exist", "args": {}},
+            json={"tool": "nope_does_not_exist", "args": {}},
             timeout=10,
         )
         assert resp.status_code == 404
@@ -443,7 +441,7 @@ class TestWorkerSandboxedToolCall:
         resp = requests.post(
             f"{worker_url}/tools/call",
             json={
-                "tool": "shell.sandboxed_run",
+                "tool": "shell_sandboxed_run",
                 "args": {"command": "pwd"},
                 "context": {"uses_sandbox": True},
             },
@@ -458,7 +456,7 @@ class TestWorkerSandboxedToolCall:
         resp = requests.post(
             f"{worker_url}/tools/call",
             json={
-                "tool": "filesystem.local_read",
+                "tool": "filesystem_local_read",
                 "args": {"path": "x"},
             },
             stream=True, timeout=10,
@@ -514,7 +512,7 @@ class TestWorkerColdSandbox:
         resp = requests.post(
             f"{worker_cold_url}/tools/call",
             json={
-                "tool": "shell.sandboxed_run",
+                "tool": "shell_sandboxed_run",
                 "args": {"command": "echo hi"},
             },
             stream=True, timeout=10,
@@ -531,7 +529,7 @@ class TestWorkerColdSandbox:
         resp = requests.post(
             f"{worker_cold_url}/tools/call",
             json={
-                "tool": "filesystem.local_read",
+                "tool": "filesystem_local_read",
                 "args": {"path": "/etc/hosts"},
                 "context": {"uses_sandbox": True},
             },
@@ -556,22 +554,22 @@ class TestProxyDecisionWithRegistry:
     def test_sandboxed_tool_with_running_sandbox(self, sandbox_proxy):
         sandbox_proxy._sandbox.start("/workspace")
         assert sandbox_proxy.should_proxy(
-            "shell.sandboxed_run", {"uses_sandbox": True}
+            "shell_sandboxed_run", {"uses_sandbox": True}
         ) is True
 
     def test_non_sandboxed_tool(self, sandbox_proxy):
         sandbox_proxy._sandbox.start("/workspace")
         assert sandbox_proxy.should_proxy(
-            "filesystem.local_read", {"uses_sandbox": True}
+            "filesystem_local_read", {"uses_sandbox": True}
         ) is False
 
     def test_sandboxed_tool_no_context(self, sandbox_proxy):
         sandbox_proxy._sandbox._running = False
-        assert sandbox_proxy.should_proxy("shell.sandboxed_run", {}) is False
+        assert sandbox_proxy.should_proxy("shell_sandboxed_run", {}) is False
 
     def test_sandboxed_tool_running_sandbox_no_ctx(self, sandbox_proxy):
         sandbox_proxy._sandbox.start("/workspace")
-        assert sandbox_proxy.should_proxy("shell.sandboxed_run", {}) is True
+        assert sandbox_proxy.should_proxy("shell_sandboxed_run", {}) is True
 
 
 # ======================================================================
@@ -738,7 +736,7 @@ class TestProjectScopedSandbox:
         from unittest.mock import patch
         with patch("acai.worker.sandbox.create_sandbox", return_value=new_sb):
             resp = await proxy.proxy_call(
-                "shell.run",
+                "shell_run",
                 {"command": "pwd"},
                 {"uses_sandbox": True, "project_path": "/projects/new"},
             )
@@ -774,7 +772,7 @@ class TestProxyCallAsync:
         proxy = self._wired_proxy(mcp_server_url)
 
         resp = await proxy.proxy_call(
-            "shell.run",
+            "shell_run",
             {"command": "whoami"},
             {"uses_sandbox": True, "project_path": "/workspace"},
         )
@@ -794,7 +792,7 @@ class TestProxyCallAsync:
         proxy = self._wired_proxy(mcp_server_url)
 
         resp = await proxy.proxy_call(
-            "fail.tool", {},
+            "fail_tool", {},
             {"uses_sandbox": True, "project_path": "/workspace"},
         )
 
@@ -811,7 +809,7 @@ class TestProxyCallAsync:
         proxy = self._wired_proxy(mcp_server_url)
 
         ctx = {"uses_sandbox": True, "conversation": "c1", "project_path": "/workspace"}
-        resp = await proxy.proxy_call("shell.run", {"command": "ls"}, ctx)
+        resp = await proxy.proxy_call("shell_run", {"command": "ls"}, ctx)
 
         chunks = []
         async for chunk in resp.body_iterator:

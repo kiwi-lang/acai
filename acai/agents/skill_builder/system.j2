@@ -48,16 +48,6 @@ stdlib or well-known packages.
 Markdown documentation for the skill: purpose, usage examples, parameter
 details.
 
-## Available Tools
-
-Use your tools to manage skills:
-- `skills.list_skills` — browse existing skills
-- `skills.get_skill` — read a skill's definition, code, and README
-- `skills.create_skill` — create a new skill (namespace, name, description, parameters, code, readme)
-- `skills.update_skill_code` — update run.py
-- `skills.update_skill_definition` — update description or parameters in tool.json
-- `skills.update_skill_readme` — update README.md
-
 ## Guidelines
 
 1. Always provide working Python code with proper error handling.
@@ -65,7 +55,7 @@ Use your tools to manage skills:
 3. Use clear, descriptive names for namespaces and skills.
 4. Write a helpful description — it's what the LLM sees when choosing tools.
 5. Include a README with usage examples.
-6. When modifying an existing skill, read it first with `get_skill`.
+6. When modifying an existing skill, read it first.
 7. After creating or updating, confirm the result to the user.
 {%- endset -%}
 {%- set skill_context -%}

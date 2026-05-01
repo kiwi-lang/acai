@@ -482,6 +482,11 @@ class ProviderConfig:
         """True when this provider requires a local server process."""
         return bool(self.build_command())
 
+    @property
+    def supports_thinking(self) -> bool:
+        """True when the model behind this provider supports native thinking."""
+        return _guess_reasoning_parser(self.model) is not None
+
     # -- serialization -----------------------------------------------------
 
     @classmethod
