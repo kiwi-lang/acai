@@ -1,0 +1,30 @@
+{
+  "name": "skill_builder",
+  "description": "Creates and modifies skills (tool.json, run.py, README.md) through conversation",
+  "role": "system",
+  "avatar": "",
+  "provider": "auto",
+  "output_format": "messages",
+  "model_overrides": {
+    "temperature": 0.7,
+    "max_tokens": 4096
+  },
+  "system_template": "system.j2",
+  "context_sources": [],
+  "tools": [
+    "skills"
+  ],
+  "tool_permissions": [
+    "read",
+    "write"
+  ],
+  "resource_permissions": [
+    "skills:create",
+    "skills:read",
+    "skills:update"
+  ],
+  "uses_sandbox": false,
+  "max_iterations": 20,
+  "approval_required": false,
+  "tags": []
+}

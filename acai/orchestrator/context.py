@@ -97,10 +97,14 @@ class WorkerContext:
     conversation: str = ""
     agent: str = ""
     client: OrchestratorClient | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_work(cls, work: dict,
                   client: OrchestratorClient | None = None) -> WorkerContext:
+        _known = {"task_id", "kind", "project_name", "project",
+                  "conversation", "agent", "orchestrator_url"}
+        extra = {k: v for k, v in work.items() if k not in _known}
         return cls(
             task_id=work.get("task_id", ""),
             kind=work.get("kind", ""),
@@ -108,6 +112,7 @@ class WorkerContext:
             conversation=work.get("conversation", ""),
             agent=work.get("agent", ""),
             client=client,
+            extra=extra,
         )
 
 

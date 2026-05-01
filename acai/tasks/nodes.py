@@ -546,6 +546,111 @@ class AccumulateNode(NodeType):
 
 
 @register
+class SimpleAgentNode(NodeType):
+    """Agent call + accumulate in a single node.
+
+    Equivalent to wiring ``agent_call.data_stream → accumulate.data_stream``
+    but collapsed into one canvas node for simpler workflows.
+    """
+
+    type = "simple_agent"
+    label = "Simple Agent"
+    accent = Colors.blue
+    description = "Agent call + accumulate (combined)"
+    category = "Agent"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_agent", "agent", Colors.cyan, "left", pin_type="string",
+                 dynamic_choices="agents"),
+        Pin.data("data_context", "context", Colors.blue, "left",
+                 pin_type="message_list"),
+        Pin.data("data_stream_mode", "stream_mode", Colors.amber, "left",
+                 pin_type="string",
+                 choices=("token", "reasoning", "silent")),
+        Pin.data("data_format", "format", "#c06cdb", "left",
+                 pin_type="format"),
+        Pin.data("data_response", "response", Colors.amber, "right",
+                 pin_type="message"),
+        Pin.data("data_text", "text", Colors.green, "right",
+                 pin_type="string"),
+        Pin.data("data_reasoning", "reasoning", Colors.purple, "right",
+                 pin_type="string"),
+        Pin.data("data_tool_calls", "tool_calls", Colors.amber, "right",
+                 pin_type="json"),
+        Pin.data("data_payload", "payload", Colors.blue, "right",
+                 pin_type="json"),
+    ]
+
+    async def execute(self, ctx: NodeContext):
+        from acai.tasks.graph import Acc
+
+        agent_name = (ctx.inputs.get("agent", "") or ctx.data.get("agent", "default"))
+        stream_mode = (ctx.inputs.get("stream_mode", "") or ctx.data.get("stream_mode", "token"))
+        context = ctx.inputs.get("context", [])
+
+        agent_work = dict(ctx.work)
+
+        if isinstance(context, list):
+            context_str = "\n".join(
+                f"{m.get('role', 'user')}: {m.get('content', '')}"
+                for m in context if isinstance(m, dict)
+            ) if context else ""
+        else:
+            context_str = str(context)
+
+        agent_work["message"] = context_str
+
+        if ctx.data.get("prompt_template"):
+            variables = {"context": context_str, "input": context_str,
+                         "message": ctx.work.get("message", "")}
+            agent_work["message"] = substitute(
+                ctx.data["prompt_template"], variables,
+            )
+
+        extra = _extra_context(ctx)
+        prepare_kwargs: dict[str, Any] = {}
+        if extra:
+            prepare_kwargs["extra_context"] = extra
+        log.info("SimpleAgentNode[%s] agent=%s inputs=%s extra=%s",
+                 ctx.node_id, agent_name, list(ctx.inputs.keys()),
+                 list(extra.keys()) if extra else None)
+        payload = ctx.graph.prepare(agent_name, agent_work, **prepare_kwargs)
+
+        if isinstance(context, list) and context:
+            prepared = payload.get("messages", [])
+            system_msgs = [m for m in prepared if m.get("role") == "system"]
+            payload["messages"] = system_msgs + list(context)
+
+        fmt = ctx.inputs.get("format")
+        if fmt and isinstance(fmt, dict):
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": fmt.get("title", "structured_output"),
+                    "strict": True,
+                    "schema": fmt,
+                },
+            }
+
+        stream = ctx.graph.dispatch(payload, stream_mode=stream_mode)
+
+        acc = Acc(stream)
+        async for event in acc:
+            if stream_mode == "silent":
+                continue
+            yield {"type": "event", "data": event}
+
+        yield {"type": "output", "data": {
+            "response": {"role": "assistant", "content": acc.text},
+            "text": acc.text,
+            "reasoning": acc.reasoning,
+            "tool_calls": acc.tool_calls,
+            "payload": payload,
+        }}
+
+
+@register
 class StreamTransformNode(NodeType):
     """Relabel stream event modes (e.g. token -> reasoning).
 

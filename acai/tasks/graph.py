@@ -459,6 +459,7 @@ class TaskGraph:
         ctx: dict = {
             "conversation": self.conversation,
             "orchestrator_url": self.config.worker.orchestrator_url,
+            "workspace": self.config.workspace,
         }
         if self._agent_uses_sandbox:
             ctx["uses_sandbox"] = True

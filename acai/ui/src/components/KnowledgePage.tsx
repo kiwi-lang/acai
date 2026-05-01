@@ -7,6 +7,7 @@ import {
     type KnowledgeTree, type KnowledgeDoc,
 } from '../services/api';
 import Markdown from './Markdown';
+import CodeEditor from './CodeEditor';
 
 const ChevronRight = () => (
     <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor">
@@ -314,16 +315,14 @@ const KnowledgePage = () => {
                             {docLoading ? (
                                 <Box textAlign="center" py={8}><Spinner /></Box>
                             ) : editing ? (
-                                <Box
-                                    as="textarea"
-                                    w="100%" h="100%" minH="400px"
-                                    p={4} fontSize="sm" fontFamily="mono"
-                                    bg="var(--bg-input)" color="var(--text-primary)"
-                                    border="1px solid var(--border-input)"
-                                    borderRadius="md" resize="vertical"
-                                    value={editContent}
-                                    onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditContent(e.target.value)}
-                                />
+                                <Box h="100%" minH="400px">
+                                    <CodeEditor
+                                        value={editContent}
+                                        onChange={v => setEditContent(v)}
+                                        language="markdown"
+                                        minHeight="400px"
+                                    />
+                                </Box>
                             ) : (
                                 <Markdown content={doc.content} />
                             )}

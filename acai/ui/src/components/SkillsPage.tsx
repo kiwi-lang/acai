@@ -9,6 +9,8 @@ import {
     type SkillSummary, type SkillDetail,
 } from '../services/api';
 import Markdown from './Markdown';
+import ChatPanel from './ChatPanel';
+import CodeEditor from './CodeEditor';
 
 const SkillIcon = () => (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" opacity={0.6}>
@@ -49,6 +51,12 @@ const SaveIcon = () => (
         <path d="M17 3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2V7l-4-4zm-5 16c-1.66 0-3-1.34-3-3s1.34-3 3-3 3 1.34 3 3-1.34 3-3 3zm3-10H5V5h10v4z" />
     </svg>
 );
+const ChatIcon = ({ active }: { active?: boolean }) => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill={active ? 'currentColor' : 'none'}
+        stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+    </svg>
+);
 
 type Tab = 'code' | 'definition' | 'readme';
 
@@ -73,6 +81,8 @@ const SkillsPage = () => {
     const [newName, setNewName] = useState('');
     const [newDesc, setNewDesc] = useState('');
     const [creating, setCreating] = useState(false);
+    const [showChat, setShowChat] = useState(false);
+    const [chatKey, setChatKey] = useState(0);
 
     const refresh = useCallback(() => {
         setLoading(true);
@@ -168,6 +178,27 @@ const SkillsPage = () => {
         } catch { /* ignore */ }
         finally { setCreating(false); }
     }, [newNs, newName, newDesc, refresh]);
+
+    const chatContext = useMemo(() => {
+        if (!selected || !detail) return {};
+        return {
+            current_skill: JSON.stringify({
+                qualified_name: detail.qualified_name,
+                namespace: detail.namespace,
+                name: detail.name,
+                description: detail.definition?.description || '',
+                parameters: detail.definition?.parameters || {},
+                code_preview: (detail.code || '').slice(0, 2000),
+            }, null, 2),
+        };
+    }, [selected, detail]);
+
+    const handleChatDone = useCallback(() => {
+        refresh();
+        if (selected) {
+            selectSkill(selected.namespace, selected.name);
+        }
+    }, [refresh, selected, selectSkill]);
 
     const namespaces = Object.keys(grouped).sort();
 
@@ -324,13 +355,26 @@ const SkillsPage = () => {
             {/* Main content */}
             <Box flex={1} display="flex" flexDirection="column" overflow="hidden">
                 {!selected ? (
-                    <Box flex={1} display="flex" alignItems="center" justifyContent="center">
+                    <Box flex={1} display="flex" alignItems="center" justifyContent="center" position="relative">
+                        <Box position="absolute" top={4} right={4}>
+                            <IconButton
+                                aria-label="Toggle AI assistant"
+                                size="sm"
+                                variant={showChat ? 'solid' : 'ghost'}
+                                colorScheme={showChat ? 'green' : undefined}
+                                color={showChat ? undefined : 'var(--text-muted)'}
+                                _hover={{ color: showChat ? undefined : 'green.400' }}
+                                onClick={() => setShowChat(v => !v)}
+                            >
+                                <ChatIcon active={showChat} />
+                            </IconButton>
+                        </Box>
                         <VStack gap={3} color="var(--text-muted)">
                             <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" opacity={0.3}>
                                 <path d="M7 5h10v2h2V3c0-1.1-.9-2-2-2H7c-1.1 0-2 .9-2 2v4h2V5zm8.41 11.59L20 12l-4.59-4.59L14 8.83 17.17 12 14 15.17l1.41 1.42zM10 15.17L6.83 12 10 8.83 8.59 7.41 4 12l4.59 4.59L10 15.17zM17 19H7v-2H5v4c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2v-4h-2v2z" />
                             </svg>
                             <Text fontSize="lg">Select a skill to view</Text>
-                            <Text fontSize="sm">Or create a new one with the + button</Text>
+                            <Text fontSize="sm">Or use the AI assistant to create one</Text>
                         </VStack>
                     </Box>
                 ) : detailLoading ? (
@@ -379,6 +423,17 @@ const SkillsPage = () => {
                                     >
                                         <DeleteIcon />
                                     </IconButton>
+                                    <IconButton
+                                        aria-label="Toggle AI assistant"
+                                        size="sm"
+                                        variant={showChat ? 'solid' : 'ghost'}
+                                        colorScheme={showChat ? 'green' : undefined}
+                                        color={showChat ? undefined : 'var(--text-muted)'}
+                                        _hover={{ color: showChat ? undefined : 'green.400' }}
+                                        onClick={() => setShowChat(v => !v)}
+                                    >
+                                        <ChatIcon active={showChat} />
+                                    </IconButton>
                                 </HStack>
                             </HStack>
 
@@ -407,22 +462,13 @@ const SkillsPage = () => {
                         {/* Tab content */}
                         <Box flex={1} overflow="auto" p={0}>
                             {activeTab === 'code' && (
-                                <Textarea
-                                    value={editCode}
-                                    onChange={e => { setEditCode(e.target.value); setDirty(true); }}
-                                    fontFamily="mono"
-                                    fontSize="sm"
-                                    bg="var(--bg-page)"
-                                    color="var(--text-primary)"
-                                    border="none"
-                                    borderRadius={0}
-                                    h="100%"
-                                    minH="100%"
-                                    resize="none"
-                                    p={6}
-                                    _focus={{ outline: 'none', boxShadow: 'none' }}
-                                    spellCheck={false}
-                                />
+                                <Box h="100%" minH="300px">
+                                    <CodeEditor
+                                        value={editCode}
+                                        onChange={v => { setEditCode(v); setDirty(true); }}
+                                        language="python"
+                                    />
+                                </Box>
                             )}
 
                             {activeTab === 'definition' && (
@@ -492,17 +538,14 @@ const SkillsPage = () => {
                             {activeTab === 'readme' && (
                                 <Box p={6}>
                                     <VStack align="stretch" gap={4}>
-                                        <Textarea
-                                            value={editReadme}
-                                            onChange={e => { setEditReadme(e.target.value); setDirty(true); }}
-                                            fontFamily="mono"
-                                            fontSize="sm"
-                                            bg="var(--bg-input)"
-                                            color="var(--text-primary)"
-                                            borderColor="var(--border-secondary)"
-                                            rows={10}
-                                            mb={4}
-                                        />
+                                        <Box h="250px" mb={4}>
+                                            <CodeEditor
+                                                value={editReadme}
+                                                onChange={v => { setEditReadme(v); setDirty(true); }}
+                                                language="markdown"
+                                                minHeight="250px"
+                                            />
+                                        </Box>
                                         <Box>
                                             <Text fontSize="xs" fontWeight="bold" color="var(--text-muted)" mb={2} textTransform="uppercase">
                                                 Preview
@@ -528,6 +571,59 @@ const SkillsPage = () => {
                     </Box>
                 )}
             </Box>
+
+            {/* AI Assistant chat panel */}
+            {showChat && (
+                <Box
+                    w="400px" minW="400px" h="100%"
+                    borderLeft="1px solid" borderColor="var(--border-primary)"
+                    display="flex" flexDirection="column"
+                    bg="var(--bg-page)"
+                >
+                    <HStack px={4} py={3} borderBottom="1px solid" borderColor="var(--border-primary)" justify="space-between">
+                        <HStack gap={2}>
+                            <ChatIcon active />
+                            <Text fontSize="sm" fontWeight="bold" color="var(--text-heading)">Skill Builder</Text>
+                        </HStack>
+                        <HStack gap={1}>
+                            <IconButton
+                                aria-label="New chat"
+                                size="xs"
+                                variant="ghost"
+                                color="var(--text-muted)"
+                                _hover={{ color: 'var(--text-heading)' }}
+                                onClick={() => setChatKey(k => k + 1)}
+                            >
+                                <PlusIcon />
+                            </IconButton>
+                            <IconButton
+                                aria-label="Close chat"
+                                size="xs"
+                                variant="ghost"
+                                color="var(--text-muted)"
+                                _hover={{ color: 'var(--text-heading)' }}
+                                onClick={() => setShowChat(false)}
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z" />
+                                </svg>
+                            </IconButton>
+                        </HStack>
+                    </HStack>
+                    <Box flex={1} minH={0}>
+                        <ChatPanel
+                            key={`skill-builder-${chatKey}`}
+                            conversationId={null}
+                            compact
+                            ephemeral
+                            initialAgent="skill_builder"
+                            placeholder="Describe the skill you want to create or modify..."
+                            context={chatContext}
+                            onResponseComplete={handleChatDone}
+                        />
+                    </Box>
+                </Box>
+            )}
         </Box>
     );
 };

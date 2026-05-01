@@ -315,7 +315,7 @@ def typecheck(
     if agent_store is not None:
         import os
 
-        _agent_node_types = {"agent_call", "background_agent"}
+        _agent_node_types = {"agent_call", "simple_agent", "background_agent"}
 
         for node in nodes_list:
             ntype = node.get("type", "")

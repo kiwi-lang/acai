@@ -27,6 +27,18 @@ from typing import Any
 
 log = logging.getLogger(__name__)
 
+_generation: int = 0
+
+
+def _bump_generation() -> None:
+    """Increment the module-level generation counter.
+
+    All ``SkillStore`` instances in the same process see the bump
+    and will re-discover on next read.
+    """
+    global _generation
+    _generation += 1
+
 
 @dataclass
 class SkillDef:
@@ -58,6 +70,7 @@ class SkillStore:
         self.skills_dir = skills_dir
         self._skills: dict[str, SkillDef] = {}
         self._extra_dirs: list[str] = []
+        self._gen: int = -1
 
     @property
     def dir(self) -> str:
@@ -146,12 +159,20 @@ class SkillStore:
                 skills.append(sd)
 
         self._skills = {f"skills.{s.namespace}.{s.name}": s for s in skills}
+        self._gen = _generation
         return skills
 
+    def _maybe_refresh(self) -> None:
+        """Re-discover if the global generation has moved past our snapshot."""
+        if not self._extra_dirs and self._gen != _generation:
+            self.discover()
+
     def get(self, qualified_name: str) -> SkillDef | None:
+        self._maybe_refresh()
         return self._skills.get(qualified_name)
 
     def all_skills(self) -> list[SkillDef]:
+        self._maybe_refresh()
         return list(self._skills.values())
 
     def register_all(self, registry: "ToolRegistry") -> int:
@@ -217,6 +238,7 @@ class SkillStore:
 
         _write(os.path.join(skill_dir, _README), readme)
 
+        _bump_generation()
         return skill_dir
 
     def read_file(self, namespace: str, name: str, filename: str) -> str | None:
@@ -233,6 +255,7 @@ class SkillStore:
         os.makedirs(skill_dir, exist_ok=True)
         path = os.path.join(skill_dir, filename)
         _write(path, content)
+        _bump_generation()
         return path
 
 

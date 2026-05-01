@@ -4,8 +4,7 @@ import {
     Box, VStack, HStack, Text, Heading, IconButton, Input,
     Spinner, Textarea, Button,
 } from '@chakra-ui/react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import CodeEditor from './CodeEditor';
 import {
     createSkill,
     createWorkflowSkill,
@@ -203,102 +202,20 @@ const SkillEditModal = ({ onSave, onClose, workflowId, editingName, initialForm 
                             )}
                         </VStack>
                     ) : activeTab === 'code' ? (
-                        <Box position="relative" flex={1} minH={0}>
-                            <Textarea
-                                position="absolute"
-                                inset={0}
-                                fontFamily="mono"
-                                fontSize="xs"
-                                lineHeight="1.6"
+                        <Box flex={1} minH={0}>
+                            <CodeEditor
                                 value={form.code}
-                                onChange={e => setField('code', e.target.value)}
-                                bg="transparent"
-                                color="transparent"
-                                caretColor="var(--text-primary)"
-                                borderColor="var(--border-input)"
-                                borderRadius="md"
-                                resize="none"
-                                zIndex={2}
-                                p="16px"
-                                spellCheck={false}
-                                h="100%"
-                                _focus={{ outline: 'none', boxShadow: 'none', borderColor: 'var(--accent, teal.400)' }}
-                                placeholder="Python code for run.py..."
+                                onChange={v => setField('code', v)}
+                                language="python"
                             />
-                            <Box
-                                position="absolute"
-                                inset={0}
-                                borderRadius="md"
-                                overflow="auto"
-                                pointerEvents="none"
-                                zIndex={1}
-                            >
-                                <SyntaxHighlighter
-                                    language="python"
-                                    style={oneDark}
-                                    customStyle={{
-                                        margin: 0,
-                                        padding: '16px',
-                                        fontSize: '0.75rem',
-                                        lineHeight: '1.6',
-                                        background: 'var(--bg-input, #1e1e1e)',
-                                        minHeight: '100%',
-                                        borderRadius: '0.375rem',
-                                    }}
-                                    codeTagProps={{ style: { fontFamily: 'var(--fonts-mono, monospace)' } }}
-                                >
-                                    {form.code || ' '}
-                                </SyntaxHighlighter>
-                            </Box>
                         </Box>
                     ) : (
-                        <Box position="relative" flex={1} minH={0}>
-                            <Textarea
-                                position="absolute"
-                                inset={0}
-                                fontFamily="mono"
-                                fontSize="xs"
-                                lineHeight="1.6"
+                        <Box flex={1} minH={0}>
+                            <CodeEditor
                                 value={form.parameters}
-                                onChange={e => setField('parameters', e.target.value)}
-                                bg="transparent"
-                                color="transparent"
-                                caretColor="var(--text-primary)"
-                                borderColor="var(--border-input)"
-                                borderRadius="md"
-                                resize="none"
-                                zIndex={2}
-                                p="16px"
-                                spellCheck={false}
-                                h="100%"
-                                _focus={{ outline: 'none', boxShadow: 'none', borderColor: 'var(--accent, teal.400)' }}
-                                placeholder="JSON schema for parameters..."
+                                onChange={v => setField('parameters', v)}
+                                language="json"
                             />
-                            <Box
-                                position="absolute"
-                                inset={0}
-                                borderRadius="md"
-                                overflow="auto"
-                                pointerEvents="none"
-                                zIndex={1}
-                            >
-                                <SyntaxHighlighter
-                                    language="json"
-                                    style={oneDark}
-                                    customStyle={{
-                                        margin: 0,
-                                        padding: '16px',
-                                        fontSize: '0.75rem',
-                                        lineHeight: '1.6',
-                                        background: 'var(--bg-input, #1e1e1e)',
-                                        minHeight: '100%',
-                                        borderRadius: '0.375rem',
-                                    }}
-                                    codeTagProps={{ style: { fontFamily: 'var(--fonts-mono, monospace)' } }}
-                                >
-                                    {form.parameters || ' '}
-                                </SyntaxHighlighter>
-                            </Box>
                         </Box>
                     )}
                 </Box>

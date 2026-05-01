@@ -4,8 +4,7 @@ import {
     Box, VStack, HStack, Text, Heading, IconButton, Input,
     NativeSelect, Spinner, Textarea, Button,
 } from '@chakra-ui/react';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import CodeEditor from './CodeEditor';
 import {
     createAgent, updateAgent, updateAgentTemplate,
     createWorkflowAgent,
@@ -749,53 +748,13 @@ export const AgentFormBody = ({
                                 </Button>
                             )}
                         </HStack>
-                        <Box position="relative" flex={1} minH={templateMinH}>
-                            <Textarea
-                                position="absolute"
-                                inset={0}
-                                fontFamily="mono"
-                                fontSize="xs"
-                                lineHeight="1.6"
+                        <Box flex={1} minH={templateMinH}>
+                            <CodeEditor
                                 value={templateContent}
-                                onChange={e => { setTemplateContent(e.target.value); setTemplateDirty(true); }}
-                                bg="transparent"
-                                color="transparent"
-                                caretColor="var(--text-primary)"
-                                borderColor="var(--border-input)"
-                                borderRadius="md"
-                                resize="none"
-                                zIndex={2}
-                                p="16px"
-                                spellCheck={false}
-                                h="100%"
-                                _focus={{ outline: 'none', boxShadow: 'none', borderColor: 'var(--accent, teal.400)' }}
-                                placeholder="Jinja2 system prompt template..."
+                                onChange={v => { setTemplateContent(v); setTemplateDirty(true); }}
+                                language="jinja"
+                                minHeight={templateMinH}
                             />
-                            <Box
-                                position="absolute"
-                                inset={0}
-                                borderRadius="md"
-                                overflow="auto"
-                                pointerEvents="none"
-                                zIndex={1}
-                            >
-                                <SyntaxHighlighter
-                                    language="django"
-                                    style={oneDark}
-                                    customStyle={{
-                                        margin: 0,
-                                        padding: '16px',
-                                        fontSize: '0.75rem',
-                                        lineHeight: '1.6',
-                                        background: 'var(--bg-input, #1e1e1e)',
-                                        minHeight: '100%',
-                                        borderRadius: '0.375rem',
-                                    }}
-                                    codeTagProps={{ style: { fontFamily: 'var(--fonts-mono, monospace)' } }}
-                                >
-                                    {templateContent || ' '}
-                                </SyntaxHighlighter>
-                            </Box>
                         </Box>
                     </VStack>
                 )}

@@ -57,14 +57,15 @@ There are two kinds of edges:
 
 ### Additional Notes
 
+- **simple_agent** is the preferred node for basic LLM calls — it combines `agent_call` + `accumulate` in a single node. Use it for most workflows. Only use separate `agent_call` + `accumulate` when you need to insert custom stream processing between them.
 - **reply_type** stores fields as a JSON array in its `fields` data key: `[{"name":"reasoning","type":"str"},{"name":"answer","type":"str"}]`. Supported types: `str`, `int`, `float`, `bool`.
-- Wire `reply_type.data_format` into `agent_call.data_format` to enable structured output, and/or into `read_reply.data_reply_type` to parse the response.
+- Wire `reply_type.data_format` into `simple_agent.data_format` (or `agent_call.data_format`) to enable structured output, and/or into `read_reply.data_reply_type` to parse the response.
 - **read_reply** dynamically exposes output pins for each field defined in the connected Reply Type (e.g. `data_reasoning`, `data_answer`).
 - **skill_call** stores the tool name in `data.tool` (e.g. `"skills.data.my_tool"`). The frontend dynamically generates input pins matching the tool's parameters. Each parameter becomes a `data_<param_name>` input pin. The `data_result` output carries the tool's text output.
 
 ## Common Patterns
 
-### Simple conversation (Start → Append → AgentCall → Accumulate → Output)
+### Simple conversation (Start → Append → SimpleAgent → Output)
 
 ```json
 {
@@ -74,27 +75,24 @@ There are two kinds of edges:
   "nodes": [
     { "id": "start", "type": "start", "position": { "x": 50, "y": 150 }, "data": { "label": "Start" } },
     { "id": "append", "type": "append", "position": { "x": 250, "y": 150 }, "data": { "label": "Build Context" } },
-    { "id": "agent", "type": "agent_call", "position": { "x": 450, "y": 150 }, "data": { "agent": "default", "label": "Agent" } },
-    { "id": "acc", "type": "accumulate", "position": { "x": 650, "y": 150 }, "data": { "label": "Accumulate" } },
-    { "id": "end", "type": "output", "position": { "x": 850, "y": 150 }, "data": { "label": "Output" } }
+    { "id": "agent", "type": "simple_agent", "position": { "x": 450, "y": 150 }, "data": { "agent": "default", "label": "Agent" } },
+    { "id": "end", "type": "output", "position": { "x": 650, "y": 150 }, "data": { "label": "Output" } }
   ],
   "edges": [
     { "id": "e1", "source": "start", "target": "append", "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
     { "id": "e2", "source": "append", "target": "agent", "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e3", "source": "agent", "target": "acc", "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
-    { "id": "e4", "source": "acc", "target": "end", "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
+    { "id": "e3", "source": "agent", "target": "end", "sourceHandle": "exec_out", "targetHandle": "exec_in", "type": "exec" },
     { "id": "d1", "source": "start", "target": "append", "sourceHandle": "data_conversation", "targetHandle": "data_a", "type": "data" },
     { "id": "d2", "source": "start", "target": "append", "sourceHandle": "data_message", "targetHandle": "data_b", "type": "data" },
     { "id": "d3", "source": "append", "target": "agent", "sourceHandle": "data_result", "targetHandle": "data_context", "type": "data" },
-    { "id": "d4", "source": "agent", "target": "acc", "sourceHandle": "data_stream", "targetHandle": "data_stream", "type": "data" },
-    { "id": "d5", "source": "acc", "target": "end", "sourceHandle": "data_response", "targetHandle": "data_response", "type": "data" }
+    { "id": "d4", "source": "agent", "target": "end", "sourceHandle": "data_response", "targetHandle": "data_response", "type": "data" }
   ]
 }
 ```
 
-### Agent call with tool loop
+### Agent call with tool loop (use separate agent_call + accumulate)
 
-After `agent_call` → `accumulate`, wire the accumulate outputs into a `tool_followup_loop`:
+Wire `agent_call` → `accumulate` → `tool_followup_loop`:
 - `accumulate.data_response` → `tool_followup_loop.data_response_in`
 - `accumulate.data_tool_calls` → `tool_followup_loop.data_tool_calls`
 - `agent_call.data_payload` → `tool_followup_loop.data_payload`
@@ -102,8 +100,8 @@ After `agent_call` → `accumulate`, wire the accumulate outputs into a `tool_fo
 
 ### Multi-agent pipeline
 
-Chain multiple agent_call nodes. Pass each agent's response as context to the next:
-- `agent1.data_response` → (via accumulate) → `append.data_b` → `agent2.data_context`
+Chain multiple `simple_agent` nodes. Pass each agent's response as context to the next:
+- `agent1.data_response` → `append.data_b` → `agent2.data_context`
 
 ## Rules
 
@@ -112,7 +110,7 @@ Chain multiple agent_call nodes. Pass each agent's response as context to the ne
 3. Every node (except `start`) needs at least one incoming `exec` edge.
 4. Data edges must connect compatible pin types.
 5. Required pins (marked `optional: false`) must be connected via a data edge.
-6. The `agent_call` node requires `data_stream` to be connected to an `accumulate` node's `data_stream` input for the response to work.
+6. Prefer `simple_agent` over separate `agent_call` + `accumulate` for basic agent calls.
 7. Use descriptive `label` values in node data.
 8. Unique `id` values for all nodes and edges.
 9. Position nodes left-to-right following execution order, ~200px apart.
