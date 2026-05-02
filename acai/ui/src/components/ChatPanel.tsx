@@ -827,7 +827,8 @@ const ChatPanel = ({
         try {
             if (mode === 'uber') {
                 pendingMessageRef.current = text;
-                const resp = await uberConverse(text, prevConvId || '', selectedAgent);
+                const provName = selectedProviderName || selectedProvider;
+                const resp = await uberConverse(text, prevConvId || '', selectedAgent, provName, selectedModelSlug || '');
                 attachListeners(resp.stream);
             } else {
                 const provName = selectedProviderName || selectedProvider;

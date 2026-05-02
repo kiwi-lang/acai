@@ -1409,6 +1409,8 @@ const WorkflowEditor: FC = () => {
         uses_sandbox: detail.uses_sandbox ?? false,
         tags: detail.tags ?? [],
         scope: detail.scope || 'global',
+        provider_allow: (detail as any).provider_allow ?? [],
+        provider_forbid: (detail as any).provider_forbid ?? [],
         builtin: false,
         created_at: '',
       } satisfies AgentDef;
@@ -1434,6 +1436,7 @@ const WorkflowEditor: FC = () => {
           parameters: detail.parameters
             ? JSON.stringify(detail.parameters, null, 2)
             : JSON.stringify({ type: 'object', properties: {}, required: [] }, null, 2),
+          requirements: detail.requirements || '',
         },
       });
     } catch { /* ignore */ }

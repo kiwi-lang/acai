@@ -76,8 +76,9 @@ def create_worker_router(
 
     router = APIRouter(prefix=prefix, tags=["worker"])
 
-    provider = config.local_provider() or config.active_provider()
-    llm_server = LLMServer(provider, workspace=config.workspace)
+    provider = config.active_provider()
+    local_prov = config.local_provider()
+    llm_server = LLMServer(local_prov or provider, workspace=config.workspace)
     registry = discover_tools()
     sandbox_proxy = SandboxProxy(config.sandbox, sandbox_predicate=registry.is_sandboxed)
 

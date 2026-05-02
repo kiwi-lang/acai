@@ -125,7 +125,9 @@ def create_provider_router(config: AcaiConfig) -> APIRouter:
         prov = config.get_provider(name)
         if prov is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        config.providers = [prov] + [p for p in config.providers if p.name != name]
         config.set_active(name)
+        save_providers(config.workspace, config.providers)
         return _provider_json(prov, name)
 
     @router.get("/models")

@@ -394,13 +394,12 @@ class AcaiConfig:
             self.providers = [_default_provider()]
 
     def active_provider(self) -> ProviderConfig:
-        """Return the explicitly activated provider, or the highest-priority one."""
+        """Return the default provider (first in the list)."""
         if self._active_name:
             p = self.get_provider(self._active_name)
             if p:
                 return p
-        best = sorted(self.providers, key=lambda p: -p.priority)
-        return best[0] if best else _default_provider()
+        return self.providers[0] if self.providers else _default_provider()
 
     def set_active(self, name: str) -> None:
         """Explicitly activate a provider by name."""

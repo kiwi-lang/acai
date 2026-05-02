@@ -62,11 +62,13 @@ def create_skill(
     parameters: str = "",
     code: str = "",
     readme: str = "",
+    requirements: str = "",
 ) -> str:
     """Create a new skill with the given namespace and name.
 
     Creates ``workspace/skills/<namespace>/<name>/`` containing
-    ``tool.json``, ``run.py``, and ``README.md``.
+    ``tool.json``, ``run.py``, ``README.md``, and optionally
+    ``requirements.txt``.
 
     After creation the skill is immediately available as
     ``skills.<namespace>.<name>``.
@@ -78,6 +80,7 @@ def create_skill(
         parameters: JSON string defining input parameters schema (OpenAPI-style properties/required).
         code: Python source for run.py.  Receives JSON on stdin, must print JSON to stdout.
         readme: Markdown content for README.md.
+        requirements: pip requirements (one package per line, like requirements.txt).
     """
     store = _get_store()
     params = None
@@ -94,6 +97,7 @@ def create_skill(
         parameters=params,
         code=code,
         readme=readme,
+        requirements=requirements,
     )
 
     _auto_register(store, namespace, name)
@@ -120,6 +124,7 @@ def get_skill(namespace: str, name: str) -> str:
 
     code = store.read_file(namespace, name, "run.py") or ""
     readme = store.read_file(namespace, name, "README.md") or ""
+    requirements = store.read_file(namespace, name, "requirements.txt") or ""
 
     try:
         definition = json.loads(tool_json)
@@ -131,6 +136,7 @@ def get_skill(namespace: str, name: str) -> str:
         "definition": definition,
         "code": code,
         "readme": readme,
+        "requirements": requirements,
     })
 
 

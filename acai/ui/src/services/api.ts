@@ -557,7 +557,7 @@ export async function createWorkflowAgent(
 
 export async function createWorkflowSkill(
     workflowId: string,
-    data: { namespace: string; name: string; description?: string; code?: string; parameters?: string; readme?: string },
+    data: { namespace: string; name: string; description?: string; code?: string; parameters?: string; readme?: string; requirements?: string },
 ): Promise<{ created: boolean; qualified_name: string }> {
     return request(`/workflows/${encodeURIComponent(workflowId)}/skills`, {
         method: 'POST',
@@ -578,6 +578,8 @@ export interface WorkflowAgentDetail extends WorkflowAgent {
     uses_sandbox?: boolean;
     tags?: string[];
     scope?: string;
+    provider_allow?: string[];
+    provider_forbid?: string[];
     system_template_content?: string;
 }
 
@@ -594,6 +596,7 @@ export interface WorkflowSkillDetail extends WorkflowSkill {
     parameters?: Record<string, unknown>;
     code?: string;
     readme?: string;
+    requirements?: string;
 }
 
 export async function getWorkflowSkill(
@@ -695,15 +698,20 @@ export async function uberConverse(
     message: string,
     currentConversation = '',
     agent = '',
+    provider = '',
+    model = '',
 ): Promise<{ stream: SSEStream }> {
+    const payload: Record<string, string> = {
+        message,
+        current_conversation: currentConversation,
+        agent,
+    };
+    if (provider) payload.provider = provider;
+    if (model) payload.model = model;
     const response = await fetch(`${API_BASE}/uber/converse`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            message,
-            current_conversation: currentConversation,
-            agent,
-        }),
+        body: JSON.stringify(payload),
     });
 
     if (!response.ok) {
@@ -864,6 +872,7 @@ export interface SkillDetail {
     };
     code: string;
     readme: string;
+    requirements: string;
 }
 
 export async function listSkills(workflowId?: string): Promise<SkillSummary[]> {
@@ -882,6 +891,7 @@ export async function createSkill(data: {
     parameters?: Record<string, unknown>;
     code?: string;
     readme?: string;
+    requirements?: string;
 }): Promise<{ created: boolean; qualified_name: string; path: string }> {
     return request('/skills', {
         method: 'POST',
@@ -911,6 +921,13 @@ export async function updateSkillReadme(namespace: string, name: string, readme:
     return request(`/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/readme`, {
         method: 'PUT',
         body: JSON.stringify({ readme }),
+    });
+}
+
+export async function updateSkillRequirements(namespace: string, name: string, requirements: string): Promise<{ updated: boolean }> {
+    return request(`/skills/${encodeURIComponent(namespace)}/${encodeURIComponent(name)}/requirements`, {
+        method: 'PUT',
+        body: JSON.stringify({ requirements }),
     });
 }
 

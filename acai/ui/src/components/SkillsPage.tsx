@@ -5,7 +5,7 @@ import {
 } from '@chakra-ui/react';
 import {
     listSkills, getSkill, createSkill, updateSkillCode, updateSkillReadme,
-    updateSkillDefinition, deleteSkill,
+    updateSkillDefinition, updateSkillRequirements, deleteSkill,
     type SkillSummary, type SkillDetail,
 } from '../services/api';
 import Markdown from './Markdown';
@@ -58,7 +58,7 @@ const ChatIcon = ({ active }: { active?: boolean }) => (
     </svg>
 );
 
-type Tab = 'code' | 'definition' | 'readme';
+type Tab = 'code' | 'definition' | 'readme' | 'requirements';
 
 const SkillsPage = () => {
     const [skills, setSkills] = useState<SkillSummary[]>([]);
@@ -72,6 +72,7 @@ const SkillsPage = () => {
 
     const [editCode, setEditCode] = useState('');
     const [editReadme, setEditReadme] = useState('');
+    const [editRequirements, setEditRequirements] = useState('');
     const [editDescription, setEditDescription] = useState('');
     const [dirty, setDirty] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -125,6 +126,7 @@ const SkillsPage = () => {
                 setDetail(d);
                 setEditCode(d.code);
                 setEditReadme(d.readme);
+                setEditRequirements(d.requirements || '');
                 setEditDescription(d.definition?.description || '');
                 setActiveTab('code');
             })
@@ -145,11 +147,14 @@ const SkillsPage = () => {
             if (activeTab === 'definition' && editDescription !== (detail.definition?.description || '')) {
                 await updateSkillDefinition(selected.namespace, selected.name, { description: editDescription });
             }
+            if (activeTab === 'requirements' && editRequirements !== (detail.requirements || '')) {
+                await updateSkillRequirements(selected.namespace, selected.name, editRequirements);
+            }
             selectSkill(selected.namespace, selected.name);
             setDirty(false);
         } catch { /* ignore */ }
         finally { setSaving(false); }
-    }, [selected, detail, activeTab, editCode, editReadme, editDescription, selectSkill]);
+    }, [selected, detail, activeTab, editCode, editReadme, editRequirements, editDescription, selectSkill]);
 
     const handleDelete = useCallback(async () => {
         if (!selected) return;
@@ -439,23 +444,29 @@ const SkillsPage = () => {
 
                             {/* Tabs */}
                             <HStack gap={0} mt={4}>
-                                {(['code', 'definition', 'readme'] as Tab[]).map(tab => (
-                                    <Button
-                                        key={tab}
-                                        size="sm"
-                                        variant="ghost"
-                                        borderBottom="2px solid"
-                                        borderColor={activeTab === tab ? 'green.400' : 'transparent'}
-                                        borderRadius={0}
-                                        color={activeTab === tab ? 'var(--text-heading)' : 'var(--text-muted)'}
-                                        fontWeight={activeTab === tab ? 'medium' : 'normal'}
-                                        onClick={() => setActiveTab(tab)}
-                                        px={4}
-                                        _hover={{ color: 'var(--text-heading)' }}
-                                    >
-                                        {tab === 'code' ? 'run.py' : tab === 'definition' ? 'tool.json' : 'README.md'}
-                                    </Button>
-                                ))}
+                                {(['code', 'definition', 'readme', 'requirements'] as Tab[]).map(tab => {
+                                    const label = tab === 'code' ? 'run.py'
+                                        : tab === 'definition' ? 'tool.json'
+                                        : tab === 'readme' ? 'README.md'
+                                        : 'requirements.txt';
+                                    return (
+                                        <Button
+                                            key={tab}
+                                            size="sm"
+                                            variant="ghost"
+                                            borderBottom="2px solid"
+                                            borderColor={activeTab === tab ? 'green.400' : 'transparent'}
+                                            borderRadius={0}
+                                            color={activeTab === tab ? 'var(--text-heading)' : 'var(--text-muted)'}
+                                            fontWeight={activeTab === tab ? 'medium' : 'normal'}
+                                            onClick={() => setActiveTab(tab)}
+                                            px={4}
+                                            _hover={{ color: 'var(--text-heading)' }}
+                                        >
+                                            {label}
+                                        </Button>
+                                    );
+                                })}
                             </HStack>
                         </Box>
 
@@ -559,6 +570,24 @@ const SkillsPage = () => {
                                             >
                                                 <Markdown content={editReadme || '*No README content*'} />
                                             </Box>
+                                        </Box>
+                                    </VStack>
+                                </Box>
+                            )}
+
+                            {activeTab === 'requirements' && (
+                                <Box p={6}>
+                                    <VStack align="stretch" gap={4}>
+                                        <Text fontSize="xs" color="var(--text-muted)">
+                                            pip dependencies (one per line). Installed automatically before the skill runs.
+                                        </Text>
+                                        <Box h="300px">
+                                            <CodeEditor
+                                                value={editRequirements}
+                                                onChange={v => { setEditRequirements(v); setDirty(true); }}
+                                                language="text"
+                                                minHeight="300px"
+                                            />
                                         </Box>
                                     </VStack>
                                 </Box>

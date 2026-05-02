@@ -235,8 +235,6 @@ def create_router(config: AcaiConfig | None = None,
     projects = ProjectStore(projects_dir)
     chat = ChatStore(config.workspace)
     scheduler = ProviderScheduler(config.providers)
-    worker_provider = config.local_provider() or config.active_provider()
-
     agents_dir = os.path.join(config.workspace, "agents")
     agent_store = AgentStore(agents_dir)
 
@@ -470,7 +468,7 @@ def create_router(config: AcaiConfig | None = None,
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
-            if prov and prov.name != worker_provider.name:
+            if prov:
                 provider_override = {"name": prov.name}
                 if model_slug:
                     provider_override["model"] = model_slug
@@ -479,8 +477,8 @@ def create_router(config: AcaiConfig | None = None,
 
         resolved_provider = (
             config.get_provider(provider_name) if provider_name and provider_name != "auto"
-            else worker_provider
-        ) or worker_provider
+            else config.active_provider()
+        ) or config.active_provider()
 
         work = {
             "message": message,
@@ -591,10 +589,21 @@ def create_router(config: AcaiConfig | None = None,
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
+        provider_name = data.get("provider", "")
+        model_slug = data.get("model", "")
+        provider_override = None
+        if provider_name and provider_name != "auto":
+            prov = config.get_provider(provider_name)
+            if prov:
+                provider_override = {"name": prov.name}
+                if model_slug:
+                    provider_override["model"] = model_slug
+
         work = {
             "message": message,
             "current_conversation": current_conversation,
             "agent": agent_name,
+            "provider_override": provider_override,
         }
 
         def _sse(event: str, data: dict) -> str:
@@ -985,6 +994,10 @@ def create_router(config: AcaiConfig | None = None,
         if readme:
             with open(os.path.join(skill_dir, "README.md"), "w") as f:
                 f.write(readme)
+        requirements = data.get("requirements", "").strip()
+        if requirements:
+            with open(os.path.join(skill_dir, "requirements.txt"), "w") as f:
+                f.write(requirements)
         return {"created": True, "qualified_name": f"{ns}.{name}"}
 
     @router.get("/workflows/{workflow_id}/skills/{namespace}/{skill_name}")
@@ -1007,6 +1020,11 @@ def create_router(config: AcaiConfig | None = None,
                 if os.path.isfile(readme_path):
                     with open(readme_path) as f:
                         readme = f.read()
+                requirements = ""
+                req_path = os.path.join(skill_dir, "requirements.txt")
+                if os.path.isfile(req_path):
+                    with open(req_path) as f:
+                        requirements = f.read()
                 return {
                     "namespace": namespace,
                     "name": skill_name,
@@ -1015,6 +1033,7 @@ def create_router(config: AcaiConfig | None = None,
                     "parameters": defn.get("parameters", {}),
                     "code": code,
                     "readme": readme,
+                    "requirements": requirements,
                 }
         return JSONResponse({"error": "not found"}, status_code=404)
 
@@ -1240,7 +1259,7 @@ def create_router(config: AcaiConfig | None = None,
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
-            if prov and prov.name != worker_provider.name:
+            if prov:
                 provider_override = {"name": prov.name}
                 if model_slug:
                     provider_override["model"] = model_slug
@@ -1350,7 +1369,7 @@ def create_router(config: AcaiConfig | None = None,
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
-            if prov and prov.name != worker_provider.name:
+            if prov:
                 provider_override = {"name": prov.name}
                 if model_slug:
                     provider_override["model"] = model_slug
@@ -1784,6 +1803,7 @@ def create_router(config: AcaiConfig | None = None,
 
         code = skill_store.read_file(namespace, name, "run.py") or ""
         readme = skill_store.read_file(namespace, name, "README.md") or ""
+        requirements = skill_store.read_file(namespace, name, "requirements.txt") or ""
 
         try:
             definition = _json.loads(tool_json)
@@ -1797,6 +1817,7 @@ def create_router(config: AcaiConfig | None = None,
             "definition": definition,
             "code": code,
             "readme": readme,
+            "requirements": requirements,
         }
 
     @router.post("/skills", status_code=201)
@@ -1825,6 +1846,7 @@ def create_router(config: AcaiConfig | None = None,
             parameters=params,
             code=data.get("code", ""),
             readme=data.get("readme", ""),
+            requirements=data.get("requirements", ""),
         )
 
         skill_store.register_all(tool_registry)
@@ -1886,6 +1908,18 @@ def create_router(config: AcaiConfig | None = None,
             return JSONResponse({"error": "not found"}, status_code=404)
 
         skill_store.write_file(namespace, name, "README.md", readme)
+        return {"updated": True}
+
+    @router.put("/skills/{namespace}/{name}/requirements")
+    async def update_skill_requirements_endpoint(namespace: str, name: str, request: Request):
+        data = await _json_body(request)
+        requirements = data.get("requirements", "")
+
+        existing = skill_store.read_file(namespace, name, "tool.json")
+        if existing is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+
+        skill_store.write_file(namespace, name, "requirements.txt", requirements)
         return {"updated": True}
 
     @router.delete("/skills/{namespace}/{name}")

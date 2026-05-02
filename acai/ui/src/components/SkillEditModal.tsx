@@ -36,6 +36,7 @@ export interface SkillFormData {
     description: string;
     code: string;
     parameters: string;
+    requirements: string;
 }
 
 export const emptySkillForm: SkillFormData = {
@@ -44,6 +45,7 @@ export const emptySkillForm: SkillFormData = {
     description: '',
     code: DEFAULT_CODE,
     parameters: JSON.stringify({ type: 'object', properties: {}, required: [] }, null, 2),
+    requirements: '',
 };
 
 export interface SkillEditModalProps {
@@ -61,7 +63,7 @@ const SkillEditModal = ({ onSave, onClose, workflowId, editingName, initialForm 
     const [form, setForm] = useState<SkillFormData>(initialForm ? { ...initialForm } : { ...emptySkillForm });
     const [formError, setFormError] = useState('');
     const [busy, setBusy] = useState(false);
-    const [activeTab, setActiveTab] = useState<'config' | 'code' | 'parameters'>('config');
+    const [activeTab, setActiveTab] = useState<'config' | 'code' | 'parameters' | 'requirements'>('config');
 
     const setField = <K extends keyof SkillFormData>(key: K, value: SkillFormData[K]) =>
         setForm(prev => ({ ...prev, [key]: value }));
@@ -79,12 +81,14 @@ const SkillEditModal = ({ onSave, onClose, workflowId, editingName, initialForm 
                     description: form.description.trim(),
                     code: form.code,
                     parameters: form.parameters,
+                    requirements: form.requirements,
                 });
             } else {
                 await createSkill({
                     namespace: form.namespace.trim(),
                     name: form.name.trim(),
                     description: form.description.trim() || `${form.namespace.trim()}.${form.name.trim()} skill`,
+                    requirements: form.requirements,
                 });
             }
             onSave();
@@ -126,23 +130,29 @@ const SkillEditModal = ({ onSave, onClose, workflowId, editingName, initialForm 
 
                 {/* Tabs */}
                 <HStack px={5} pt={3} gap={0} borderBottom="1px solid" borderColor="var(--border-primary)" flexShrink={0}>
-                    {(['config', 'code', 'parameters'] as const).map(tab => (
-                        <Button
-                            key={tab}
-                            size="sm"
-                            variant="ghost"
-                            borderBottom="2px solid"
-                            borderColor={activeTab === tab ? 'var(--accent, teal.400)' : 'transparent'}
-                            borderRadius={0}
-                            color={activeTab === tab ? 'var(--text-heading)' : 'var(--text-muted)'}
-                            fontWeight={activeTab === tab ? 'medium' : 'normal'}
-                            onClick={() => setActiveTab(tab)}
-                            px={4} mb="-1px"
-                            _hover={{ color: 'var(--text-heading)' }}
-                        >
-                            {tab === 'config' ? 'Configuration' : tab === 'code' ? 'run.py' : 'tool.json'}
-                        </Button>
-                    ))}
+                    {(['config', 'code', 'parameters', 'requirements'] as const).map(tab => {
+                        const label = tab === 'config' ? 'Configuration'
+                            : tab === 'code' ? 'run.py'
+                            : tab === 'parameters' ? 'tool.json'
+                            : 'requirements.txt';
+                        return (
+                            <Button
+                                key={tab}
+                                size="sm"
+                                variant="ghost"
+                                borderBottom="2px solid"
+                                borderColor={activeTab === tab ? 'var(--accent, teal.400)' : 'transparent'}
+                                borderRadius={0}
+                                color={activeTab === tab ? 'var(--text-heading)' : 'var(--text-muted)'}
+                                fontWeight={activeTab === tab ? 'medium' : 'normal'}
+                                onClick={() => setActiveTab(tab)}
+                                px={4} mb="-1px"
+                                _hover={{ color: 'var(--text-heading)' }}
+                            >
+                                {label}
+                            </Button>
+                        );
+                    })}
                 </HStack>
 
                 {/* Body */}
@@ -209,7 +219,7 @@ const SkillEditModal = ({ onSave, onClose, workflowId, editingName, initialForm 
                                 language="python"
                             />
                         </Box>
-                    ) : (
+                    ) : activeTab === 'parameters' ? (
                         <Box flex={1} minH={0}>
                             <CodeEditor
                                 value={form.parameters}
@@ -217,6 +227,19 @@ const SkillEditModal = ({ onSave, onClose, workflowId, editingName, initialForm 
                                 language="json"
                             />
                         </Box>
+                    ) : (
+                        <VStack gap={2} align="stretch" flex={1} minH={0}>
+                            <Text fontSize="xs" color="var(--text-muted)">
+                                pip dependencies (one per line). Installed automatically before the skill runs.
+                            </Text>
+                            <Box flex={1} minH={0}>
+                                <CodeEditor
+                                    value={form.requirements}
+                                    onChange={v => setField('requirements', v)}
+                                    language="text"
+                                />
+                            </Box>
+                        </VStack>
                     )}
                 </Box>
 

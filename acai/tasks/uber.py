@@ -116,8 +116,12 @@ class UberGraph(TaskGraph):
     # Route phase — lightweight LLM call to pick the conversation
     # ------------------------------------------------------------------
 
-    async def _route(self, message: str, current_conv_id: str, agent: str) -> dict:
+    async def _route(self, work: dict) -> dict:
         """Dispatch a routing LLM call and return the decision dict."""
+        message = work.get("message", "")
+        current_conv_id = work.get("current_conversation", "")
+        agent = work.get("agent", "default")
+
         catalogue = self._build_catalogue()
         log.info(
             "routing message  catalogue_size=%d  current_conv=%s  message=%r",
@@ -134,6 +138,7 @@ class UberGraph(TaskGraph):
             "task_id": "uber-route",
             "kind": "route",
             "message": message,
+            "provider_override": work.get("provider_override"),
         }
 
         payload = self.prepare(
@@ -171,12 +176,10 @@ class UberGraph(TaskGraph):
         Yields a ``route`` event followed by ``done``.  The frontend
         confirms the routing and starts a ``/converse`` call separately.
         """
-        message = work.get("message", "")
-        current_conv_id = work.get("current_conversation", "")
         agent_name = work.get("agent", "default")
 
         try:
-            routing = await self._route(message, current_conv_id, agent_name)
+            routing = await self._route(work)
         except Exception as exc:
             log.exception("uber routing error")
             yield self._error_event(

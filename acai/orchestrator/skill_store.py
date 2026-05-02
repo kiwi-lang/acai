@@ -50,11 +50,13 @@ class SkillDef:
     description: str = ""
     parameters: dict = field(default_factory=dict)
     required: list[str] = field(default_factory=list)
+    has_requirements: bool = False
 
 
 _TOOL_JSON = "tool.json"
 _RUN_PY = "run.py"
 _README = "README.md"
+_REQUIREMENTS = "requirements.txt"
 
 
 class SkillStore:
@@ -155,6 +157,9 @@ class SkillStore:
                     description=defn.get("description", ""),
                     parameters=params.get("properties", {}),
                     required=params.get("required", []),
+                    has_requirements=os.path.isfile(
+                        os.path.join(skill_path, _REQUIREMENTS)
+                    ),
                 )
                 skills.append(sd)
 
@@ -210,6 +215,7 @@ class SkillStore:
         parameters: dict | None = None,
         code: str = "",
         readme: str = "",
+        requirements: str = "",
     ) -> str:
         """Create a new skill directory with starter files.
 
@@ -238,6 +244,9 @@ class SkillStore:
 
         _write(os.path.join(skill_dir, _README), readme)
 
+        if requirements:
+            _write(os.path.join(skill_dir, _REQUIREMENTS), requirements)
+
         _bump_generation()
         return skill_dir
 
@@ -263,11 +272,58 @@ class SkillStore:
 # Execution
 # ---------------------------------------------------------------------------
 
+def _ensure_deps(skill_dir: str) -> None:
+    """Install ``requirements.txt`` if present and not already up-to-date.
+
+    Uses a ``.deps_installed`` marker containing a hash of the
+    requirements content to avoid redundant pip invocations.
+    """
+    import hashlib
+
+    req_path = os.path.join(skill_dir, _REQUIREMENTS)
+    if not os.path.isfile(req_path):
+        return
+
+    with open(req_path, encoding="utf-8") as f:
+        content = f.read().strip()
+    if not content:
+        return
+
+    content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+    marker = os.path.join(skill_dir, ".deps_installed")
+    if os.path.isfile(marker):
+        with open(marker) as f:
+            if f.read().strip() == content_hash:
+                return
+
+    log.info("installing skill deps from %s", req_path)
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "install", "--quiet", "-r", req_path],
+            capture_output=True, text=True, timeout=120,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        log.error("pip install failed for %s: %s", req_path,
+                  exc.stderr[:2000] if exc.stderr else "")
+        raise RuntimeError(
+            f"Failed to install skill dependencies: {exc.stderr[:500]}"
+        ) from exc
+
+    with open(marker, "w") as f:
+        f.write(content_hash)
+
+
 def execute_skill(run_py: str, args: dict, cwd: str, timeout: int = 300) -> str:
     """Run a skill's ``run.py`` with *args* as JSON on stdin.
 
     Returns a JSON string with either the skill's output or an error.
     """
+    try:
+        _ensure_deps(cwd)
+    except RuntimeError as exc:
+        return json.dumps({"error": str(exc)})
+
     input_data = json.dumps(args, ensure_ascii=False)
     try:
         proc = subprocess.run(
