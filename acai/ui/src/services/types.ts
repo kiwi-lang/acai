@@ -297,6 +297,8 @@ export interface AgentDef {
     uses_sandbox: boolean;
     max_iterations: number;
     approval_required: boolean;
+    provider_allow: string[];
+    provider_forbid: string[];
     created_at: string;
     tags: string[];
     builtin: boolean;

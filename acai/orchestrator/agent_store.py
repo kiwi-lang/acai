@@ -59,6 +59,8 @@ class AgentDef:
     max_iterations: int = 20
     approval_required: bool = False
     compressor: str = "compressor"
+    provider_allow: list[str] = field(default_factory=list)
+    provider_forbid: list[str] = field(default_factory=list)
     created_at: str = ""
     tags: list[str] = field(default_factory=list)
     builtin: bool = field(default=False, repr=False, compare=False)
@@ -71,6 +73,20 @@ class AgentDef:
         # Migrate legacy per-agent sandbox dicts to boolean flag
         if isinstance(self.uses_sandbox, dict):
             self.uses_sandbox = self.uses_sandbox.get("type", "none") != "none"
+
+    def is_provider_allowed(self, provider_name: str) -> bool:
+        """Check whether *provider_name* passes the allow/forbid lists.
+
+        Rules (evaluated in order):
+        1. If provider_forbid is non-empty and the name is in it → blocked.
+        2. If provider_allow is non-empty and the name is NOT in it → blocked.
+        3. Otherwise → allowed.
+        """
+        if self.provider_forbid and provider_name in self.provider_forbid:
+            return False
+        if self.provider_allow and provider_name not in self.provider_allow:
+            return False
+        return True
 
     def to_dict(self) -> dict:
         d = asdict(self)

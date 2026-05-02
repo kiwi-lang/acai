@@ -125,17 +125,22 @@ def create_worker_router(
             provider_override.get("name") if isinstance(provider_override, dict) else None,
         )
 
-        if isinstance(provider_override, dict) and provider_override.get("endpoint"):
-            from acai.provider import ProviderConfig
-            model_slug_override = provider_override.pop("model_slug", "")
-            override_cfg = ProviderConfig.from_dict(provider_override)
-            if model_slug_override and override_cfg.get_model(model_slug_override):
-                target_model = override_cfg.get_model(model_slug_override)
-                override_cfg.models = [target_model] + [
-                    m for m in override_cfg.models if m.slug != model_slug_override
-                ]
-            llm_cfg = override_cfg
-            use_local = False
+        if isinstance(provider_override, dict) and provider_override.get("name"):
+            resolved = config.get_provider(provider_override["name"])
+            if resolved:
+                model_slug_override = provider_override.get("model", "")
+                if model_slug_override and resolved.get_model(model_slug_override):
+                    target_model = resolved.get_model(model_slug_override)
+                    resolved.models = [target_model] + [
+                        m for m in resolved.models if m.slug != model_slug_override
+                    ]
+                llm_cfg = resolved
+                use_local = False
+            else:
+                log.warning("[%s] provider %r not found, using local",
+                            task_id, provider_override["name"])
+                llm_cfg = provider
+                use_local = True
         else:
             llm_cfg = provider
             use_local = True

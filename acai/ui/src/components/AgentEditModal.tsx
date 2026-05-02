@@ -68,6 +68,8 @@ export interface AgentFormData {
     tags: string;
     scope: string;
     uses_sandbox: boolean;
+    provider_allow: string[];
+    provider_forbid: string[];
 }
 
 export const emptyForm: AgentFormData = {
@@ -80,6 +82,8 @@ export const emptyForm: AgentFormData = {
     approval_required: false, tags: '',
     scope: 'global',
     uses_sandbox: true,
+    provider_allow: [],
+    provider_forbid: [],
 };
 
 export const agentDefToForm = (a: AgentDef): AgentFormData => ({
@@ -102,6 +106,8 @@ export const agentDefToForm = (a: AgentDef): AgentFormData => ({
     tags: a.tags.join(', '),
     scope: a.scope || 'global',
     uses_sandbox: a.uses_sandbox ?? false,
+    provider_allow: a.provider_allow ?? [],
+    provider_forbid: a.provider_forbid ?? [],
 });
 
 export const formToPayload = (f: AgentFormData) => {
@@ -132,6 +138,8 @@ export const formToPayload = (f: AgentFormData) => {
         tags: f.tags ? f.tags.split(',').map(s => s.trim()).filter(Boolean) : [],
         scope: f.scope,
         uses_sandbox: f.uses_sandbox,
+        provider_allow: f.provider_allow,
+        provider_forbid: f.provider_forbid,
     };
 };
 
@@ -526,6 +534,83 @@ export const AgentFormBody = ({
                                 </NativeSelect.Field>
                             </NativeSelect.Root>
                         </Box>
+
+                        {/* Provider allow / forbid lists */}
+                        {providers.length > 0 && (
+                            <HStack gap={4} align="flex-start">
+                                <Box flex={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>
+                                        Allowed Providers
+                                        <Text as="span" fontSize="2xs" color="var(--text-muted)" ml={1}>
+                                            (empty = all)
+                                        </Text>
+                                    </Text>
+                                    <HStack gap={2} flexWrap="wrap">
+                                        {providers.map(p => {
+                                            const isOn = form.provider_allow.includes(p.name);
+                                            return (
+                                                <Box
+                                                    key={p.name}
+                                                    as="button"
+                                                    px={3} py={1}
+                                                    borderRadius="md"
+                                                    fontSize="xs"
+                                                    fontWeight="medium"
+                                                    border="1px solid"
+                                                    borderColor={isOn ? 'green.400' : 'var(--border-primary)'}
+                                                    bg={isOn ? 'green.900' : 'transparent'}
+                                                    color={isOn ? 'green.200' : 'var(--text-tertiary)'}
+                                                    cursor="pointer"
+                                                    _hover={{ borderColor: 'green.400' }}
+                                                    onClick={() => {
+                                                        const next = isOn
+                                                            ? form.provider_allow.filter(n => n !== p.name)
+                                                            : [...form.provider_allow, p.name];
+                                                        setField('provider_allow', next);
+                                                    }}
+                                                >
+                                                    {p.name}
+                                                </Box>
+                                            );
+                                        })}
+                                    </HStack>
+                                </Box>
+                                <Box flex={1}>
+                                    <Text fontSize="xs" color="var(--text-muted)" mb={1}>
+                                        Forbidden Providers
+                                    </Text>
+                                    <HStack gap={2} flexWrap="wrap">
+                                        {providers.map(p => {
+                                            const isOn = form.provider_forbid.includes(p.name);
+                                            return (
+                                                <Box
+                                                    key={p.name}
+                                                    as="button"
+                                                    px={3} py={1}
+                                                    borderRadius="md"
+                                                    fontSize="xs"
+                                                    fontWeight="medium"
+                                                    border="1px solid"
+                                                    borderColor={isOn ? 'red.400' : 'var(--border-primary)'}
+                                                    bg={isOn ? 'red.900' : 'transparent'}
+                                                    color={isOn ? 'red.200' : 'var(--text-tertiary)'}
+                                                    cursor="pointer"
+                                                    _hover={{ borderColor: 'red.400' }}
+                                                    onClick={() => {
+                                                        const next = isOn
+                                                            ? form.provider_forbid.filter(n => n !== p.name)
+                                                            : [...form.provider_forbid, p.name];
+                                                        setField('provider_forbid', next);
+                                                    }}
+                                                >
+                                                    {p.name}
+                                                </Box>
+                                            );
+                                        })}
+                                    </HStack>
+                                </Box>
+                            </HStack>
+                        )}
 
                         {/* Output format */}
                         <Box>

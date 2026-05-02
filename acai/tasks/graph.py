@@ -309,6 +309,23 @@ class TaskGraph:
                 template_src=wf_template_src,
             )
 
+            provider_info = work.get("provider_override")
+            if agent_def:
+                override_name = (
+                    provider_info.get("name")
+                    if isinstance(provider_info, dict) else None
+                )
+                effective_provider = (
+                    override_name
+                    or work.get("provider")
+                    or self.config.active_provider().name
+                )
+                if not agent_def.is_provider_allowed(effective_provider):
+                    raise ValueError(
+                        f"Agent '{agent_name}' is not allowed to run on "
+                        f"provider '{effective_provider}'"
+                    )
+
             payload: dict = {
                 "task_id": work.get("task_id", ""),
                 "kind": "llm_complete",
@@ -321,7 +338,6 @@ class TaskGraph:
             if agent_def:
                 payload["compressor"] = agent_def.compressor
 
-            provider_info = work.get("provider_override")
             if provider_info:
                 payload["provider"] = provider_info
 

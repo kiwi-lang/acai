@@ -35,7 +35,7 @@ from acai.orchestrator.knowledge import KnowledgeStore
 from acai.orchestrator.config import AcaiConfig, load_config
 from acai.provider import (
     ProviderConfig, ProviderScheduler, load_providers, save_providers,
-    _provider_to_dict, create_provider_router,
+    create_provider_router,
 )
 from acai.orchestrator.projects import Project, ProjectStore, scaffold, clone
 from acai.tasks import ConverseGraph, ConverseScribeGraph, ThinkGraph, UberGraph, DynamicGraph, get_graph, list_graphs
@@ -465,17 +465,15 @@ def create_router(config: AcaiConfig | None = None,
 
         chat.append(conversation, {"role": "user", "content": message})
 
-        from dataclasses import asdict as _asdict
         model_slug = data.get("model", "")
 
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
             if prov and prov.name != worker_provider.name:
-                override_d = _provider_to_dict(prov)
+                provider_override = {"name": prov.name}
                 if model_slug:
-                    override_d["model_slug"] = model_slug
-                provider_override = override_d
+                    provider_override["model"] = model_slug
 
         enable_thinking = data.get("enable_thinking")
 
@@ -1243,10 +1241,9 @@ def create_router(config: AcaiConfig | None = None,
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
             if prov and prov.name != worker_provider.name:
-                override_d = _provider_to_dict(prov)
+                provider_override = {"name": prov.name}
                 if model_slug:
-                    override_d["model_slug"] = model_slug
-                provider_override = override_d
+                    provider_override["model"] = model_slug
 
         work = {
             "message": message,
@@ -1354,10 +1351,9 @@ def create_router(config: AcaiConfig | None = None,
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
             if prov and prov.name != worker_provider.name:
-                override_d = _provider_to_dict(prov)
+                provider_override = {"name": prov.name}
                 if model_slug:
-                    override_d["model_slug"] = model_slug
-                provider_override = override_d
+                    provider_override["model"] = model_slug
 
         work = {
             "message": message,
@@ -2140,6 +2136,7 @@ def create_router(config: AcaiConfig | None = None,
             "model_overrides", "system_template", "context_sources",
             "tools", "tool_permissions", "resource_permissions", "scope",
             "uses_sandbox", "max_iterations", "approval_required", "tags",
+            "provider_allow", "provider_forbid",
         )
         for key in updatable:
             if key in data:
