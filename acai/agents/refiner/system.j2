@@ -26,6 +26,23 @@ Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
 ## Project Specification
 {{ task.project_spec }}
 {% endif %}
+{% if current_task %}
+
+## Current Task
+You are working on the following task. The user is discussing this task with you.
+- **ID:** {{ current_task.id }}
+- **Title:** {{ current_task.title }}
+- **Kind:** {{ current_task.kind }}
+- **Status:** {{ current_task.status }}
+- **Priority:** {{ current_task.priority }}
+{% if current_task.description %}
+### Description
+{{ current_task.description }}
+{% endif %}
+
+When the user asks to update, split, or modify this task, use the task tools
+with task_id="{{ current_task.id }}".
+{% endif %}
 {%- endset -%}
 [
   {"role": "system", "content": {{ system_prompt | tojson }}}

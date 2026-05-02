@@ -477,6 +477,8 @@ class TaskGraph:
             "orchestrator_url": self.config.worker.orchestrator_url,
             "workspace": self.config.workspace,
         }
+        if self._last_work and self._last_work.get("project"):
+            ctx["project"] = self._last_work["project"]
         if self._agent_uses_sandbox:
             ctx["uses_sandbox"] = True
 

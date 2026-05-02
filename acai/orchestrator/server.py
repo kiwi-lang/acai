@@ -492,13 +492,29 @@ def create_router(config: AcaiConfig | None = None,
             "model": model_slug or resolved_provider.model_slug,
             "enable_thinking": enable_thinking,
         }
+        if task_id:
+            work["task_id"] = task_id
         if workflow_spec:
             work["workflow_spec"] = workflow_spec
         if workflow_dir:
             work["workflow_dir"] = workflow_dir
 
         extra_ctx = data.get("context")
-        if isinstance(extra_ctx, dict):
+        if not isinstance(extra_ctx, dict):
+            extra_ctx = {}
+        if task_id:
+            task_obj = queue.get(task_id)
+            if task_obj:
+                extra_ctx["current_task"] = {
+                    "id": task_obj.id,
+                    "title": task_obj.title,
+                    "description": task_obj.description or "",
+                    "kind": task_obj.kind,
+                    "status": task_obj.status,
+                    "priority": task_obj.priority,
+                    "agent": task_obj.agent or "",
+                }
+        if extra_ctx:
             work["extra_context"] = extra_ctx
 
         def _sse(event: str, data: dict) -> str:
