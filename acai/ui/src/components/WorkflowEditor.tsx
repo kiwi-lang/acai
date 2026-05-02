@@ -847,7 +847,15 @@ function ReplyTypeNodeComponent({ data, selected }: NodeProps) {
       <div style={{ display: 'flex', position: 'relative', minHeight: bodyH, borderTop: `1px solid ${C.border}` }}>
         {/* Left column — field editor */}
         <div style={{ width: leftW, padding: '2px 6px 4px 8px', borderRight: `1px solid ${C.border}` }}>
-          {fields.map((f, i) => (
+          {fields.map((f, i) => {
+            const isArr = f.type.endsWith('[]');
+            const baseType = isArr ? f.type.slice(0, -2) : f.type;
+            const toggleArray = () => {
+              const next = [...fields];
+              next[i] = { ...f, type: isArr ? baseType : `${baseType}[]` };
+              updateFields(next);
+            };
+            return (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 3, height: FIELD_ROW_H }}>
               <input
                 style={{ ...fieldBaseStyle, flex: 1, height: 18, marginTop: 0, fontFamily: 'monospace', fontSize: 10 }}
@@ -855,11 +863,23 @@ function ReplyTypeNodeComponent({ data, selected }: NodeProps) {
                 placeholder="name"
                 onChange={e => { const n = [...fields]; n[i] = { ...f, name: e.target.value }; updateFields(n); }}
               />
+              <span
+                title={isArr ? 'Array — click for scalar' : 'Scalar — click for array'}
+                style={{
+                  cursor: 'pointer', fontSize: 9, fontFamily: 'monospace', fontWeight: 600,
+                  lineHeight: '16px', textAlign: 'center', userSelect: 'none',
+                  width: 16, height: 16, borderRadius: 3, flexShrink: 0,
+                  background: isArr ? 'rgba(192,108,219,0.25)' : 'transparent',
+                  color: isArr ? '#c06cdb' : C.muted,
+                  border: `1px solid ${isArr ? '#c06cdb' : C.border}`,
+                }}
+                onClick={toggleArray}
+              >[]</span>
               <select
                 style={{ ...selectStyle, width: 48, height: 18, marginTop: 0, fontSize: 9,
-                         color: FIELD_TYPE_COLOR[f.type] || C.text }}
-                value={f.type}
-                onChange={e => { const n = [...fields]; n[i] = { ...f, type: e.target.value }; updateFields(n); }}
+                         color: FIELD_TYPE_COLOR[baseType] || C.text }}
+                value={baseType}
+                onChange={e => { const n = [...fields]; n[i] = { ...f, type: isArr ? `${e.target.value}[]` : e.target.value }; updateFields(n); }}
               >
                 {FIELD_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
               </select>
@@ -868,7 +888,8 @@ function ReplyTypeNodeComponent({ data, selected }: NodeProps) {
                 onClick={() => { const n = [...fields]; n.splice(i, 1); updateFields(n); }}
               >✕</span>
             </div>
-          ))}
+            );
+          })}
           <div
             style={{ fontSize: 10, color: baseDef.accent, cursor: 'pointer', marginTop: 2, userSelect: 'none' }}
             onClick={() => updateFields([...fields, { name: '', type: 'str' }])}
@@ -1548,6 +1569,10 @@ const WorkflowEditor: FC = () => {
       const FIELD_PIN: Record<string, string> = {
         str: 'string', string: 'string', int: 'int', integer: 'int',
         float: 'float', number: 'float', bool: 'bool', boolean: 'bool',
+        'str[]': 'json', 'string[]': 'json',
+        'int[]': 'json', 'integer[]': 'json',
+        'float[]': 'json', 'number[]': 'json',
+        'bool[]': 'json', 'boolean[]': 'json',
       };
       return fields.filter(f => f.name).map(f => ({
         id: `data_${f.name}`, label: f.name,

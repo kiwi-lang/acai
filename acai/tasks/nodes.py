@@ -875,6 +875,8 @@ class BackgroundAgentNode(NodeType):
                  pin_type="message_list"),
         Pin.data("data_phase", "phase", Colors.purple, "left",
                  pin_type="string"),
+        Pin.data("data_format", "format", "#c06cdb", "left",
+                 pin_type="format"),
         Pin.data("data_response", "response", Colors.amber, "right",
                  pin_type="message"),
         Pin.data("data_text", "text", Colors.green, "right",
@@ -912,6 +914,17 @@ class BackgroundAgentNode(NodeType):
             prepared = payload.get("messages", [])
             system_msgs = [m for m in prepared if m.get("role") == "system"]
             payload["messages"] = system_msgs + list(context)
+
+        fmt = ctx.inputs.get("format")
+        if fmt and isinstance(fmt, dict):
+            payload["response_format"] = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": fmt.get("title", "structured_output"),
+                    "strict": True,
+                    "schema": fmt,
+                },
+            }
 
         yield {"type": "event", "data": {
             "event_type": f"{phase}_start",
@@ -1220,74 +1233,57 @@ class PrintNode(NodeType):
         yield {"type": "output", "data": {}}
 
 
-def _parse_curator_output(text: str) -> list[dict]:
-    """Extract the documents list from curator JSON output."""
-    
-    text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1]
-    if text.endswith("```"):
-        text = text.rsplit("```", 1)[0]
-    text = text.strip()
-
-    try:
-        parsed = json.loads(text)
-    except (json.JSONDecodeError, TypeError):
-        log.warning("Curator output is not valid JSON: %.200s", text)
-        return []
-
-    if isinstance(parsed, dict):
-        docs = parsed.get("documents", [])
-    elif isinstance(parsed, list):
-        docs = parsed
-    else:
-        return []
-
-    return [d for d in docs if isinstance(d, dict) and d.get("content")]
-
-
 @register
-class ParseKnowledgeNode(NodeType):
-    """Parse curator JSON output into a formatted knowledge context.
+class LoadKnowledgeNode(NodeType):
+    """Load knowledge documents by path and build a knowledge_context string.
 
-    Takes the raw text from a curator agent and extracts the
-    ``documents`` list.  Outputs a markdown-formatted
-    ``knowledge_context`` string suitable for injection into an
-    agent template.
+    Accepts a list of document paths (``subject/subsubject/title``)
+    and reads each from the knowledge store.  Outputs a formatted
+    markdown string suitable for injection into an agent template.
     """
 
-    type = "parse_knowledge"
-    label = "Parse Knowledge"
+    type = "load_knowledge"
+    label = "Load Knowledge"
     accent = Colors.cyan
-    description = "Curator output → knowledge context"
+    description = "Load knowledge files by path"
     category = "Data"
     pins = [
         Pin.exec_in(),
         Pin.exec_out(),
-        Pin.data("data_text", "text", Colors.green, "left", pin_type="string",
+        Pin.data("data_paths", "paths", Colors.green, "left", pin_type="json",
                  optional=False),
         Pin.data("data_knowledge_context", "knowledge_context", Colors.blue,
                  "right", pin_type="string"),
     ]
 
     async def execute(self, ctx: NodeContext):
-        text = ctx.inputs.get("text", "")
+        import os
+        from acai.orchestrator.knowledge import KnowledgeStore
 
-        print(text)
+        paths = ctx.inputs.get("paths", [])
+        if isinstance(paths, str):
+            try:
+                paths = json.loads(paths)
+            except (json.JSONDecodeError, TypeError):
+                paths = [p.strip() for p in paths.split(",") if p.strip()]
 
-        if isinstance(text, str):
-            docs = _parse_curator_output(text)
-        else:
-            docs = text.get("documents")
+        if not isinstance(paths, list):
+            paths = []
 
-        knowledge_context = ""
-        if docs:
-            parts = []
-            for doc in docs:
-                title = doc.get("title", "Untitled")
-                body = doc.get("content", "")
-                parts.append(f"### {title}\n\n{body}")
-            knowledge_context = "\n\n---\n\n".join(parts)
+        knowledge_dir = os.path.join(ctx.graph.config.workspace, "knowledge")
+        store = KnowledgeStore(knowledge_dir)
+
+        parts: list[str] = []
+        for doc_path in paths[:10]:
+            doc = store.get_by_path(str(doc_path))
+            if doc and doc.content:
+                parts.append(f"### {doc.subject}/{doc.subsubject}/{doc.title}\n\n{doc.content}")
+            else:
+                log.debug("load_knowledge: %r not found or empty", doc_path)
+
+        knowledge_context = "\n\n---\n\n".join(parts) if parts else ""
+        log.info("load_knowledge: loaded %d/%d docs, %d chars",
+                 len(parts), len(paths), len(knowledge_context))
 
         yield {"type": "output", "data": {
             "knowledge_context": knowledge_context,
@@ -1543,6 +1539,14 @@ _FIELD_TYPE_MAP = {
     "number": {"type": "number"},
     "bool": {"type": "boolean"},
     "boolean": {"type": "boolean"},
+    "str[]": {"type": "array", "items": {"type": "string"}},
+    "string[]": {"type": "array", "items": {"type": "string"}},
+    "int[]": {"type": "array", "items": {"type": "integer"}},
+    "integer[]": {"type": "array", "items": {"type": "integer"}},
+    "float[]": {"type": "array", "items": {"type": "number"}},
+    "number[]": {"type": "array", "items": {"type": "number"}},
+    "bool[]": {"type": "array", "items": {"type": "boolean"}},
+    "boolean[]": {"type": "array", "items": {"type": "boolean"}},
 }
 
 
@@ -1618,6 +1622,10 @@ class ReadReplyNode(NodeType):
         "int": "int", "integer": "int",
         "float": "float", "number": "float",
         "bool": "bool", "boolean": "bool",
+        "str[]": "json", "string[]": "json",
+        "int[]": "json", "integer[]": "json",
+        "float[]": "json", "number[]": "json",
+        "bool[]": "json", "boolean[]": "json",
     }
 
     pins = [

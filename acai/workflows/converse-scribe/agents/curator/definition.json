@@ -12,18 +12,13 @@
     "knowledge"
   ],
   "tool_permissions": [
-    "read",
-    "write",
-    "execute"
+    "read"
   ],
   "resource_permissions": [
-    "knowledge:create",
-    "knowledge:delete",
-    "knowledge:read",
-    "knowledge:update"
+    "knowledge:read"
   ],
-  "max_iterations": 20,
+  "max_iterations": 10,
   "approval_required": false,
-  "uses_sandbox": true,
+  "uses_sandbox": false,
   "scope": "global"
 }

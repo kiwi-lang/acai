@@ -7,8 +7,8 @@
       "id": "start",
       "type": "start",
       "position": {
-        "x": -2144.2806184639167,
-        "y": -474.74166273597626
+        "x": -2631.448918869952,
+        "y": -405.3907079444959
       },
       "data": {
         "label": "Start",
@@ -16,34 +16,69 @@
       }
     },
     {
-      "id": "converse",
-      "type": "agent_call",
+      "id": "curator",
+      "type": "background_agent",
       "position": {
-        "x": -1257.3685911055943,
-        "y": -760.9156212153254
+        "x": -2058.496271625464,
+        "y": -697.190836421234
       },
       "data": {
-        "label": "Converse",
+        "label": "Curator",
+        "agent": "curator",
+        "phase": "curator"
+      }
+    },
+    {
+      "id": "read_curator",
+      "type": "read_reply",
+      "position": {
+        "x": -1816.3740407723208,
+        "y": -639.5974911452233
+      },
+      "data": {
+        "label": "Read Curator Reply"
+      }
+    },
+    {
+      "id": "load_knowledge",
+      "type": "load_knowledge",
+      "position": {
+        "x": -1569.90199307974,
+        "y": -636.937018666448
+      },
+      "data": {
+        "label": "Load Knowledge"
+      }
+    },
+    {
+      "id": "print_knowledge",
+      "type": "print",
+      "position": {
+        "x": -1229.5034977714138,
+        "y": -635.9090787443903
+      },
+      "data": {
+        "label": "Print Knowledge"
+      }
+    },
+    {
+      "id": "converse",
+      "type": "simple_agent",
+      "position": {
+        "x": -862.8283467288442,
+        "y": -386.9089758880805
+      },
+      "data": {
+        "label": "Simple Agent",
         "agent": "default"
       }
     },
     {
-      "id": "acc_converse",
-      "type": "accumulate",
-      "position": {
-        "x": -902.4810308391156,
-        "y": -758.0902527812549
-      },
-      "data": {
-        "label": "Accumulate"
-      }
-    },
-    {
-      "id": "n_5_mo4x3s85",
+      "id": "tool_loop",
       "type": "tool_followup_loop",
       "position": {
-        "x": -542.5283296790291,
-        "y": -519.8311060815566
+        "x": -456.54551205595976,
+        "y": -639.2695019156047
       },
       "data": {
         "label": "Tool Loop",
@@ -51,308 +86,268 @@
       }
     },
     {
-      "id": "n_3_mo52abmj",
+      "id": "append_response",
+      "type": "append",
+      "position": {
+        "x": -100,
+        "y": -500
+      },
+      "data": {
+        "label": "Append Response"
+      }
+    },
+    {
+      "id": "extend_messages",
       "type": "extend",
       "position": {
-        "x": 131.96523995155212,
-        "y": -644.5721107706403
+        "x": 200,
+        "y": -500
       },
       "data": {
         "label": "Extend"
       }
     },
     {
-      "id": "n_1_mo52z8n2",
-      "type": "parse_knowledge",
-      "position": {
-        "x": -1571.2618563998012,
-        "y": -755.720980152543
-      },
-      "data": {
-        "label": "Parse Knowledge"
-      }
-    },
-    {
-      "id": "n_5_mo53juaq",
-      "type": "append",
-      "position": {
-        "x": -90.35529436003064,
-        "y": -691.8858414936722
-      },
-      "data": {
-        "label": "Append"
-      }
-    },
-    {
-      "id": "n_1_mo53pssi",
+      "id": "scribe",
       "type": "background_agent",
       "position": {
-        "x": -1774.935262542876,
-        "y": -757.7366733188408
+        "x": 475.9158004206098,
+        "y": -589.0068245325292
       },
       "data": {
-        "label": "Background Agent",
-        "agent": "curator",
-        "phase": "curator"
-      }
-    },
-    {
-      "id": "n_3_mo53qsly",
-      "type": "background_agent",
-      "position": {
-        "x": 315.660994763278,
-        "y": -651.0994515632369
-      },
-      "data": {
-        "label": "Background Agent",
+        "label": "Scribe",
         "agent": "scribe",
         "phase": "scribe"
       }
     },
     {
-      "id": "n_1_monfent2",
-      "type": "simple_agent",
+      "id": "n_1_monn6fhy",
+      "type": "reply_type",
       "position": {
-        "x": -1109.7926995511023,
-        "y": -520.1909995029357
+        "x": -2359.1432958532864,
+        "y": -701.6170383181519
       },
       "data": {
-        "label": "Simple Agent",
-        "agent": "default"
+        "label": "Reply Type",
+        "fields": "[{\"name\":\"paths\",\"type\":\"str[]\"}]"
       }
     }
   ],
   "edges": [
     {
-      "id": "e_converse_stream_acc",
-      "source": "converse",
-      "target": "acc_converse",
-      "sourceHandle": "data_stream",
-      "targetHandle": "data_stream",
+      "id": "e_start_curator_context",
+      "source": "start",
+      "target": "curator",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_context",
       "type": "data"
     },
     {
-      "id": "e_converse_payload_tl",
-      "source": "converse",
-      "target": "n_5_mo4x3s85",
-      "sourceHandle": "data_payload",
-      "targetHandle": "data_payload",
-      "type": "data"
-    },
-    {
-      "id": "e_acc_converse_exec_tl",
-      "source": "acc_converse",
-      "target": "n_5_mo4x3s85",
+      "id": "e_curator_read_exec",
+      "source": "curator",
+      "target": "read_curator",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
     },
     {
-      "id": "e_acc_converse_resp_tl",
-      "source": "acc_converse",
-      "target": "n_5_mo4x3s85",
+      "id": "e_curator_read_reply",
+      "source": "curator",
+      "target": "read_curator",
       "sourceHandle": "data_response",
-      "targetHandle": "data_response_in",
+      "targetHandle": "data_reply",
       "type": "data"
     },
     {
-      "id": "e_acc_converse_tc_tl",
-      "source": "acc_converse",
-      "target": "n_5_mo4x3s85",
-      "sourceHandle": "data_tool_calls",
-      "targetHandle": "data_tool_calls",
+      "id": "e_read_load_exec",
+      "source": "read_curator",
+      "target": "load_knowledge",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_read_load_paths",
+      "source": "read_curator",
+      "target": "load_knowledge",
+      "sourceHandle": "data_paths",
+      "targetHandle": "data_paths",
       "type": "data"
     },
     {
-      "id": "xy-edge__n_1_mo52z8n2data_knowledge_context-conversedata_knowledge_context",
-      "source": "n_1_mo52z8n2",
+      "id": "e_load_print_exec",
+      "source": "load_knowledge",
+      "target": "print_knowledge",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_load_print_value",
+      "source": "load_knowledge",
+      "target": "print_knowledge",
+      "sourceHandle": "data_knowledge_context",
+      "targetHandle": "data_value",
+      "type": "data"
+    },
+    {
+      "id": "e_print_converse_exec",
+      "source": "print_knowledge",
+      "target": "converse",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_start_converse_context",
+      "source": "start",
+      "target": "converse",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "e_start_converse_agent",
+      "source": "start",
+      "target": "converse",
+      "sourceHandle": "data_agent",
+      "targetHandle": "data_agent",
+      "type": "data"
+    },
+    {
+      "id": "e_load_converse_knowledge",
+      "source": "load_knowledge",
       "target": "converse",
       "sourceHandle": "data_knowledge_context",
       "targetHandle": "data_knowledge_context",
       "type": "data"
     },
     {
-      "id": "xy-edge__converseexec_out-acc_converseexec_in",
+      "id": "e_converse_tool_exec",
       "source": "converse",
-      "target": "acc_converse",
+      "target": "tool_loop",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
     },
     {
-      "id": "xy-edge__n_5_mo4x3s85exec_out-n_5_mo53juaqexec_in",
-      "source": "n_5_mo4x3s85",
-      "target": "n_5_mo53juaq",
+      "id": "e_converse_tool_payload",
+      "source": "converse",
+      "target": "tool_loop",
+      "sourceHandle": "data_payload",
+      "targetHandle": "data_payload",
+      "type": "data"
+    },
+    {
+      "id": "e_converse_tool_response",
+      "source": "converse",
+      "target": "tool_loop",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_response_in",
+      "type": "data"
+    },
+    {
+      "id": "e_converse_tool_calls",
+      "source": "converse",
+      "target": "tool_loop",
+      "sourceHandle": "data_tool_calls",
+      "targetHandle": "data_tool_calls",
+      "type": "data"
+    },
+    {
+      "id": "e_tool_append_exec",
+      "source": "tool_loop",
+      "target": "append_response",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
     },
     {
-      "id": "xy-edge__n_5_mo53juaqexec_out-n_3_mo52abmjexec_in",
-      "source": "n_5_mo53juaq",
-      "target": "n_3_mo52abmj",
+      "id": "e_start_append_a",
+      "source": "start",
+      "target": "append_response",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_a",
+      "type": "data"
+    },
+    {
+      "id": "e_converse_append_b",
+      "source": "converse",
+      "target": "append_response",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_b",
+      "type": "data"
+    },
+    {
+      "id": "e_append_extend_exec",
+      "source": "append_response",
+      "target": "extend_messages",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
     },
     {
-      "id": "xy-edge__n_5_mo53juaqdata_result-n_3_mo52abmjdata_a",
-      "source": "n_5_mo53juaq",
-      "target": "n_3_mo52abmj",
+      "id": "e_append_extend_a",
+      "source": "append_response",
+      "target": "extend_messages",
       "sourceHandle": "data_result",
       "targetHandle": "data_a",
       "type": "data"
     },
     {
-      "id": "xy-edge__n_5_mo4x3s85data_messages-n_3_mo52abmjdata_b",
-      "source": "n_5_mo4x3s85",
-      "target": "n_3_mo52abmj",
+      "id": "e_tool_extend_b",
+      "source": "tool_loop",
+      "target": "extend_messages",
       "sourceHandle": "data_messages",
       "targetHandle": "data_b",
       "type": "data"
     },
     {
-      "id": "xy-edge__n_1_mo53pssidata_text-n_1_mo52z8n2data_text",
-      "source": "n_1_mo53pssi",
-      "target": "n_1_mo52z8n2",
-      "sourceHandle": "data_text",
-      "targetHandle": "data_text",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_1_mo53pssiexec_out-n_1_mo52z8n2exec_in",
-      "source": "n_1_mo53pssi",
-      "target": "n_1_mo52z8n2",
+      "id": "e_extend_scribe_exec",
+      "source": "extend_messages",
+      "target": "scribe",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
     },
     {
-      "id": "xy-edge__n_3_mo52abmjdata_result-n_3_mo53qslydata_context",
-      "source": "n_3_mo52abmj",
-      "target": "n_3_mo53qsly",
+      "id": "e_extend_scribe_context",
+      "source": "extend_messages",
+      "target": "scribe",
       "sourceHandle": "data_result",
       "targetHandle": "data_context",
       "type": "data"
     },
     {
-      "id": "xy-edge__n_3_mo52abmjexec_out-n_3_mo53qslyexec_in",
-      "source": "n_3_mo52abmj",
-      "target": "n_3_mo53qsly",
+      "id": "xy-edge__startexec_out-n_1_monn6fhyexec_in",
+      "source": "start",
+      "target": "n_1_monn6fhy",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
     },
     {
-      "id": "xy-edge__startexec_out-n_1_mo53pssiexec_in",
-      "source": "start",
-      "target": "n_1_mo53pssi",
+      "id": "xy-edge__n_1_monn6fhyexec_out-curatorexec_in",
+      "source": "n_1_monn6fhy",
+      "target": "curator",
       "sourceHandle": "exec_out",
       "targetHandle": "exec_in",
       "type": "exec"
     },
     {
-      "id": "xy-edge__startdata_conversation-n_1_mo53pssidata_context",
-      "source": "start",
-      "target": "n_1_mo53pssi",
-      "sourceHandle": "data_conversation",
-      "targetHandle": "data_context",
+      "id": "xy-edge__n_1_monn6fhydata_format-curatordata_format",
+      "source": "n_1_monn6fhy",
+      "target": "curator",
+      "sourceHandle": "data_format",
+      "targetHandle": "data_format",
       "type": "data"
     },
     {
-      "id": "xy-edge__startdata_conversation-conversedata_context",
-      "source": "start",
-      "target": "converse",
-      "sourceHandle": "data_conversation",
-      "targetHandle": "data_context",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__startdata_conversation-n_5_mo53juaqdata_a",
-      "source": "start",
-      "target": "n_5_mo53juaq",
-      "sourceHandle": "data_conversation",
-      "targetHandle": "data_a",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__startdata_agent-conversedata_agent",
-      "source": "start",
-      "target": "converse",
-      "sourceHandle": "data_agent",
-      "targetHandle": "data_agent",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_1_monfent2data_payload-n_5_mo4x3s85data_payload",
-      "source": "n_1_monfent2",
-      "target": "n_5_mo4x3s85",
-      "sourceHandle": "data_payload",
-      "targetHandle": "data_payload",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_1_monfent2data_tool_calls-n_5_mo4x3s85data_tool_calls",
-      "source": "n_1_monfent2",
-      "target": "n_5_mo4x3s85",
-      "sourceHandle": "data_tool_calls",
-      "targetHandle": "data_tool_calls",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_1_monfent2data_response-n_5_mo4x3s85data_response_in",
-      "source": "n_1_monfent2",
-      "target": "n_5_mo4x3s85",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_response_in",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_1_monfent2exec_out-n_5_mo4x3s85exec_in",
-      "source": "n_1_monfent2",
-      "target": "n_5_mo4x3s85",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "xy-edge__n_1_mo52z8n2exec_out-n_1_monfent2exec_in",
-      "source": "n_1_mo52z8n2",
-      "target": "n_1_monfent2",
-      "sourceHandle": "exec_out",
-      "targetHandle": "exec_in",
-      "type": "exec"
-    },
-    {
-      "id": "xy-edge__startdata_conversation-n_1_monfent2data_context",
-      "source": "start",
-      "target": "n_1_monfent2",
-      "sourceHandle": "data_conversation",
-      "targetHandle": "data_context",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_1_mo52z8n2data_knowledge_context-n_1_monfent2data_knowledge_context",
-      "source": "n_1_mo52z8n2",
-      "target": "n_1_monfent2",
-      "sourceHandle": "data_knowledge_context",
-      "targetHandle": "data_knowledge_context",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__startdata_agent-n_1_monfent2data_agent",
-      "source": "start",
-      "target": "n_1_monfent2",
-      "sourceHandle": "data_agent",
-      "targetHandle": "data_agent",
-      "type": "data"
-    },
-    {
-      "id": "xy-edge__n_1_monfent2data_response-n_5_mo53juaqdata_b",
-      "source": "n_1_monfent2",
-      "target": "n_5_mo53juaq",
-      "sourceHandle": "data_response",
-      "targetHandle": "data_b",
+      "id": "xy-edge__n_1_monn6fhydata_format-read_curatordata_reply_type",
+      "source": "n_1_monn6fhy",
+      "target": "read_curator",
+      "sourceHandle": "data_format",
+      "targetHandle": "data_reply_type",
       "type": "data"
     }
   ]

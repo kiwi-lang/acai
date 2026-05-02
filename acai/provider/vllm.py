@@ -63,7 +63,43 @@ class VLLMAdapter(LLM):
                 break
         return msgs
 
+    @staticmethod
+    def _inject_response_format(messages: list[dict], response_format: dict) -> list[dict]:
+        """Inject response_format schema into the system prompt as text.
+
+        vLLM doesn't support response_format + tools simultaneously,
+        so we fall back to describing the schema in the system message.
+        """
+        schema = response_format
+        if schema.get("type") == "json_schema":
+            schema = schema["json_schema"].get("schema", schema)
+
+        import json as _json
+        schema_text = _json.dumps(schema, indent=2)
+        suffix = (
+            "\n\n## Required output format\n"
+            "You MUST respond with a JSON object conforming to this schema "
+            "(no markdown fences, no commentary):\n"
+            f"\n{schema_text}\n"
+        )
+
+        msgs = [dict(m) for m in messages]
+        for msg in msgs:
+            if msg.get("role") == "system":
+                msg["content"] = (msg.get("content") or "") + suffix
+                break
+        else:
+            msgs.insert(0, {"role": "system", "content": suffix.lstrip()})
+        return msgs
+
     def _payload(self, messages: list[dict], stream: bool = False, **kwargs) -> dict:
+        resp_fmt = kwargs.get("response_format")
+        has_tools = bool(kwargs.get("tools"))
+
+        if has_tools and resp_fmt:
+            messages = self._inject_response_format(messages, resp_fmt)
+            resp_fmt = None
+
         payload: dict = {
             "model": kwargs.get("model", self.model),
             "messages": messages,
@@ -74,10 +110,10 @@ class VLLMAdapter(LLM):
         enable_thinking = kwargs.get("enable_thinking")
         if enable_thinking is not None:
             payload["chat_template_kwargs"] = {"enable_thinking": enable_thinking}
-        if kwargs.get("response_format"):
-            payload["response_format"] = kwargs["response_format"]
-        if kwargs.get("tools"):
+        if has_tools:
             payload["tools"] = kwargs["tools"]
+        if resp_fmt:
+            payload["response_format"] = resp_fmt
         return payload
 
     def complete(self, messages, **kwargs):

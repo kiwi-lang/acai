@@ -1,8 +1,8 @@
 """ConverseScribeGraph — curator → converse → scribe pipeline.
 
 Flow:
-  1. Curator agent — searches knowledge base, returns JSON with documents.
-  2. Parse curator output — extract knowledge_context string.
+  1. Curator agent — searches knowledge base, returns list of paths.
+  2. Load knowledge — read the files and build knowledge_context.
   3. Converse agent — main reply with knowledge injected, plus tool loop.
   4. Scribe agent — reviews exchange, updates knowledge base silently.
 """
@@ -22,9 +22,28 @@ log = logging.getLogger(__name__)
 _WORKFLOW_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "workflows", "converse-scribe")
 _WORKFLOW_DIR = os.path.normpath(_WORKFLOW_DIR)
 
+_CURATOR_RESPONSE_FORMAT = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "curator_paths",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "paths": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                },
+            },
+            "required": ["paths"],
+            "additionalProperties": False,
+        },
+    },
+}
 
-def _parse_curator_output(text: str) -> str:
-    """Parse curator JSON → formatted knowledge_context string."""
+
+def _parse_curator_paths(text: str) -> list[str]:
+    """Extract a list of knowledge paths from curator JSON output."""
     text = text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[-1]
@@ -36,25 +55,34 @@ def _parse_curator_output(text: str) -> str:
         parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
         log.warning("Curator output is not valid JSON: %.200s", text)
-        return ""
+        return []
 
     if isinstance(parsed, dict):
-        docs = parsed.get("documents", [])
+        paths = parsed.get("paths", [])
     elif isinstance(parsed, list):
-        docs = parsed
+        paths = parsed
     else:
-        return ""
+        return []
 
-    docs = [d for d in docs if isinstance(d, dict) and d.get("content")]
-    if not docs:
-        return ""
+    return [str(p) for p in paths if isinstance(p, str) and p.strip()]
 
-    parts = []
-    for doc in docs:
-        title = doc.get("title", "Untitled")
-        body = doc.get("content", "")
-        parts.append(f"### {title}\n\n{body}")
-    return "\n\n---\n\n".join(parts)
+
+def _load_knowledge_context(workspace: str, paths: list[str]) -> str:
+    """Load knowledge documents by path and format as context string."""
+    from acai.orchestrator.knowledge import KnowledgeStore
+
+    knowledge_dir = os.path.join(workspace, "knowledge")
+    store = KnowledgeStore(knowledge_dir)
+
+    parts: list[str] = []
+    for doc_path in paths[:10]:
+        doc = store.get_by_path(doc_path)
+        if doc and doc.content:
+            parts.append(f"### {doc.subject}/{doc.subsubject}/{doc.title}\n\n{doc.content}")
+        else:
+            log.debug("load_knowledge: %r not found or empty", doc_path)
+
+    return "\n\n---\n\n".join(parts) if parts else ""
 
 
 class ConverseScribeGraph(TaskGraph):
@@ -133,15 +161,22 @@ class ConverseScribeGraph(TaskGraph):
     async def run(self, work: dict) -> AsyncIterator[dict]:  # noqa: C901
         try:
             # ==============================================================
-            # Phase 1: Curator — find relevant knowledge
+            # Phase 1: Curator — find relevant knowledge paths
             # ==============================================================
             curator_payload = self.prepare("curator", work)
+            curator_payload["response_format"] = _CURATOR_RESPONSE_FORMAT
 
             async for event in self._background_agent("curator", curator_payload):
                 yield event
 
-            knowledge_context = _parse_curator_output(self._last_acc.text)
-            log.info("curator done, knowledge_context=%d chars", len(knowledge_context))
+            paths = _parse_curator_paths(self._last_acc.text)
+            log.info("curator done, paths=%s", paths)
+
+            knowledge_context = _load_knowledge_context(
+                self.config.workspace, paths,
+            )
+            log.info("knowledge loaded, %d chars from %d paths",
+                     len(knowledge_context), len(paths))
 
             # ==============================================================
             # Phase 2: Converse — main agent reply with knowledge
