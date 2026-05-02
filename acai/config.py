@@ -5,7 +5,6 @@ from acai.orchestrator.config import (  # noqa: F401
     AuditConfig,
     CuratorConfig,
     GitConfig,
-    ProviderConfig,
     QueueConfig,
     ScribeConfig,
     WorkerConfig,
@@ -14,3 +13,5 @@ from acai.orchestrator.config import (  # noqa: F401
     option,
     show_config,
 )
+
+from acai.provider.config import ProviderConfig  # noqa: F401

@@ -48,9 +48,8 @@ class Serve(Command):
         provider = config.local_provider() or config.active_provider()
 
         if args.model:
-            from acai.orchestrator.config import _model_to_slug
-            provider.model = args.model
-            provider.slug = _model_to_slug(args.model)
+            from acai.provider import _model_to_slug, ModelConfig
+            provider.models = [ModelConfig(name=args.model, slug=_model_to_slug(args.model))]
         if args.backend:
             provider.backend = args.backend
         if args.port:
@@ -59,7 +58,7 @@ class Serve(Command):
         if args.launch_template:
             provider.launch_template = args.launch_template
 
-        from acai.worker.llm import LLMServer, LLMServerError
+        from acai.provider import LLMServer, LLMServerError
 
         server = LLMServer(provider, workspace=config.workspace)
 

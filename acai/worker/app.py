@@ -30,7 +30,7 @@ from starlette.responses import Response, StreamingResponse
 
 from acai.orchestrator.compat import SocketIO, emit
 
-from acai.worker.llm import (
+from acai.provider import (
     ContentToken, LLMServer, LLMServerError, ReasoningToken, StreamDone,
     ToolCallDelta, create_llm,
 )
@@ -126,8 +126,14 @@ def create_worker_router(
         )
 
         if isinstance(provider_override, dict) and provider_override.get("endpoint"):
-            from acai.orchestrator.config import ProviderConfig
+            from acai.provider import ProviderConfig
+            model_slug_override = provider_override.pop("model_slug", "")
             override_cfg = ProviderConfig.from_dict(provider_override)
+            if model_slug_override and override_cfg.get_model(model_slug_override):
+                target_model = override_cfg.get_model(model_slug_override)
+                override_cfg.models = [target_model] + [
+                    m for m in override_cfg.models if m.slug != model_slug_override
+                ]
             llm_cfg = override_cfg
             use_local = False
         else:
@@ -209,7 +215,7 @@ def create_worker_router(
 
     @router.post("/switch-model")
     async def switch_model(request: Request):
-        from acai.orchestrator.config import ProviderConfig
+        from acai.provider import ProviderConfig
 
         data = await _json_body(request)
         new_prov = ProviderConfig.from_dict(data)

@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect, Button } from '@chakra-ui/react';
-import { converse, uberConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, type SSEStream, type GraphDef } from '../services/api';
+import { converse, uberConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, fetchAllModels, type SSEStream, type GraphDef } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
-import type { AgentDef, AgentMessage, Provider } from '../services/types';
+import type { AgentDef, AgentMessage, ModelEntry, Provider } from '../services/types';
 import Markdown from './Markdown';
 
 /* ─── Reasoning display ──────────────────────────────────────────── */
@@ -231,6 +231,7 @@ const ChatPanel = ({
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
     const [providers, setProviders] = useState<Provider[]>([]);
+    const [modelEntries, setModelEntries] = useState<ModelEntry[]>([]);
     const [selectedProvider, setSelectedProvider] = useState(
         () => initialProvider || localStorage.getItem('acai.provider') || 'auto',
     );
@@ -253,8 +254,10 @@ const ChatPanel = ({
     );
     const thinkingMode: ThinkingMode = thinkingEnabled ? 'native' : 'off';
 
+    const selectedProviderName = selectedProvider === 'auto' ? '' : selectedProvider.split(':')[0];
+    const selectedModelSlug = selectedProvider.includes(':') ? selectedProvider.split(':')[1] : '';
     const currentProvider = providers.find(p =>
-        selectedProvider === 'auto' ? p.active : p.name === selectedProvider,
+        selectedProvider === 'auto' ? p.active : p.name === selectedProviderName,
     );
     const canThink = currentProvider?.supports_thinking ?? false;
 
@@ -314,6 +317,7 @@ const ChatPanel = ({
 
     useEffect(() => {
         listProviders().then(setProviders).catch(() => {});
+        fetchAllModels().then(setModelEntries).catch(() => {});
         listAgents().then(setAgents).catch(() => {});
         listGraphs().then(setGraphs).catch(() => {});
     }, []);
@@ -591,10 +595,14 @@ const ChatPanel = ({
 
         try {
             const think = initialThinkingMode ?? (initialThinking === false ? 'off' : 'native');
+            const initProv = initialProviderRef.current;
+            const initProvName = initProv === 'auto' ? '' : initProv.split(':')[0];
+            const initModelSlug = initProv.includes(':') ? initProv.split(':')[1] : '';
             const r = await converse(pending, convId, project || '', '',
-                initialProviderRef.current, initialAgentRef.current,
+                initProvName || initProv, initialAgentRef.current,
                 think === 'native' ? true : undefined, selectedGraph,
-                ephemeral || undefined, taskId, contextRef.current);
+                ephemeral || undefined, taskId, contextRef.current,
+                initModelSlug || undefined);
             if (signal?.cancelled) { r.stream.close(); return; }
             setMessages(prev => [...prev, { role: 'assistant', content: '', isStreaming: true }]);
             attachListeners(r.stream);
@@ -705,9 +713,11 @@ const ChatPanel = ({
 
         setIsLoading(true);
         try {
-            const resp = await converse(text, targetConvId, project || '', '', selectedProvider, selectedAgent,
+            const provName = selectedProviderName || selectedProvider;
+            const resp = await converse(text, targetConvId, project || '', '', provName, selectedAgent,
                 thinkingMode === 'native' ? true : undefined, selectedGraph,
-                ephemeral || undefined, taskId, contextRef.current);
+                ephemeral || undefined, taskId, contextRef.current,
+                selectedModelSlug || undefined);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -718,7 +728,7 @@ const ChatPanel = ({
             setMessages(prev => [...prev, { role: 'assistant', content: '', error: detail }]);
             setIsLoading(false);
         }
-    }, [project, selectedProvider, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer, ephemeral, taskId]);
+    }, [project, selectedProvider, selectedProviderName, selectedModelSlug, selectedAgent, thinkingMode, joinConversation, leaveConversation, attachListeners, clearRouteTimer, ephemeral, taskId]);
 
     const acceptRoute = useCallback(() => {
         if (!routePending) return;
@@ -733,9 +743,11 @@ const ChatPanel = ({
 
         setIsLoading(true);
         try {
-            const resp = await converse(text, '', project || '', '', selectedProvider, selectedAgent,
+            const provName = selectedProviderName || selectedProvider;
+            const resp = await converse(text, '', project || '', '', provName, selectedAgent,
                 thinkingMode === 'native' ? true : undefined, selectedGraph,
-                ephemeral || undefined, taskId, contextRef.current);
+                ephemeral || undefined, taskId, contextRef.current,
+                selectedModelSlug || undefined);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -778,9 +790,11 @@ const ChatPanel = ({
 
         setIsLoading(true);
         try {
-            const resp = await converse(lastUserMsg.content, cid, project || '', '', selectedProvider, selectedAgent,
+            const provName = selectedProviderName || selectedProvider;
+            const resp = await converse(lastUserMsg.content, cid, project || '', '', provName, selectedAgent,
                 thinkingMode === 'native' ? true : undefined, selectedGraph,
-                ephemeral || undefined, taskId, contextRef.current);
+                ephemeral || undefined, taskId, contextRef.current,
+                selectedModelSlug || undefined);
             setMessages(prev => [
                 ...prev,
                 { role: 'assistant', content: '', isStreaming: true },
@@ -816,9 +830,11 @@ const ChatPanel = ({
                 const resp = await uberConverse(text, prevConvId || '', selectedAgent);
                 attachListeners(resp.stream);
             } else {
-                const resp = await converse(text, prevConvId || '', project || '', '', selectedProvider, selectedAgent,
+                const provName = selectedProviderName || selectedProvider;
+                const resp = await converse(text, prevConvId || '', project || '', '', provName, selectedAgent,
                     thinkingMode === 'native' ? true : undefined, selectedGraph,
-                    ephemeral || undefined, taskId, contextRef.current);
+                    ephemeral || undefined, taskId, contextRef.current,
+                    selectedModelSlug || undefined);
                 convIdRef.current = resp.conversation;
                 if (!ephemeral) {
                     joinConversation(resp.conversation);
@@ -1190,11 +1206,19 @@ const ChatPanel = ({
                             borderColor="var(--border-input)"
                             fontSize="xs" px={2} h={compact ? '24px' : '26px'} borderRadius="md">
                             <option value="auto" style={{ background: 'var(--option-bg)' }}>Auto</option>
-                            {providers.map(p => (
-                                <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
-                                    {p.name}
-                                </option>
-                            ))}
+                            {modelEntries.length > 0
+                                ? modelEntries.map(m => (
+                                    <option key={`${m.provider}:${m.slug}`} value={`${m.provider}:${m.slug}`}
+                                        style={{ background: 'var(--option-bg)' }}>
+                                        {m.provider} - {m.name || m.slug}
+                                    </option>
+                                ))
+                                : providers.map(p => (
+                                    <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
+                                        {p.name}
+                                    </option>
+                                ))
+                            }
                         </NativeSelect.Field>
                     </NativeSelect.Root>
                     {canThink && (

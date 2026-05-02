@@ -32,11 +32,12 @@ from acai.orchestrator.load_balancer import LoadBalancer
 from acai.orchestrator.stream import StreamTracker
 from acai.orchestrator.chat import ChatStore
 from acai.orchestrator.knowledge import KnowledgeStore
-from acai.orchestrator.config import (
-    AcaiConfig, ProviderConfig, load_config, load_providers, save_providers,
+from acai.orchestrator.config import AcaiConfig, load_config
+from acai.provider import (
+    ProviderConfig, ProviderScheduler, load_providers, save_providers,
+    _provider_to_dict, create_provider_router,
 )
 from acai.orchestrator.projects import Project, ProjectStore, scaffold, clone
-from acai.scheduler import ProviderScheduler
 from acai.tasks import ConverseGraph, ConverseScribeGraph, ThinkGraph, UberGraph, DynamicGraph, get_graph, list_graphs
 from acai.events import EventBus
 from acai.queue.work import TaskStatus, WorkQueue
@@ -465,12 +466,16 @@ def create_router(config: AcaiConfig | None = None,
         chat.append(conversation, {"role": "user", "content": message})
 
         from dataclasses import asdict as _asdict
+        model_slug = data.get("model", "")
 
         provider_override = None
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
             if prov and prov.name != worker_provider.name:
-                provider_override = _asdict(prov)
+                override_d = _provider_to_dict(prov)
+                if model_slug:
+                    override_d["model_slug"] = model_slug
+                provider_override = override_d
 
         enable_thinking = data.get("enable_thinking")
 
@@ -488,7 +493,7 @@ def create_router(config: AcaiConfig | None = None,
             "stream_id": conversation,
             "provider_override": provider_override,
             "provider": provider_name,
-            "model": resolved_provider.model if resolved_provider else "",
+            "model": model_slug or resolved_provider.model_slug,
             "enable_thinking": enable_thinking,
         }
         if workflow_spec:
@@ -553,7 +558,7 @@ def create_router(config: AcaiConfig | None = None,
         messages = chat.read(conv_id)
         total_chars = sum(len(m.get("content", "")) for m in messages)
         estimated_tokens = total_chars // 4
-        active = scheduler.select("worker") or config.active_provider()
+        active = scheduler.default() or config.active_provider()
         max_context = active.context_window
         return {
             "estimated_tokens": estimated_tokens,
@@ -1196,7 +1201,6 @@ def create_router(config: AcaiConfig | None = None,
     @router.post("/think/converse")
     async def think_converse(request: Request):
         import traceback as _tb
-        from dataclasses import asdict as _asdict
 
         data = await _json_body(request)
         message = data.get("message", "")
@@ -1205,6 +1209,7 @@ def create_router(config: AcaiConfig | None = None,
         task_id = data.get("task_id", "")
         provider_name = data.get("provider", "")
         agent_name = data.get("agent", "")
+        model_slug = data.get("model", "")
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
@@ -1238,7 +1243,10 @@ def create_router(config: AcaiConfig | None = None,
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
             if prov and prov.name != worker_provider.name:
-                provider_override = _asdict(prov)
+                override_d = _provider_to_dict(prov)
+                if model_slug:
+                    override_d["model_slug"] = model_slug
+                provider_override = override_d
 
         work = {
             "message": message,
@@ -1304,7 +1312,6 @@ def create_router(config: AcaiConfig | None = None,
     @router.post("/scribe/converse")
     async def scribe_converse(request: Request):
         import traceback as _tb
-        from dataclasses import asdict as _asdict
 
         data = await _json_body(request)
         message = data.get("message", "")
@@ -1313,6 +1320,7 @@ def create_router(config: AcaiConfig | None = None,
         task_id = data.get("task_id", "")
         provider_name = data.get("provider", "")
         agent_name = data.get("agent", "")
+        model_slug = data.get("model", "")
         if not message:
             return JSONResponse({"error": "message is required"}, status_code=400)
 
@@ -1346,7 +1354,10 @@ def create_router(config: AcaiConfig | None = None,
         if provider_name and provider_name != "auto":
             prov = config.get_provider(provider_name)
             if prov and prov.name != worker_provider.name:
-                provider_override = _asdict(prov)
+                override_d = _provider_to_dict(prov)
+                if model_slug:
+                    override_d["model_slug"] = model_slug
+                provider_override = override_d
 
         work = {
             "message": message,
@@ -1931,89 +1942,9 @@ def create_router(config: AcaiConfig | None = None,
         ]
 
     # ==================================================================
-    # Providers CRUD
+    # Providers CRUD (delegated to acai.provider.routes)
     # ==================================================================
-
-    def _provider_json(p: ProviderConfig, active_name: str = "") -> dict:
-        from dataclasses import asdict as _asdict
-        d = _asdict(p)
-        d["active"] = (p.name == active_name)
-        d["supports_thinking"] = p.supports_thinking
-        return d
-
-    @router.get("/providers")
-    def list_providers_route():
-        active = config.active_provider()
-        return [_provider_json(p, active.name) for p in config.providers]
-
-    @router.post("/providers", status_code=201)
-    async def create_provider(request: Request):
-        data = await _json_body(request)
-        name = data.get("name", "").strip()
-        if not name:
-            return JSONResponse({"error": "name is required"}, status_code=400)
-        if config.get_provider(name) is not None:
-            return JSONResponse({"error": f"provider '{name}' already exists"}, status_code=409)
-
-        prov = ProviderConfig.from_dict({**data, "name": name})
-        config.providers.append(prov)
-        save_providers(config.workspace, config.providers)
-
-        active = config.active_provider()
-        return _provider_json(prov, active.name)
-
-    @router.get("/providers/{name}")
-    def get_provider_route(name: str):
-        prov = config.get_provider(name)
-        if prov is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        active = config.active_provider()
-        return _provider_json(prov, active.name)
-
-    @router.put("/providers/{name}")
-    async def update_provider(name: str, request: Request):
-        prov = config.get_provider(name)
-        if prov is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-
-        data = await _json_body(request)
-        for key in ("backend", "model", "slug", "endpoint", "api_key",
-                     "server_port", "launch_template", "max_tokens",
-                     "temperature", "context_window", "priority", "roles"):
-            if key in data:
-                val = data[key]
-                if key == "roles" and isinstance(val, str):
-                    val = [r.strip() for r in val.split(",") if r.strip()]
-                if key in ("server_port", "max_tokens", "context_window", "priority"):
-                    val = int(val)
-                if key == "temperature":
-                    val = float(val)
-                setattr(prov, key, val)
-
-        if prov.model and not prov.slug:
-            from acai.orchestrator.config import _model_to_slug
-            prov.slug = _model_to_slug(prov.model)
-
-        save_providers(config.workspace, config.providers)
-        active = config.active_provider()
-        return _provider_json(prov, active.name)
-
-    @router.delete("/providers/{name}")
-    def delete_provider(name: str):
-        prov = config.get_provider(name)
-        if prov is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        config.providers = [p for p in config.providers if p.name != name]
-        save_providers(config.workspace, config.providers)
-        return {"deleted": True}
-
-    @router.post("/providers/{name}/activate")
-    def activate_provider(name: str):
-        prov = config.get_provider(name)
-        if prov is None:
-            return JSONResponse({"error": "not found"}, status_code=404)
-        config.set_active(name)
-        return _provider_json(prov, name)
+    router.include_router(create_provider_router(config))
 
     # ==================================================================
     # System config

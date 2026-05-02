@@ -520,7 +520,7 @@ export const AgentFormBody = ({
                                     <option value="auto" style={{ background: 'var(--option-bg)' }}>Auto (highest priority)</option>
                                     {providers.map(p => (
                                         <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
-                                            {p.name} ({p.model || p.backend})
+                                            {p.name} ({p.models?.[0]?.name || p.models?.[0]?.slug || p.backend})
                                         </option>
                                     ))}
                                 </NativeSelect.Field>

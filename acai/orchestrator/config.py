@@ -343,200 +343,13 @@ class CIConfig:
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
-def _model_to_slug(model: str) -> str:
-    """Derive a short slug from a model path like ``Org/Model-Name``."""
-    return model.rsplit("/", 1)[-1].lower().replace("_", "-")
-
-
-# ---------------------------------------------------------------------------
-# Tool-call parser heuristics (used by the default vLLM launch template)
-# ---------------------------------------------------------------------------
-
-_MODEL_PARSER_MAP: list[tuple[str, str]] = [
-    ("qwen3-coder", "qwen3_xml"),
-    ("qwen3_coder", "qwen3_xml"),
-    ("qwen2.5", "hermes"),
-    ("qwq", "hermes"),
-    ("llama-4", "llama4_pythonic"),
-    ("llama-3", "llama3_json"),
-    ("mistral", "mistral"),
-    ("deepseek-v3", "deepseek_v3"),
-    ("deepseek-r1", "deepseek_v3"),
-    ("granite-4", "granite4"),
-    ("granite-3", "granite"),
-    ("hermes", "hermes"),
-]
-
-_MODEL_REASONING_PARSER_MAP: list[tuple[str, str]] = [
-    ("qwen3", "qwen3"),
-    ("qwq", "deepseek_r1"),
-    ("deepseek-r1", "deepseek_r1"),
-    ("deepseek-v3", "deepseek_v3"),
-    ("granite-3.2", "granite"),
-    ("granite-4", "granite"),
-    ("glm-4", "glm45"),
-]
-
-
-def _guess_tool_parser(model: str) -> str:
-    lower = model.lower().replace("/", "-").replace("_", "-")
-    for pattern, parser in _MODEL_PARSER_MAP:
-        if pattern in lower:
-            return parser
-    return "hermes"
-
-
-def _guess_reasoning_parser(model: str) -> str | None:
-    """Return the reasoning parser name for *model*, or ``None`` if not a reasoning model."""
-    lower = model.lower().replace("/", "-").replace("_", "-")
-    for pattern, parser in _MODEL_REASONING_PARSER_MAP:
-        if pattern in lower:
-            return parser
-    return None
-
-
-def _default_vllm_template(model: str) -> str:
-    """Build the default vLLM launch template for a given model."""
-    parser = _guess_tool_parser(model)
-    parts = [
-        "vllm serve {model}",
-        "--served-model-name {slug}",
-        "--port {server_port}",
-        "--enable-auto-tool-choice",
-        f"--tool-call-parser {parser}",
-        "--enable-prefix-caching",
-        "--kv-cache-dtype fp8",
-        "--max-num-seqs 1",
-    ]
-    supports_reasoning = False
-
-    if supports_reasoning:
-        reasoning_parser = _guess_reasoning_parser(model)
-        if reasoning_parser:
-            parts.append(f"--reasoning-parser {reasoning_parser}")
-            parts.append("--default-chat-template-kwargs '{{\"enable_thinking\": false}}'")
-            parts.append(
-                "--reasoning-config '{{\"reasoning_start_str\": \"<think>\", \"reasoning_end_str\": \"I have to give the solution based on the reasoning directly now.</think>\"}}'"
-            )
-
-    if "qwen3-coder" in model.lower().replace("/", "-"):
-        parts += [
-            "--max-model-len 170000",
-            "--gpu-memory-utilization 0.90",
-            "--attention-backend flashinfer",
-        ]
-    return " ".join(parts)
-
-
-_DEFAULT_TEMPLATES: dict[str, str] = {
-    "llamacpp": "llama-server -m {model} --host 0.0.0.0 --port {server_port}",
-    "local": "llama-server -m {model} --host 0.0.0.0 --port {server_port}",
-}
-
-
-@dataclass
-class ProviderConfig:
-    """An LLM provider -- local server or remote API.
-
-    ``launch_template`` is a Python format string resolved via
-    ``template.format(**asdict(self))``.  When empty, a backend-specific
-    default is used (vLLM, llama.cpp).  When no default exists for the
-    backend the provider is treated as *unmanaged* (remote endpoint).
-    """
-
-    name: str = ""
-    backend: str = "openai"
-    model: str = ""
-    slug: str = ""
-    endpoint: str = ""
-    api_key: str = ""
-    server_port: int = 9123
-    launch_template: str = ""
-    max_tokens: int = 4096
-    temperature: float = 0.7
-    context_window: int = 128000
-    priority: int = 0
-    roles: list[str] = field(default_factory=list)
-
-    def __post_init__(self):
-        if self.model and not self.slug:
-            self.slug = _model_to_slug(self.model)
-        if not self.endpoint and self.server_port:
-            self.endpoint = f"http://127.0.0.1:{self.server_port}"
-
-    # -- command building --------------------------------------------------
-
-    def build_command(self) -> str:
-        """Return the resolved server launch command, or ``""`` if unmanaged."""
-        if self.launch_template:
-            return self.launch_template.format(**asdict(self))
-        if self.backend == "vllm":
-            return _default_vllm_template(self.model).format(**asdict(self))
-        tpl = _DEFAULT_TEMPLATES.get(self.backend, "")
-        if tpl:
-            return tpl.format(**asdict(self))
-        return ""
-
-    @property
-    def managed(self) -> bool:
-        """True when this provider requires a local server process."""
-        return bool(self.build_command())
-
-    @property
-    def supports_thinking(self) -> bool:
-        """True when the model behind this provider supports native thinking."""
-        return _guess_reasoning_parser(self.model) is not None
-
-    # -- serialization -----------------------------------------------------
-
-    @classmethod
-    def from_dict(cls, d: dict) -> ProviderConfig:
-        roles = d.get("roles")
-        if isinstance(roles, str):
-            roles = [r.strip() for r in roles.split(",") if r.strip()]
-        return cls(
-            name=d.get("name", ""),
-            backend=d.get("backend", "openai"),
-            model=d.get("model", ""),
-            slug=d.get("slug", ""),
-            endpoint=d.get("endpoint", ""),
-            api_key=d.get("api_key", ""),
-            server_port=int(d.get("server_port", 9123)),
-            launch_template=d.get("launch_template", d.get("server_command", "")),
-            max_tokens=int(d.get("max_tokens", 4096)),
-            temperature=float(d.get("temperature", 0.7)),
-            context_window=int(d.get("context_window", 128000)),
-            priority=int(d.get("priority", 0)),
-            roles=roles if isinstance(roles, list) else [],
-        )
-
-
-def _default_provider() -> ProviderConfig:
-    """Build a single default provider from ``llm.*`` config keys (backward compat)."""
-    return ProviderConfig(
-        name=option("llm.slug", str, "") or _model_to_slug(option("llm.model", str, "Qwen/Qwen3-Coder-Next-FP8") or ""),
-        backend=option("llm.backend", str, "vllm") or "vllm",
-        model=option("llm.model", str, "Qwen/Qwen3-Coder-Next-FP8") or "",
-        slug=option("llm.slug", str, "") or "",
-        endpoint=option("llm.endpoint", str, "") or "",
-        api_key=option("llm.api_key", str, "") or "",
-        server_port=option("llm.server_port", int, 9123) or 9123,
-        launch_template=option("llm.server_command", str, "") or "",
-        max_tokens=option("llm.max_tokens", int, 4096) or 4096,
-        temperature=option("llm.temperature", float, 0.7) or 0.7,
-        context_window=option("llm.context_window", int, 128000) or 128000,
-        priority=100,
-        roles=["worker"],
-    )
-
-
-def _load_providers_from_global() -> list[ProviderConfig]:
-    """Read the ``providers`` list from the global config dict."""
-    config = config_global.get() or {}
-    raw = config.get("providers")
-    if not isinstance(raw, list):
-        return []
-    return [ProviderConfig.from_dict(d) for d in raw if isinstance(d, dict)]
+from acai.provider.config import (  # noqa: F401
+    ModelConfig,
+    ProviderConfig,
+    _model_to_slug,
+    _default_provider,
+    _load_providers_from_global,
+)
 
 
 @dataclass
@@ -608,27 +421,19 @@ class AcaiConfig:
         return None
 
 
+from acai.provider.config import (  # noqa: F401
+    load_providers,
+    save_providers,
+    _provider_to_dict,
+)
+
+
 # ---------------------------------------------------------------------------
-# Provider persistence (workspace/acai.yaml)
+# Config persistence helpers (workspace/acai.yaml)
 # ---------------------------------------------------------------------------
 
 def _yaml_path(workspace: str) -> str:
     return os.path.join(os.path.abspath(workspace), "acai.yaml")
-
-
-def load_providers(workspace: str) -> list[ProviderConfig]:
-    """Read the ``providers`` list from ``workspace/acai.yaml``."""
-    path = _yaml_path(workspace)
-    if not os.path.isfile(path):
-        return []
-    import yaml
-
-    with open(path, encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    raw = data.get("providers")
-    if not isinstance(raw, list):
-        return []
-    return [ProviderConfig.from_dict(d) for d in raw if isinstance(d, dict)]
 
 
 _PERSISTABLE_SECTIONS = ("sandbox", "worker", "git", "queue", "audit", "ci")
@@ -671,24 +476,3 @@ def save_config(workspace: str, config: AcaiConfig) -> None:
     os.replace(tmp, path)
 
 
-def save_providers(workspace: str, providers: list[ProviderConfig]) -> None:
-    """Write back only the ``providers`` section of ``workspace/acai.yaml``.
-
-    Preserves any other top-level keys the user may have set.
-    """
-    import yaml
-
-    path = _yaml_path(workspace)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-
-    existing: dict = {}
-    if os.path.isfile(path):
-        with open(path, encoding="utf-8") as f:
-            existing = yaml.safe_load(f) or {}
-
-    existing["providers"] = [asdict(p) for p in providers]
-
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False)
-    os.replace(tmp, path)

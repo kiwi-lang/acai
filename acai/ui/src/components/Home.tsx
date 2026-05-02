@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect, Image, Button } from '@chakra-ui/react';
-import { uberConverse, listProviders, listAgents, type SSEStream } from '../services/api';
-import type { AgentDef, Provider } from '../services/types';
+import { uberConverse, listProviders, listAgents, fetchAllModels, type SSEStream } from '../services/api';
+import type { AgentDef, ModelEntry, Provider } from '../services/types';
 
 const SendIcon = ({ size = 20 }: { size?: number }) => (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
@@ -26,6 +26,7 @@ const Home = () => {
     const [isRouting, setIsRouting] = useState(false);
     const [routePending, setRoutePending] = useState<RoutePending | null>(null);
     const [providers, setProviders] = useState<Provider[]>([]);
+    const [modelEntries, setModelEntries] = useState<ModelEntry[]>([]);
     const [agents, setAgents] = useState<AgentDef[]>([]);
     const [selectedProvider, setSelectedProvider] = useState(
         () => localStorage.getItem('acai.provider') || 'auto',
@@ -41,8 +42,9 @@ const Home = () => {
     );
     const thinkingMode: ThinkingMode = thinkingEnabled ? 'native' : 'off';
 
+    const selectedProviderName = selectedProvider === 'auto' ? '' : selectedProvider.split(':')[0];
     const currentProvider = providers.find(p =>
-        selectedProvider === 'auto' ? p.active : p.name === selectedProvider,
+        selectedProvider === 'auto' ? p.active : p.name === selectedProviderName,
     );
     const canThink = currentProvider?.supports_thinking ?? false;
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -52,6 +54,7 @@ const Home = () => {
     useEffect(() => {
         document.title = 'Açaí';
         listProviders().then(setProviders).catch(() => {});
+        fetchAllModels().then(setModelEntries).catch(() => {});
         listAgents().then(setAgents).catch(() => {});
         return () => { streamRef.current?.close(); };
     }, []);
@@ -208,11 +211,19 @@ const Home = () => {
                                 borderColor="var(--border-input)"
                                 fontSize="xs" px={2} h="26px" borderRadius="md">
                                 <option value="auto" style={{ background: 'var(--option-bg)' }}>Auto</option>
-                                {providers.map(p => (
-                                    <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
-                                        {p.name}
-                                    </option>
-                                ))}
+                                {modelEntries.length > 0
+                                    ? modelEntries.map(m => (
+                                        <option key={`${m.provider}:${m.slug}`} value={`${m.provider}:${m.slug}`}
+                                            style={{ background: 'var(--option-bg)' }}>
+                                            {m.provider} - {m.name || m.slug}
+                                        </option>
+                                    ))
+                                    : providers.map(p => (
+                                        <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
+                                            {p.name}
+                                        </option>
+                                    ))
+                                }
                             </NativeSelect.Field>
                         </NativeSelect.Root>
                         {canThink && (

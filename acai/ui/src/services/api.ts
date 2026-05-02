@@ -1,4 +1,4 @@
-import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, Project, Provider, SystemConfig, Task, Worktree } from './types';
+import type { AgentDef, AgentEvent, AgentMessage, AgentStatus, ConversationMeta, ModelConfig, ModelEntry, Project, Provider, SystemConfig, Task, Worktree } from './types';
 
 const API_BASE = '/api/agent';
 
@@ -144,6 +144,7 @@ export async function converse(
     ephemeral?: boolean,
     task_id?: string,
     context?: Record<string, unknown>,
+    model?: string,
 ): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
     if (task_id) body.task_id = task_id;
@@ -151,6 +152,7 @@ export async function converse(
     if (graph) body.graph = graph;
     if (ephemeral) body.ephemeral = true;
     if (context) body.context = context;
+    if (model) body.model = model;
 
     const response = await fetch(`${API_BASE}/converse`, {
         method: 'POST',
@@ -176,9 +178,11 @@ export async function thinkConverse(
     provider = '',
     agent = '',
     task_id?: string,
+    model?: string,
 ): Promise<{ conversation: string; stream: SSEStream }> {
     const body: Record<string, unknown> = { message, conversation, project, parent_task, provider, agent };
     if (task_id) body.task_id = task_id;
+    if (model) body.model = model;
 
     const response = await fetch(`${API_BASE}/think/converse`, {
         method: 'POST',
@@ -343,6 +347,14 @@ export async function deleteProvider(name: string): Promise<void> {
 
 export async function activateProvider(name: string): Promise<Provider> {
     return request<Provider>(`/providers/${name}/activate`, { method: 'POST' });
+}
+
+export async function fetchProviderModels(name: string): Promise<ModelConfig[]> {
+    return request<ModelConfig[]>(`/providers/${encodeURIComponent(name)}/fetch-models`, { method: 'POST' });
+}
+
+export async function fetchAllModels(): Promise<ModelEntry[]> {
+    return request<ModelEntry[]>('/models');
 }
 
 // Agents

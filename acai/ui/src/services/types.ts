@@ -101,19 +101,33 @@ export interface AgentStatus {
     providers_count: number;
 }
 
+export interface ModelConfig {
+    name: string;
+    slug: string;
+    max_tokens: number;
+    context_window: number;
+    cost_weight: number;
+    smart_weight: number;
+}
+
+export interface ModelEntry extends ModelConfig {
+    provider: string;
+    is_default: boolean;
+    total_models?: number;
+}
+
 export interface Provider {
     name: string;
     backend: string;
-    model: string;
-    slug: string;
+    models: ModelConfig[];
     endpoint: string;
     api_key: string;
     server_port: number;
     server_command: string;
     max_tokens: number;
     temperature: number;
+    context_window: number;
     priority: number;
-    roles: string[];
     active?: boolean;
     supports_thinking?: boolean;
 }
