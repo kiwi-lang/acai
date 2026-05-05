@@ -572,6 +572,172 @@ class AccumulateNode(NodeType):
 
 
 @register
+class TTSAccumulateNode(NodeType):
+    """Accumulate tokens, forward text events, and emit audio at sentence boundaries.
+
+    Behaves like ``AccumulateNode`` but also synthesizes text into base64
+    PCM audio chunks (via ``TTSService``) emitted as ``audio`` SSE events.
+    """
+
+    type = "tts_accumulate"
+    label = "TTS Accumulate"
+    accent = Colors.green
+    description = "Stream to response + TTS audio"
+    category = "Agent"
+    pins = [
+        Pin.exec_in(),
+        Pin.exec_out(),
+        Pin.data("data_stream", "stream", Colors.green, "left",
+                 pin_type="stream", optional=False),
+        Pin.data("data_event_mode", "event_mode", Colors.purple, "left",
+                 pin_type="string"),
+        Pin.data("data_response", "response", Colors.amber, "right",
+                 pin_type="message"),
+        Pin.data("data_text", "text", Colors.green, "right",
+                 pin_type="string"),
+        Pin.data("data_reasoning", "reasoning", Colors.purple, "right",
+                 pin_type="string"),
+        Pin.data("data_tool_calls", "tool_calls", Colors.amber, "right",
+                 pin_type="json"),
+    ]
+
+    _DEFAULT_SENTENCE_END = r"[.!?]\s"
+    _DEFAULT_CLAUSE_BREAK = r"[,;:\n\u2014]\s"
+    _DEFAULT_MIN_CLAUSE_LEN = 40
+
+    async def execute(self, ctx: NodeContext):
+        from acai.tasks.graph import Acc
+
+        stream = ctx.inputs.get("stream")
+        if stream is None:
+            yield {"type": "output", "data": {
+                "response": {"role": "assistant", "content": ""},
+                "text": "", "reasoning": "", "tool_calls": [],
+            }}
+            return
+
+        tts_svc = ctx.data.get("_tts_service")
+        if tts_svc is None:
+            try:
+                cfg = ctx.graph.config
+                from acai.orchestrator.tts import TTSService
+                tts_svc = TTSService(cfg.tts, workspace=cfg.workspace)
+                log.info("TTSAccumulateNode: created TTSService (enabled=%s, voice=%s)",
+                         tts_svc.enabled, cfg.tts.voice)
+            except Exception:
+                log.warning("TTSAccumulateNode: TTS service unavailable, falling back to plain accumulate",
+                            exc_info=True)
+                tts_svc = None
+
+        if tts_svc and not tts_svc.enabled:
+            log.info("TTSAccumulateNode: TTS is disabled in config, audio will not be generated")
+
+        tts_cfg = getattr(ctx.graph.config, "tts", None)
+        sentence_end_re = re.compile(
+            getattr(tts_cfg, "sentence_end", None) or self._DEFAULT_SENTENCE_END)
+        clause_break_re = re.compile(
+            getattr(tts_cfg, "clause_break", None) or self._DEFAULT_CLAUSE_BREAK)
+        min_clause_len = getattr(tts_cfg, "min_clause_len", None) or self._DEFAULT_MIN_CLAUSE_LEN
+        log.info("TTSAccumulateNode: sentence_end=%s  clause_break=%s  min_clause=%d",
+                 sentence_end_re.pattern, clause_break_re.pattern, min_clause_len)
+
+        event_mode = (ctx.inputs.get("event_mode")
+                      or ctx.data.get("event_mode", ""))
+
+        import asyncio
+
+        acc = Acc(stream)
+        sentence_buf = ""
+        audio_chunks_sent = 0
+        loop = asyncio.get_event_loop()
+
+        # Queue of futures so synthesis runs in a thread while
+        # we keep consuming tokens without blocking.
+        pending_audio: list[asyncio.Future] = []
+
+        def _synth(text: str) -> dict | None:
+            try:
+                pcm = tts_svc.synthesize_pcm(text)  # type: ignore[union-attr]
+                return {
+                    "type": "event",
+                    "data": {
+                        "event_type": "audio",
+                        "data": tts_svc.audio_event(pcm),  # type: ignore[union-attr]
+                    },
+                }
+            except Exception:
+                log.warning("TTS synthesis failed for chunk", exc_info=True)
+                return None
+
+        async def _flush_audio():
+            """Yield any completed audio futures in order."""
+            nonlocal audio_chunks_sent
+            while pending_audio and pending_audio[0].done():
+                fut = pending_audio.pop(0)
+                result = fut.result()
+                if result:
+                    audio_chunks_sent += 1
+                    yield result
+
+        async for event in acc:
+            if event_mode == "silent":
+                continue
+            if event_mode and event.get("event_type") in ("token", "reasoning"):
+                event = {**event, "event_type": event_mode}
+            yield {"type": "event", "data": event}
+
+            if tts_svc and tts_svc.enabled and event.get("event_type") == "token":
+                sentence_buf += event.get("data", {}).get("token", "")
+
+                if sentence_end_re.search(sentence_buf):
+                    # Full sentence — split and speak all complete ones
+                    sentences = tts_svc.split_sentences(sentence_buf)
+                    to_speak = sentences[:-1] if len(sentences) > 1 else sentences
+                    sentence_buf = sentences[-1] if len(sentences) > 1 else ""
+                    for s in to_speak:
+                        pending_audio.append(loop.run_in_executor(None, _synth, s))
+                elif (len(sentence_buf) >= min_clause_len
+                      and clause_break_re.search(sentence_buf)):
+                    # Long clause — split at the last clause break
+                    m = None
+                    for m in clause_break_re.finditer(sentence_buf):
+                        pass
+                    if m:
+                        split_at = m.end()
+                        to_speak = sentence_buf[:split_at].strip()
+                        sentence_buf = sentence_buf[split_at:]
+                        if to_speak:
+                            pending_audio.append(loop.run_in_executor(None, _synth, to_speak))
+
+            # Drain completed audio without blocking token consumption
+            async for audio_evt in _flush_audio():
+                yield audio_evt
+
+        # Flush remaining text
+        if tts_svc and tts_svc.enabled and sentence_buf.strip():
+            pending_audio.append(loop.run_in_executor(None, _synth, sentence_buf.strip()))
+
+        # Await all remaining audio futures in order
+        for fut in pending_audio:
+            try:
+                result = await fut
+                if result:
+                    audio_chunks_sent += 1
+                    yield result
+            except Exception:
+                log.warning("TTS synthesis failed for queued chunk", exc_info=True)
+
+        log.info("TTSAccumulateNode: done, sent %d audio chunks", audio_chunks_sent)
+
+        yield {"type": "output", "data": {
+            "response": {"role": "assistant", "content": acc.text},
+            "text": acc.text,
+            "reasoning": acc.reasoning,
+            "tool_calls": acc.tool_calls,
+        }}
+
+
+@register
 class SimpleAgentNode(NodeType):
     """Agent call + accumulate in a single node.
 

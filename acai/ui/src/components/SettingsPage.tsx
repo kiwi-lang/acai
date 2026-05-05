@@ -8,9 +8,13 @@ import {
     getVersion, triggerUpdate,
     getGitBackupStatus, generateGitKey, setupGitBackup,
     triggerGitSync, testGitConnection,
+    ensureTTSVoices,
+    getTTSVoices,
+    downloadTTSVoice,
 } from '../services/api';
-import type { VersionInfo, GitBackupStatus } from '../services/api';
-import type { SystemConfig, SandboxConfig, CIConfig } from '../services/types';
+import type { VersionInfo, GitBackupStatus, TTSVoiceEntry, TTSDownloadProgress } from '../services/api';
+import { toaster } from './ui/toaster';
+import type { SystemConfig, SandboxConfig, CIConfig, TTSConfig } from '../services/types';
 
 const SANDBOX_TYPES = ['none', 'docker', 'podman', 'firecracker', 'bubblewrap', 'nsjail'];
 
@@ -105,6 +109,8 @@ const SettingsPage = () => {
     const [loading, setLoading] = useState(true);
     const [sectionStatus, setSectionStatus] = useState<Record<string, string>>({});
     const [savingSection, setSavingSection] = useState('');
+    const [ttsVoices, setTtsVoices] = useState<TTSVoiceEntry[]>([]);
+    const [ttsDownloading, setTtsDownloading] = useState(false);
 
     const refresh = useCallback(() => {
         setLoading(true);
@@ -112,6 +118,7 @@ const SettingsPage = () => {
             .then(c => { setConfig(c); setError(''); })
             .catch(err => setError(err instanceof Error ? err.message : 'Failed to load config'))
             .finally(() => setLoading(false));
+        ensureTTSVoices().then(setTtsVoices).catch(() => {});
     }, []);
 
     useEffect(() => {
@@ -164,6 +171,11 @@ const SettingsPage = () => {
     const updateCI = (key: keyof CIConfig, value: any) => {
         if (!config) return;
         setConfig({ ...config, ci: { ...config.ci, [key]: value } });
+    };
+
+    const updateTTS = (key: keyof TTSConfig, value: any) => {
+        if (!config) return;
+        setConfig({ ...config, tts: { ...config.tts, [key]: value } });
     };
 
     if (loading) {
@@ -541,6 +553,240 @@ const SettingsPage = () => {
                         )}
                     </SectionCard>
                 </Box>
+
+                {/* TTS */}
+                {config.tts && (
+                <Box css={{ breakInside: 'avoid' }} mb={4}>
+                    <SectionCard
+                        title="Text-to-Speech"
+                        busy={savingSection === 'tts'}
+                        onSave={() => saveSection('tts')}
+                        status={sectionStatus.tts || ''}
+                    >
+                        <HStack gap={2}>
+                            <ToggleButton label="Enabled" value={config.tts.enabled} onChange={v => updateTTS('enabled', v)} />
+                            <ToggleButton label="CUDA" value={config.tts.use_cuda} onChange={v => updateTTS('use_cuda', v)} />
+                        </HStack>
+
+                        <Box>
+                            <Field label="Voice">
+                                <HStack gap={2}>
+                                    <Box flex={1}>
+                                        <NativeSelect.Root size="sm">
+                                            <NativeSelect.Field
+                                                value={config.tts.voice}
+                                                onChange={e => updateTTS('voice', e.target.value)}
+                                                {...inputProps}
+                                            >
+                                                {ttsVoices.length > 0 ? ttsVoices.map(v => (
+                                                    <option key={v.id} value={v.id} style={{ background: 'var(--option-bg)' }}>
+                                                        {v.label}{v.downloaded ? ' ✓' : ''}
+                                                    </option>
+                                                )) : (
+                                                    <option value={config.tts.voice} style={{ background: 'var(--option-bg)' }}>
+                                                        {config.tts.voice}
+                                                    </option>
+                                                )}
+                                            </NativeSelect.Field>
+                                        </NativeSelect.Root>
+                                    </Box>
+                                    {(() => {
+                                        const sel = ttsVoices.find(v => v.id === config.tts.voice);
+                                        const isDownloaded = sel?.downloaded ?? false;
+
+                                        const startDownload = async () => {
+                                            if (isDownloaded || ttsDownloading) return;
+                                            setTtsDownloading(true);
+
+                                            const voiceId = config.tts.voice;
+                                            const toastId = toaster.create({
+                                                type: 'loading',
+                                                title: `Downloading ${voiceId}`,
+                                                description: 'Starting…',
+                                                duration: null as unknown as number,
+                                            });
+
+                                            try {
+                                                const stream = await downloadTTSVoice(voiceId);
+
+                                                stream.addEventListener('progress', (e: MessageEvent) => {
+                                                    const p: TTSDownloadProgress = JSON.parse(e.data);
+                                                    const mb = (p.received / 1_048_576).toFixed(1);
+                                                    const totalMb = p.total ? (p.total / 1_048_576).toFixed(1) : '?';
+                                                    toaster.update(toastId as string, {
+                                                        type: 'loading',
+                                                        title: `Downloading ${voiceId}`,
+                                                        description: `${mb} / ${totalMb} MB  (${p.percent}%)`,
+                                                    });
+                                                });
+
+                                                stream.addEventListener('done', () => {
+                                                    toaster.update(toastId as string, {
+                                                        type: 'success',
+                                                        title: `Downloaded ${voiceId}`,
+                                                        description: 'Voice model ready',
+                                                        duration: 4000,
+                                                    });
+                                                    setTtsDownloading(false);
+                                                    getTTSVoices().then(setTtsVoices).catch(() => {});
+                                                });
+
+                                                stream.addEventListener('error', (e: MessageEvent) => {
+                                                    const err = JSON.parse(e.data);
+                                                    toaster.update(toastId as string, {
+                                                        type: 'error',
+                                                        title: 'Download failed',
+                                                        description: err.message || 'Unknown error',
+                                                        duration: 8000,
+                                                    });
+                                                    setTtsDownloading(false);
+                                                });
+
+                                                stream.onerror = () => {
+                                                    setTtsDownloading(false);
+                                                };
+                                            } catch (err) {
+                                                toaster.update(toastId as string, {
+                                                    type: 'error',
+                                                    title: 'Download failed',
+                                                    description: err instanceof Error ? err.message : 'Connection error',
+                                                    duration: 8000,
+                                                });
+                                                setTtsDownloading(false);
+                                            }
+                                        };
+
+                                        return (
+                                            <Box
+                                                as="button"
+                                                px={3} py={1.5}
+                                                borderRadius="md"
+                                                fontSize="xs"
+                                                fontWeight="medium"
+                                                bg={isDownloaded ? 'var(--bg-elevated)' : 'var(--accent)'}
+                                                color={isDownloaded ? 'var(--text-muted)' : 'var(--text-inverse)'}
+                                                cursor={isDownloaded || ttsDownloading ? 'default' : 'pointer'}
+                                                border="1px solid"
+                                                borderColor={isDownloaded ? 'var(--border-primary)' : 'transparent'}
+                                                onClick={startDownload}
+                                                _hover={isDownloaded || ttsDownloading ? {} : { bg: 'var(--accent-hover)' }}
+                                                whiteSpace="nowrap"
+                                                flexShrink={0}
+                                            >
+                                                {ttsDownloading ? <Spinner size="xs" /> : isDownloaded ? '✓ Ready' : 'Download'}
+                                            </Box>
+                                        );
+                                    })()}
+                                </HStack>
+                            </Field>
+                        </Box>
+
+                        <Box>
+                            <Field label="Model Path (optional override)">
+                                <Input
+                                    value={config.tts.model_path}
+                                    onChange={e => updateTTS('model_path', e.target.value)}
+                                    placeholder="Leave empty to use selected voice"
+                                    {...inputProps}
+                                />
+                            </Field>
+                        </Box>
+
+                        <HStack gap={3} flexWrap="wrap">
+                            <Box flex="1 1 100px" minW="100px">
+                                <Field label="Speed" helperText="1 = normal, 2 = 2x faster">
+                                    <Input
+                                        type="number"
+                                        step={0.1}
+                                        min={0.1}
+                                        max={5}
+                                        defaultValue={config.tts.length_scale}
+                                        onBlur={e => {
+                                            const v = parseFloat(e.target.value);
+                                            if (!isNaN(v) && v > 0) updateTTS('length_scale', v);
+                                        }}
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                            <Box flex="1 1 100px" minW="100px">
+                                <Field label="Sample Rate">
+                                    <Input
+                                        type="number"
+                                        defaultValue={config.tts.sample_rate}
+                                        onBlur={e => {
+                                            const v = parseInt(e.target.value);
+                                            if (!isNaN(v) && v > 0) updateTTS('sample_rate', v);
+                                        }}
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                            <Box flex="1 1 100px" minW="100px">
+                                <Field label="Volume" helperText={`${Math.round((config.tts.volume ?? 1) * 100)}%`}>
+                                    <input type="range" min={0} max={1} step={0.05}
+                                        defaultValue={config.tts.volume ?? 1}
+                                        onChange={e => updateTTS('volume', parseFloat(e.target.value))}
+                                        style={{ width: '100%', accentColor: 'var(--accent)', cursor: 'pointer' }}
+                                    />
+                                </Field>
+                            </Box>
+                            <Box flex="1 1 100px" minW="100px">
+                                <Field label="Silence (s)">
+                                    <Input
+                                        type="number"
+                                        step={0.05}
+                                        min={0}
+                                        defaultValue={config.tts.sentence_silence}
+                                        onBlur={e => {
+                                            const v = parseFloat(e.target.value);
+                                            if (!isNaN(v) && v >= 0) updateTTS('sentence_silence', v);
+                                        }}
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                        </HStack>
+
+                        <HStack gap={3} flexWrap="wrap">
+                            <Box flex="1 1 160px" minW="160px">
+                                <Field label="Sentence End (regex)">
+                                    <Input
+                                        value={config.tts.sentence_end ?? '[.!?]\\s'}
+                                        onChange={e => updateTTS('sentence_end', e.target.value)}
+                                        placeholder={'[.!?]\\s'}
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                            <Box flex="1 1 160px" minW="160px">
+                                <Field label="Clause Break (regex)">
+                                    <Input
+                                        value={config.tts.clause_break ?? '[,;:\\n\\u2014]\\s'}
+                                        onChange={e => updateTTS('clause_break', e.target.value)}
+                                        placeholder={'[,;:\\n\\u2014]\\s'}
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                            <Box flex="1 1 80px" minW="80px">
+                                <Field label="Min Clause">
+                                    <Input
+                                        type="number"
+                                        min={1}
+                                        defaultValue={config.tts.min_clause_len ?? 40}
+                                        onBlur={e => {
+                                            const v = parseInt(e.target.value);
+                                            if (!isNaN(v) && v > 0) updateTTS('min_clause_len', v);
+                                        }}
+                                        {...inputProps}
+                                    />
+                                </Field>
+                            </Box>
+                        </HStack>
+                    </SectionCard>
+                </Box>
+                )}
 
                 {/* Git Backup */}
                 <Box css={{ breakInside: 'avoid' }} mb={4}>

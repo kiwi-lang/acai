@@ -372,4 +372,5 @@ class DynamicGraph(TaskGraph):
             "event_type": "workflow_end",
             "data": {"workflow_id": spec.id, "output": final_text[:500]},
         }
-        yield self._done_event()
+        git = await self._finalize_git(work)
+        yield self._done_event(git)

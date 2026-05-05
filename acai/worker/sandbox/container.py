@@ -178,8 +178,8 @@ class ContainerSandbox(Sandbox):
 
         Checks the local image store for ``self.image``.  If missing,
         looks for a ``Containerfile`` in the acai repo root and
-        builds it.  This makes first-run seamless — no manual
-        ``podman build`` / ``docker build`` step required.
+        builds it with streaming output so long builds remain visible
+        in the logs.
         """
         proc = subprocess.run(
             [self.runtime, "image", "inspect", self.image],
@@ -196,8 +196,6 @@ class ContainerSandbox(Sandbox):
             )
 
         containerfile = os.path.join(repo_root, "Containerfile")
-        # Strip the localhost/ prefix for the tag if present — podman
-        # build adds it automatically for local images.
         tag = self.image
         log.info(
             "sandbox image %r not found — building from %s  (this may take a minute)",
@@ -209,11 +207,24 @@ class ContainerSandbox(Sandbox):
             "-f", containerfile,
             repo_root,
         ]
-        proc = subprocess.run(build_cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
+        build_proc = subprocess.Popen(
+            build_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        output_lines: list[str] = []
+        assert build_proc.stdout is not None
+        for line in build_proc.stdout:
+            stripped = line.rstrip()
+            output_lines.append(stripped)
+            if stripped:
+                log.info("sandbox build: %s", stripped)
+        rc = build_proc.wait()
+        if rc != 0:
             raise RuntimeError(
                 f"Failed to build sandbox image {tag!r} "
-                f"(rc={proc.returncode}):\n{proc.stderr.strip()}"
+                f"(rc={rc}):\n" + "\n".join(output_lines[-20:])
             )
         log.info("sandbox image %r built successfully", tag)
 

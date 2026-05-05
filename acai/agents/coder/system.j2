@@ -18,6 +18,16 @@ fully — don't gold-plate, but don't leave it half-done.
 5. Implement changes that follow existing patterns
 6. Verify your work by running tests and linters
 
+**Reading code — search first, read second:**
+- NEVER read an entire large file blind. read file tool caps output at 500 lines
+  by default to protect context.
+- Before reading a file, call file outline to see its top-level structure
+  (functions, classes, variables) with exact line ranges.
+- Use grep to locate specific symbols, strings, or patterns across the
+  codebase. Then read only the relevant line range with
+  read file(path, line_start=..., line_limit=...)``.
+- Typical workflow: ``grep`` → ``file_outline`` → ``read_file`` (targeted range).
+
 **Guidelines:**
 - Search broadly when you don't know where something lives. Narrow down iteratively.
 - Be thorough: check multiple locations, consider different naming conventions,
@@ -42,7 +52,22 @@ Project: **{{ task.project_obj.name }}** ({{ task.project_obj.language }})
 
 ## Working Directory
 Your worktree is at: ``{{ task.worktree }}``
-Use this as ``cwd`` for all code and git tool calls.
+Use this as ``cwd`` for all tool calls.
+Do NOT run ``git commit`` or ``git push`` — the system handles that
+automatically when your task completes.
+{% endif %}
+
+{% if task.prior_work %}
+
+## Prior Work
+The following is the full conversation from the most recent prior run
+of this task. Use it to understand what was already done, what worked,
+and what failed. Do NOT repeat completed work — pick up where the
+previous run left off.
+
+{% for msg in task.prior_work %}
+**{{ msg.role }}**: {{ msg.content }}
+{% endfor %}
 {% endif %}
 
 ## Current Task

@@ -8,8 +8,10 @@ Usage::
 
 from __future__ import annotations
 
+import os
 import signal
 import sys
+import time
 from dataclasses import dataclass
 
 from argklass import argument
@@ -27,6 +29,60 @@ class ServeArguments(CommonArguments):
         default=None,
         help="provide an explicit launch command template instead of auto-generating one",
     )
+
+
+def _resolve_model_source(model_name: str) -> str:
+    """Figure out where the model weights live on disk (or will be downloaded)."""
+    if os.path.isdir(model_name) or os.path.isfile(model_name):
+        return os.path.abspath(model_name)
+
+    try:
+        from huggingface_hub import scan_cache_dir
+        cache_info = scan_cache_dir()
+        for repo in cache_info.repos:
+            if repo.repo_id == model_name:
+                revisions = sorted(repo.revisions, key=lambda r: r.last_modified, reverse=True)
+                if revisions:
+                    return str(revisions[0].snapshot_path)
+    except Exception:
+        pass
+
+    hf_home = os.environ.get("HF_HOME", os.path.expanduser("~/.cache/huggingface"))
+    hub_dir = os.path.join(hf_home, "hub")
+    slug = "models--" + model_name.replace("/", "--")
+    candidate = os.path.join(hub_dir, slug)
+    if os.path.isdir(candidate):
+        snapshots = os.path.join(candidate, "snapshots")
+        if os.path.isdir(snapshots):
+            revs = sorted(os.listdir(snapshots))
+            if revs:
+                return os.path.join(snapshots, revs[-1])
+        return candidate
+
+    return f"{hub_dir}/{slug}  (will download)"
+
+
+def _tail_log(path: str, file_pos: int = 0) -> int:
+    """Print new lines from *path* since *file_pos*, return new position."""
+    try:
+        with open(path, errors="replace") as f:
+            f.seek(file_pos)
+            new = f.read()
+            pos = f.tell()
+    except OSError:
+        return file_pos
+    if new:
+        for line in new.splitlines():
+            stripped = line.strip()
+            if not stripped:
+                continue
+            # Remove the vLLM "(APIServer pid=N) " prefix for readability
+            if stripped.startswith("("):
+                paren_end = stripped.find(") ")
+                if paren_end != -1:
+                    stripped = stripped[paren_end + 2:]
+            print(f"  │ {stripped}", flush=True)
+    return pos
 
 
 class Serve(Command):
@@ -63,29 +119,70 @@ class Serve(Command):
         server = LLMServer(provider, workspace=config.workspace)
 
         def _shutdown(sig, frame):
-            print(f"\nReceived signal {sig}, shutting down LLM server...")
+            print(f"\n  Received signal {sig}, shutting down LLM server...")
             server.stop()
             sys.exit(0)
 
         signal.signal(signal.SIGINT, _shutdown)
         signal.signal(signal.SIGTERM, _shutdown)
 
-        print(f"Launching LLM server  model={provider.model}  backend={provider.backend}")
-        print(f"Endpoint will be at {provider.endpoint}")
+        model_source = _resolve_model_source(provider.model)
+
+        print(f"\n  ╭─ LLM Server ─────────────────────────────────")
+        print(f"  │ Model:    {provider.model}")
+        print(f"  │ Source:   {model_source}")
+        print(f"  │ Backend:  {provider.backend}")
+        print(f"  │ Endpoint: {provider.endpoint}")
+        print(f"  ├─ Starting ...")
 
         try:
-            server.start()
+            server.start_process()
         except LLMServerError as exc:
-            print(f"\nFailed to start LLM server:\n{exc}", file=sys.stderr)
+            print(f"  │ FAILED: {exc}", file=sys.stderr)
+            print(f"  ╰─────────────────────────────────────────────\n")
             return 1
 
-        print(f"LLM server healthy  pid={server.pid}")
-        print(f"Logs: {server.latest_log_path()}")
-        print("Press Ctrl+C to stop.\n")
+        log_path = server.latest_log_path()
+        print(f"  │ PID:      {server.pid}")
+        print(f"  │ Log:      {log_path}")
+        print(f"  ├─ Loading model (tailing log) ...", flush=True)
+
+        file_pos = 0
+        try:
+            while not server.is_healthy():
+                if server.process and server.process.poll() is not None:
+                    if log_path:
+                        file_pos = _tail_log(log_path, file_pos)
+                    rc = server.process.returncode
+                    print(f"  │ Process exited with code {rc}")
+                    print(f"  ╰─────────────────────────────────────────────\n")
+                    return rc or 1
+                if log_path:
+                    file_pos = _tail_log(log_path, file_pos)
+                time.sleep(0.5)
+
+            if log_path:
+                _tail_log(log_path, file_pos)
+
+        except LLMServerError as exc:
+            if log_path:
+                _tail_log(log_path, file_pos)
+            print(f"  │ FAILED: {exc}", file=sys.stderr)
+            print(f"  ╰─────────────────────────────────────────────\n")
+            return 1
+
+        print(f"  ├─ Server healthy ✓")
+        print(f"  │ Press Ctrl+C to stop.")
+        print(f"  ╰─────────────────────────────────────────────\n", flush=True)
 
         try:
             if server.process is not None:
-                server.process.wait()
+                while server.process.poll() is None:
+                    if log_path:
+                        file_pos = _tail_log(log_path, file_pos)
+                    time.sleep(1)
+                if log_path:
+                    _tail_log(log_path, file_pos)
             else:
                 signal.pause()
         except KeyboardInterrupt:

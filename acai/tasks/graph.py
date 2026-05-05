@@ -135,6 +135,7 @@ class _TaskProxy:
     spec_path: str = ""
     conversation: str = ""
     enable_thinking: bool | None = None
+    prior_work: list = field(default_factory=list)
 
 
 # ------------------------------------------------------------------
@@ -282,11 +283,14 @@ class TaskGraph:
                 id=work.get("task_id", ""),
                 kind=work.get("kind", "converse"),
                 title=work.get("title", ""),
+                description=work.get("description", ""),
+                worktree=work.get("worktree", ""),
                 project=work.get("project", ""),
                 agent=agent_name,
                 spec_path=work.get("spec_path", ""),
                 conversation=self.conversation,
                 enable_thinking=work.get("enable_thinking"),
+                prior_work=work.get("prior_work", []),
             )
             resolved = resolve_task(task_proxy, self.config, self.chat, self.projects)
 
@@ -447,6 +451,31 @@ class TaskGraph:
     # dispatch_tool — single tool call via the worker
     # ------------------------------------------------------------------
 
+    def _resolve_tool_name(self, name: str) -> str:
+        """Try to fix common LLM tool-name mistakes against the allowed set."""
+        if self._allowed_tools is None or name in self._allowed_tools:
+            return name
+        # Bare function name without namespace (e.g. "read_file" -> "filesystem_read_file")
+        for allowed in self._allowed_tools:
+            if allowed.endswith(f"_{name}"):
+                log.info("resolved tool alias %s -> %s", name, allowed)
+                return allowed
+        # Wrong namespace prefix (e.g. "filesystem_search_grep" -> "search_grep")
+        bare = name.rsplit("_", 1)[-1] if "_" in name else name
+        for allowed in self._allowed_tools:
+            if allowed.endswith(f"_{bare}") or allowed == bare:
+                log.info("resolved tool alias %s -> %s", name, allowed)
+                return allowed
+        # Singular/plural mismatch (e.g. "task_create" -> "tasks_create")
+        for allowed in self._allowed_tools:
+            a_parts = allowed.split("_", 1)
+            n_parts = name.split("_", 1)
+            if len(a_parts) == 2 and len(n_parts) == 2 and a_parts[1] == n_parts[1]:
+                if a_parts[0].rstrip("s") == n_parts[0].rstrip("s"):
+                    log.info("resolved tool alias %s -> %s", name, allowed)
+                    return allowed
+        return name
+
     async def dispatch_tool(self, tool_name: str, args: dict) -> str:
         """Dispatch a tool call to the worker and return the result text.
 
@@ -458,6 +487,8 @@ class TaskGraph:
         The ``project_path`` is included in context so the sandbox
         proxy can scope each sandbox to a single project.
         """
+        tool_name = self._resolve_tool_name(tool_name)
+
         if self._allowed_tools is not None and tool_name not in self._allowed_tools:
             log.warning("blocked disallowed tool call: %s", tool_name)
             return (
@@ -492,9 +523,17 @@ class TaskGraph:
         return result.text or ""
 
     def _resolve_project_path(self) -> str:
-        """Resolve the project's filesystem path from the work dict."""
+        """Resolve the working directory path from the work dict.
+
+        Prefers ``worktree`` (task clone / worktree) so the sandbox
+        mounts the right directory.  Falls back to the project's
+        canonical path.
+        """
         if self._last_work is None:
             return ""
+        wt = self._last_work.get("worktree", "")
+        if wt:
+            return wt
         project_name = self._last_work.get("project", "")
         if not project_name:
             return ""
@@ -576,9 +615,77 @@ class TaskGraph:
             self.tracker.push(self.stream_id, ev)
         return ev
 
-    def _done_event(self) -> dict:
+    async def _finalize_git(self, work: dict) -> dict | None:
+        """Auto-commit and push when the task has a worktree.
+
+        Returns a summary dict on success, ``None`` when skipped.
+        Errors are logged but never propagated — git failures must
+        not break the agent response stream.
+        """
+        import subprocess
+
+        wt = work.get("worktree", "") if work else ""
+        if not wt:
+            return None
+
+        try:
+            status = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=wt, capture_output=True, text=True, timeout=15,
+            )
+            if status.returncode != 0 or not status.stdout.strip():
+                return None
+
+            subprocess.run(
+                ["git", "add", "-A"],
+                cwd=wt, capture_output=True, text=True, check=True, timeout=15,
+            )
+
+            title = work.get("title", "agent work")
+            task_id = work.get("task_id", "")
+            msg = f"{title}\n\nTask: {task_id}" if task_id else title
+
+            commit = subprocess.run(
+                ["git", "commit", "-m", msg],
+                cwd=wt, capture_output=True, text=True, timeout=30,
+            )
+            if commit.returncode != 0:
+                if "nothing to commit" in (commit.stdout + commit.stderr):
+                    return None
+                log.warning("git commit failed: %s", commit.stderr.strip())
+                return None
+
+            branch = subprocess.run(
+                ["git", "branch", "--show-current"],
+                cwd=wt, capture_output=True, text=True, timeout=5,
+            )
+            branch_name = branch.stdout.strip()
+
+            push = subprocess.run(
+                ["git", "push", "-u", "origin", branch_name],
+                cwd=wt, capture_output=True, text=True, timeout=60,
+            )
+            if push.returncode != 0:
+                log.warning("git push failed: %s", push.stderr.strip())
+
+            result = {
+                "committed": True,
+                "branch": branch_name,
+                "pushed": push.returncode == 0,
+            }
+            self.audit.record("git.finalize", phase="finalize", **result)
+            return result
+
+        except Exception:
+            log.exception("_finalize_git failed for worktree %s", wt)
+            return None
+
+    def _done_event(self, git_result: dict | None = None) -> dict:
         """Build a done event and push it to the tracker."""
-        ev: dict = {"event_type": "done", "data": {}}
+        data: dict = {}
+        if git_result:
+            data["git"] = git_result
+        ev: dict = {"event_type": "done", "data": data}
         if self.tracker and self.stream_id:
             self.tracker.push(self.stream_id, ev)
         return ev

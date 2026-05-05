@@ -14,6 +14,14 @@ export interface AgentMessage {
     isStreaming?: boolean;
     taskId?: string;
     error?: string;
+    /** Number of TTS audio chunks received for this message. */
+    audioChunks?: number;
+    /** Current audio player state for this message. */
+    audioState?: 'idle' | 'playing' | 'paused';
+    /** Audio playback progress 0–1. */
+    audioProgress?: number;
+    /** Total audio duration in seconds. */
+    audioDuration?: number;
 }
 
 export interface StreamChunk {
@@ -269,6 +277,22 @@ export interface CIConfig {
     auto_fix: boolean;
 }
 
+export interface TTSConfig {
+    enabled: boolean;
+    model_path: string;
+    voice: string;
+    length_scale: number;
+    noise_scale: number;
+    noise_w: number;
+    use_cuda: boolean;
+    sample_rate: number;
+    sentence_silence: number;
+    sentence_end: string;
+    clause_break: string;
+    min_clause_len: number;
+    volume: number;
+}
+
 export interface SystemConfig {
     workspace: string;
     sandbox: SandboxConfig;
@@ -277,6 +301,7 @@ export interface SystemConfig {
     queue: QueueConfig;
     audit: AuditConfig;
     ci: CIConfig;
+    tts: TTSConfig;
 }
 
 export interface AgentDef {

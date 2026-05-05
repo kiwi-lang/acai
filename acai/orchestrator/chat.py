@@ -232,6 +232,60 @@ class ChatStore:
         results.sort(key=lambda d: d.get("created_at", 0), reverse=True)
         return results
 
+    # ------------------------------------------------------------------
+    # Task conversations — stored as conv_1.json, conv_2.json, …
+    # in workspace/projects/<project>/<task_id>/ (never in the UI index)
+    # ------------------------------------------------------------------
+
+    def _task_dir(self, project: str, task_id: str) -> str:
+        return os.path.join(self._projects_root, project, task_id)
+
+    def task_history(self, project: str, task_id: str) -> list[str]:
+        """Return paths to task conversation files, oldest first.
+
+        Files are named ``conv_1.json``, ``conv_2.json``, … and sorted
+        by their numeric suffix.
+        """
+        td = self._task_dir(project, task_id)
+        if not os.path.isdir(td):
+            return []
+        import re
+        conv_re = re.compile(r"^conv_(\d+)\.json$")
+        hits: list[tuple[int, str]] = []
+        for name in os.listdir(td):
+            m = conv_re.match(name)
+            if m:
+                hits.append((int(m.group(1)), os.path.join(td, name)))
+        hits.sort()
+        return [path for _, path in hits]
+
+    def read_task_conversation(self, path: str) -> list[dict]:
+        """Read a task conversation file (a JSON message array)."""
+        if not os.path.isfile(path):
+            return []
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            return []
+        return data if isinstance(data, list) else []
+
+    def save_task_conversation(
+        self, project: str, task_id: str, messages: list[dict],
+    ) -> str:
+        """Append a new conversation file and return its path.
+
+        Determines the next ``conv_N.json`` number automatically.
+        """
+        td = self._task_dir(project, task_id)
+        os.makedirs(td, exist_ok=True)
+        existing = self.task_history(project, task_id)
+        n = len(existing) + 1
+        path = os.path.join(td, f"conv_{n}.json")
+        with self._lock:
+            self._write_json(path, messages)
+        return path
+
     @staticmethod
     def _try_load_meta(mp: str, conv_id: str, out: list[dict]) -> None:
         if not os.path.isfile(mp):

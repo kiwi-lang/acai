@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect, Button } from '@chakra-ui/react';
-import { converse, uberConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, fetchAllModels, type SSEStream, type GraphDef } from '../services/api';
+import { converse, uberConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, fetchAllModels, getConfig, type SSEStream, type GraphDef } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentDef, AgentMessage, ModelEntry, Provider } from '../services/types';
+import { AudioPlayer, type AudioChunk, type PlayerState, type AudioProgress } from '../services/audioPlayer';
 import Markdown from './Markdown';
 
 /* ─── Reasoning display ──────────────────────────────────────────── */
@@ -277,6 +278,8 @@ const ChatPanel = ({
     const shouldRestoreFocusRef = useRef(false);
     const activeTaskRef = useRef<string | null>(null);
     const eventSourceRef = useRef<EventSource | SSEStream | null>(null);
+    const audioPlayerRef = useRef<AudioPlayer | null>(null);
+    const [audioVolume, setAudioVolume] = useState(1.0);
     const convIdRef = useRef<string | null>(conversationId);
     const justCreatedRef = useRef(false);
 
@@ -284,6 +287,13 @@ const ChatPanel = ({
     const initialAgentRef = useRef(resolvedInitialAgent);
     initialProviderRef.current = initialProvider;
     initialAgentRef.current = resolvedInitialAgent;
+
+    useEffect(() => {
+        getConfig().then(c => {
+            const v = c.tts?.volume ?? 1.0;
+            setAudioVolume(v);
+        }).catch(() => {});
+    }, []);
 
     useEffect(() => {
         if (initialGraph) setSelectedGraph(initialGraph);
@@ -328,6 +338,13 @@ const ChatPanel = ({
             eventSourceRef.current = null;
             es.onerror = null;
             es.close();
+        }
+    }, []);
+
+    const stopAudio = useCallback(() => {
+        if (audioPlayerRef.current) {
+            audioPlayerRef.current.stop();
+            audioPlayerRef.current = null;
         }
     }, []);
 
@@ -494,6 +511,52 @@ const ChatPanel = ({
             });
         });
 
+        es.addEventListener('audio', (e: MessageEvent) => {
+            const chunk: AudioChunk = JSON.parse(e.data);
+            if (!audioPlayerRef.current) {
+                audioPlayerRef.current = new AudioPlayer(
+                    (state: PlayerState) => {
+                        setMessages(prev => {
+                            const copy = [...prev];
+                            const last = copy[copy.length - 1];
+                            if (last && last.role === 'assistant') {
+                                copy[copy.length - 1] = { ...last, audioState: state };
+                            }
+                            return copy;
+                        });
+                    },
+                    (progress: AudioProgress) => {
+                        setMessages(prev => {
+                            const copy = [...prev];
+                            const last = copy[copy.length - 1];
+                            if (last && last.role === 'assistant') {
+                                copy[copy.length - 1] = {
+                                    ...last,
+                                    audioProgress: progress.fraction,
+                                    audioDuration: progress.total,
+                                };
+                            }
+                            return copy;
+                        });
+                    },
+                );
+                audioPlayerRef.current.setVolume(audioVolume);
+            }
+            audioPlayerRef.current.enqueue(chunk);
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.role === 'assistant') {
+                    copy[copy.length - 1] = {
+                        ...last,
+                        audioChunks: (last.audioChunks || 0) + 1,
+                        audioState: 'playing',
+                    };
+                }
+                return copy;
+            });
+        });
+
         es.addEventListener('done', () => {
             setMessages(prev =>
                 prev.map(m => m.isStreaming ? { ...m, isStreaming: false } : m),
@@ -553,12 +616,13 @@ const ChatPanel = ({
     }, [attachListeners]);
 
     useEffect(() => {
-        return () => closeEventSource();
-    }, [closeEventSource]);
+        return () => { closeEventSource(); stopAudio(); };
+    }, [closeEventSource, stopAudio]);
 
     const autoSendRef = useRef(autoSendMessage);
 
     const loadConversation = useCallback(async (convId: string, pending?: string, signal?: { cancelled: boolean }) => {
+        stopAudio();
         let history: AgentMessage[] = [];
         try {
             const resp = await getHistory(convId);
@@ -1098,6 +1162,109 @@ const ChatPanel = ({
                                                 <Box as="span" display="inline-block" w="2px" h="1em"
                                                     bg="var(--cursor-blink)" ml={0.5}
                                                     animation="blink 1s step-start infinite" />
+                                            )}
+                                            {msg.audioChunks && msg.audioChunks > 0 && (
+                                                <HStack gap={1} mt={1} px={2} py={1}
+                                                    bg="var(--bg-elevated)" borderRadius="md"
+                                                    border="1px solid" borderColor="var(--border-secondary)"
+                                                    display="inline-flex" w="auto" align="center">
+                                                    {/* Play / Pause */}
+                                                    <Box as="button" p={0.5} cursor="pointer"
+                                                        color={msg.audioState === 'playing' ? 'var(--accent)' : 'var(--text-muted)'}
+                                                        _hover={{ color: 'var(--accent)' }}
+                                                        onClick={() => {
+                                                            const p = audioPlayerRef.current;
+                                                            if (!p) return;
+                                                            if (p.currentState === 'playing') p.pause();
+                                                            else if (p.currentState === 'paused') p.resume();
+                                                        }}
+                                                        title={msg.audioState === 'playing' ? 'Pause' : 'Play'}>
+                                                        {msg.audioState === 'playing' ? (
+                                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                                                <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>
+                                                            </svg>
+                                                        ) : (
+                                                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                                                <path d="M8 5v14l11-7z"/>
+                                                            </svg>
+                                                        )}
+                                                    </Box>
+                                                    {/* Stop */}
+                                                    <Box as="button" p={0.5} cursor="pointer"
+                                                        color="var(--text-muted)"
+                                                        _hover={{ color: 'var(--error)' }}
+                                                        onClick={() => {
+                                                            if (audioPlayerRef.current) {
+                                                                audioPlayerRef.current.stop();
+                                                                audioPlayerRef.current = null;
+                                                            }
+                                                        }}
+                                                        title="Stop">
+                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                                            <path d="M6 6h12v12H6z"/>
+                                                        </svg>
+                                                    </Box>
+                                                    {/* Equalizer bars */}
+                                                    {msg.audioState === 'playing' && (
+                                                        <HStack gap="2px" align="center" h="14px" mx={0.5}>
+                                                            {[0, 1, 2, 3].map(j => (
+                                                                <Box key={j} w="2px" bg="var(--accent)" borderRadius="full"
+                                                                    animation={`audioBar 0.8s ease-in-out ${j * 0.15}s infinite alternate`}
+                                                                    h="4px" />
+                                                            ))}
+                                                        </HStack>
+                                                    )}
+                                                    {/* Volume */}
+                                                    <Box as="button" p={0.5} cursor="pointer"
+                                                        color="var(--text-muted)"
+                                                        _hover={{ color: 'var(--accent)' }}
+                                                        onClick={() => {
+                                                            const p = audioPlayerRef.current;
+                                                            if (!p) return;
+                                                            const next = p.volume > 0 ? 0 : 1;
+                                                            p.setVolume(next);
+                                                            setAudioVolume(next);
+                                                        }}
+                                                        title={audioVolume > 0 ? 'Mute' : 'Unmute'}>
+                                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                                            {audioVolume > 0 ? (
+                                                                <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/>
+                                                            ) : (
+                                                                <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+                                                            )}
+                                                        </svg>
+                                                    </Box>
+                                                    <input type="range" min={0} max={1} step={0.05}
+                                                        value={audioVolume}
+                                                        onChange={e => {
+                                                            const v = parseFloat(e.target.value);
+                                                            setAudioVolume(v);
+                                                            audioPlayerRef.current?.setVolume(v);
+                                                        }}
+                                                        style={{ width: 50, height: 14, accentColor: 'var(--accent)', cursor: 'pointer' }}
+                                                        title={`Volume: ${Math.round(audioVolume * 100)}%`}
+                                                    />
+                                                    {/* Progress bar */}
+                                                    <Box w="60px" h="4px" bg="var(--border-primary)" borderRadius="full"
+                                                        overflow="hidden" flexShrink={0}>
+                                                        <Box h="100%" bg="var(--accent)" borderRadius="full"
+                                                            transition="width 0.2s linear"
+                                                            style={{ width: `${Math.round((msg.audioProgress ?? 0) * 100)}%` }} />
+                                                    </Box>
+                                                    <Text fontSize="2xs" color="var(--text-muted)" whiteSpace="nowrap" minW="32px">
+                                                        {(() => {
+                                                            const dur = msg.audioDuration ?? 0;
+                                                            const elapsed = dur * (msg.audioProgress ?? 0);
+                                                            const fmt = (s: number) => {
+                                                                const m = Math.floor(s / 60);
+                                                                const sec = Math.floor(s % 60);
+                                                                return `${m}:${sec.toString().padStart(2, '0')}`;
+                                                            };
+                                                            if (dur <= 0) return msg.audioState === 'paused' ? 'Paused' : '';
+                                                            return `${fmt(elapsed)}/${fmt(dur)}`;
+                                                        })()}
+                                                    </Text>
+                                                </HStack>
                                             )}
                                             {msg.error && (
                                                 <Box mt={1} p={2} bg="red.900/20" borderLeft="3px solid" borderColor="red.400" borderRadius="md">

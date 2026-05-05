@@ -8,31 +8,57 @@ import os
 from acai.orchestrator.tools import tool
 
 
+_DEFAULT_MAX_LINES = 500
+
+
 @tool(permissions=("read",), resources=("files:read",))
 def read_file(
     path: str,
     encoding: str = "utf-8",
     line_start: int = 0,
     line_limit: int = 0,
+    offset: int = 0,
+    limit: int = 0,
+    max_lines: int = _DEFAULT_MAX_LINES,
 ) -> str:
-    """Read the contents of a file, optionally a slice of lines (1-based).
+    """Read the contents of a file, optionally a slice of lines.
+
+    Large files are truncated to ``max_lines`` by default. Use
+    ``file_outline`` or ``grep`` first to locate the section you need,
+    then pass ``line_start`` / ``line_limit`` to read just that range.
 
     Args:
         path: Path to the file.
         encoding: Text encoding to use.
         line_start: First line to include (1-based). Use 0 to read the whole file.
-        line_limit: Maximum number of lines to return after line_start. Use 0 for no limit (only applies when line_start > 0).
+        line_limit: Maximum number of lines to return after line_start. Use 0 for no limit.
+        offset: Alias for line_start (1-based line offset).
+        limit: Alias for line_limit (max lines to return).
+        max_lines: Safety cap when reading the whole file (default 500). Set to 0 to disable.
     """
+    start = line_start or offset
+    cap = line_limit or limit
     try:
         with open(path, encoding=encoding) as f:
-            if line_start <= 0:
-                return f.read()
             lines = f.readlines()
-            start = max(line_start - 1, 0)
-            end = len(lines) if line_limit <= 0 else start + line_limit
-            chunk = lines[start:end]
-            text = "".join(chunk)
-            return text
+
+        total = len(lines)
+
+        if start > 0:
+            s = max(start - 1, 0)
+            e = total if cap <= 0 else s + cap
+            return "".join(lines[s:e])
+
+        if max_lines > 0 and total > max_lines:
+            content = "".join(lines[:max_lines])
+            content += (
+                f"\n\n--- truncated ({max_lines} of {total} lines) ---\n"
+                f"Use file_outline to see the full structure, or pass "
+                f"line_start/line_limit to read a specific range.\n"
+            )
+            return content
+
+        return "".join(lines)
     except OSError as exc:
         return json.dumps({"error": str(exc)})
 

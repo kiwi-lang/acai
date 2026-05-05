@@ -1,0 +1,99 @@
+{
+  "id": "converse-audio",
+  "name": "Converse + Audio",
+  "description": "Simple conversation that streams both text tokens and TTS audio to the client.",
+  "nodes": [
+    {
+      "id": "start",
+      "type": "start",
+      "position": { "x": -400, "y": -100 },
+      "data": {
+        "label": "Start",
+        "preview_message": "Hello, how are you?"
+      }
+    },
+    {
+      "id": "agent_call",
+      "type": "agent_call",
+      "position": { "x": -50, "y": -100 },
+      "data": {
+        "label": "Agent Call",
+        "agent": "default"
+      }
+    },
+    {
+      "id": "tts_accumulate",
+      "type": "tts_accumulate",
+      "position": { "x": 350, "y": -100 },
+      "data": {
+        "label": "TTS Accumulate"
+      }
+    },
+    {
+      "id": "output",
+      "type": "output",
+      "position": { "x": 700, "y": -100 },
+      "data": {
+        "label": "Output"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "e_start_agent_exec",
+      "source": "start",
+      "target": "agent_call",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_start_agent_context",
+      "source": "start",
+      "target": "agent_call",
+      "sourceHandle": "data_conversation",
+      "targetHandle": "data_context",
+      "type": "data"
+    },
+    {
+      "id": "e_start_agent_agent",
+      "source": "start",
+      "target": "agent_call",
+      "sourceHandle": "data_agent",
+      "targetHandle": "data_agent",
+      "type": "data"
+    },
+    {
+      "id": "e_agent_tts_exec",
+      "source": "agent_call",
+      "target": "tts_accumulate",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_agent_tts_stream",
+      "source": "agent_call",
+      "target": "tts_accumulate",
+      "sourceHandle": "data_stream",
+      "targetHandle": "data_stream",
+      "type": "data"
+    },
+    {
+      "id": "e_tts_output_exec",
+      "source": "tts_accumulate",
+      "target": "output",
+      "sourceHandle": "exec_out",
+      "targetHandle": "exec_in",
+      "type": "exec"
+    },
+    {
+      "id": "e_tts_output_response",
+      "source": "tts_accumulate",
+      "target": "output",
+      "sourceHandle": "data_response",
+      "targetHandle": "data_response",
+      "type": "data"
+    }
+  ]
+}

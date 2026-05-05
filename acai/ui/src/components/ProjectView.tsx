@@ -1,15 +1,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
     Box, VStack, HStack, Text, Heading, Badge, IconButton, Spinner,
     Input, Button, NativeSelect, Textarea,
 } from '@chakra-ui/react';
-import { getProject, listTasks, createTask, getTaskTree, listAgents, updateProject, updateTask } from '../services/api';
+import { getProject, listTasks, createTask, getTaskTree, getTask, listAgents, updateProject, updateTask } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { Project, Task, AgentDef } from '../services/types';
 import ChatPanel from './ChatPanel';
 import Markdown from './Markdown';
+import TaskMonitor from './TaskMonitor';
 
 const BackIcon = () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -27,6 +28,28 @@ const PencilIcon = () => (
 const CloseIcon = () => (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
         <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+    </svg>
+);
+
+const PlayIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <polygon points="5 3 19 12 5 21 5 3" />
+    </svg>
+);
+
+const RetryIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <polyline points="23 4 23 10 17 10" />
+        <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    </svg>
+);
+
+const LogsIcon = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="8" y1="13" x2="16" y2="13" />
+        <line x1="8" y1="17" x2="16" y2="17" />
     </svg>
 );
 
@@ -322,6 +345,8 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
     const [dirty, setDirty] = useState(false);
     const [editing, setEditing] = useState<EditingField>(null);
     const [taskConvId, setTaskConvId] = useState<string | null>(null);
+    const [monitoring, setMonitoring] = useState(false);
+    const [monitorAutoStart, setMonitorAutoStart] = useState(false);
 
     useEffect(() => {
         setForm({
@@ -377,6 +402,21 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
         if (dirty) handleSave();
     };
 
+    const handleRun = () => {
+        setMonitorAutoStart(true);
+        setMonitoring(true);
+    };
+
+    const handleMonitorStatus = useCallback((newStatus: string) => {
+        setForm(prev => ({ ...prev, status: newStatus }));
+        setDirty(false);
+    }, []);
+
+    const handleViewLogs = () => {
+        setMonitorAutoStart(false);
+        setMonitoring(true);
+    };
+
     const closeModal = useCallback(() => {
         if (dirty) handleSave();
         onClose();
@@ -408,16 +448,52 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
                 mx={4} gap={0} align="stretch"
                 overflow="hidden"
             >
-                {/* Left: Task fields */}
-                <Box flex={1} display="flex" flexDirection="column" minW={0}>
+                {/* Left panel */}
+                <Box flex={1} display="flex" flexDirection="column" minW={0} position="relative">
                     {/* Header */}
                     <HStack px={5} py={4} borderBottom="1px solid" borderColor="var(--border-primary)" justify="space-between">
                         <HStack gap={2} flex={1} minW={0}>
-                            <Heading size="sm" color="var(--text-heading)" lineClamp={1}>Task Detail</Heading>
+                            {monitoring && (
+                                <IconButton
+                                    aria-label="Back to detail" variant="ghost" size="xs"
+                                    color="var(--text-tertiary)" _hover={{ color: 'var(--text-heading)' }}
+                                    onClick={() => setMonitoring(false)} title="Back to task detail"
+                                >
+                                    <BackIcon />
+                                </IconButton>
+                            )}
+                            <Heading size="sm" color="var(--text-heading)" lineClamp={1}>
+                                {monitoring ? 'Task Monitor' : 'Task Detail'}
+                            </Heading>
                             <Text fontSize="2xs" color="var(--text-muted)" fontFamily="mono">{task.id}</Text>
                         </HStack>
                         <HStack gap={2}>
-                            {dirty && (
+                            {!monitoring && (
+                                <IconButton
+                                    aria-label="View logs"
+                                    variant="ghost" size="sm"
+                                    color="var(--text-tertiary)"
+                                    _hover={{ bg: 'var(--bg-input)' }}
+                                    onClick={handleViewLogs}
+                                    title="View task logs"
+                                >
+                                    <LogsIcon />
+                                </IconButton>
+                            )}
+                            {!monitoring && (
+                                <IconButton
+                                    aria-label={form.status === 'failed' ? 'Retry task' : 'Run task'}
+                                    variant="ghost" size="sm"
+                                    color={form.status === 'failed' ? 'var(--text-error, #e53e3e)' : 'var(--accent)'}
+                                    _hover={{ bg: 'var(--bg-input)' }}
+                                    onClick={handleRun}
+                                    disabled={form.status === 'in_progress'}
+                                    title={form.status === 'failed' ? 'Retry this task' : 'Run this task'}
+                                >
+                                    {form.status === 'failed' ? <RetryIcon /> : <PlayIcon />}
+                                </IconButton>
+                            )}
+                            {dirty && !monitoring && (
                                 <Button size="sm" colorScheme="green" onClick={handleSave} loading={saving} disabled={saving}>
                                     Save
                                 </Button>
@@ -430,6 +506,14 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
                     </HStack>
 
                     {/* Body */}
+                    {monitoring ? (
+                        <TaskMonitor
+                            task={task}
+                            initialStatus={form.status}
+                            onStatusChange={handleMonitorStatus}
+                            autoStart={monitorAutoStart}
+                        />
+                    ) : (
                     <Box flex={1} overflowY="auto" px={5} py={4}>
                         <VStack gap={4} align="stretch">
                             {/* Title */}
@@ -519,53 +603,6 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
                                     )}
                                 </Field>
                             </HStack>
-
-                            {/* Description */}
-                            <Field label="Description">
-                                {editing === 'description' ? (
-                                    <Textarea
-                                        size="sm" rows={6} value={form.description}
-                                        onChange={e => set('description', e.target.value)}
-                                        onBlur={() => commit('description')}
-                                        placeholder="Task description…" autoFocus
-                                        {...inputStyle}
-                                    />
-                                ) : (
-                                    <Box onClick={() => setEditing('description')} {...clickableStyle} minH="40px">
-                                        {form.description ? (
-                                            <Box fontSize="sm" color="var(--text-secondary)">
-                                                <Markdown content={form.description} />
-                                            </Box>
-                                        ) : (
-                                            <Text fontSize="sm" color="var(--text-muted)">Click to add description…</Text>
-                                        )}
-                                    </Box>
-                                )}
-                            </Field>
-
-                            {/* Spec */}
-                            <Field label="Spec">
-                                {editing === 'spec' ? (
-                                    <Textarea
-                                        size="sm" rows={5} value={form.spec}
-                                        onChange={e => set('spec', e.target.value)}
-                                        onBlur={() => commit('spec')}
-                                        placeholder="Task specification…"
-                                        fontFamily="mono" fontSize="xs" autoFocus
-                                        {...inputStyle}
-                                    />
-                                ) : (
-                                    <Box onClick={() => setEditing('spec')} {...clickableStyle} minH="32px">
-                                        {form.spec ? (
-                                            <Text fontSize="xs" fontFamily="mono" color="var(--text-secondary)" whiteSpace="pre-wrap">
-                                                {form.spec}
-                                            </Text>
-                                        ) : (
-                                            <Text fontSize="xs" color="var(--text-muted)">Click to add spec…</Text>
-                                        )}
-                                    </Box>
-                                )}
-                            </Field>
 
                             {/* Agent + Assigned to + Max retries + Depends on */}
                             <HStack gap={4} flexWrap="wrap">
@@ -670,6 +707,30 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
                                 </Box>
                             )}
 
+                            {/* Spec */}
+                            <Field label="Spec">
+                                {editing === 'spec' ? (
+                                    <Textarea
+                                        size="sm" rows={5} value={form.spec}
+                                        onChange={e => set('spec', e.target.value)}
+                                        onBlur={() => commit('spec')}
+                                        placeholder="Task specification…"
+                                        fontFamily="mono" fontSize="xs" autoFocus
+                                        {...inputStyle}
+                                    />
+                                ) : (
+                                    <Box onClick={() => setEditing('spec')} {...clickableStyle} minH="32px">
+                                        {form.spec ? (
+                                            <Text fontSize="xs" fontFamily="mono" color="var(--text-secondary)" whiteSpace="pre-wrap">
+                                                {form.spec}
+                                            </Text>
+                                        ) : (
+                                            <Text fontSize="xs" color="var(--text-muted)">Click to add spec…</Text>
+                                        )}
+                                    </Box>
+                                )}
+                            </Field>
+
                             {/* Subtasks */}
                             {children.length > 0 && (
                                 <Box borderTop="1px solid" borderColor="var(--border-primary)" pt={3}>
@@ -698,8 +759,32 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
                                     </VStack>
                                 </Box>
                             )}
+
+                            {/* Description (at bottom) */}
+                            <Field label="Description">
+                                {editing === 'description' ? (
+                                    <Textarea
+                                        size="sm" rows={6} value={form.description}
+                                        onChange={e => set('description', e.target.value)}
+                                        onBlur={() => commit('description')}
+                                        placeholder="Task description…" autoFocus
+                                        {...inputStyle}
+                                    />
+                                ) : (
+                                    <Box onClick={() => setEditing('description')} {...clickableStyle} minH="40px">
+                                        {form.description ? (
+                                            <Box fontSize="sm" color="var(--text-secondary)">
+                                                <Markdown content={form.description} />
+                                            </Box>
+                                        ) : (
+                                            <Text fontSize="sm" color="var(--text-muted)">Click to add description…</Text>
+                                        )}
+                                    </Box>
+                                )}
+                            </Field>
                         </VStack>
                     </Box>
+                    )}
                 </Box>
 
                 {/* Right: Chat for task refinement */}
@@ -734,6 +819,7 @@ const TaskModal = ({ task, taskTree, agents, project, refinerAgent, onUpdate, on
 const ProjectView = () => {
     const { name } = useParams<{ name: string }>();
     const navigate = useNavigate();
+    const [searchParams, setSearchParams] = useSearchParams();
     const { tasks: wsTasks, isConnected } = useAgentSocket();
 
     const [project, setProject] = useState<Project | null>(null);
@@ -754,6 +840,21 @@ const ProjectView = () => {
 
     useEffect(() => {
         listAgents().then(setAgentChoices).catch(() => {});
+    }, []);
+
+    // Restore task from URL on mount
+    useEffect(() => {
+        const taskId = searchParams.get('task');
+        if (taskId && !selectedTask) {
+            getTask(taskId).then(async (t) => {
+                setSelectedTask(t);
+                try { setTaskTree(await getTaskTree(t.id)); }
+                catch { setTaskTree([t]); }
+            }).catch(() => {
+                setSearchParams(prev => { prev.delete('task'); return prev; }, { replace: true });
+            });
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     useEffect(() => {
@@ -777,13 +878,14 @@ const ProjectView = () => {
 
     const handleTaskClick = useCallback(async (task: Task) => {
         setSelectedTask(task);
+        setSearchParams(prev => { prev.set('task', task.id); return prev; }, { replace: true });
         try {
             const tree = await getTaskTree(task.id);
             setTaskTree(tree);
         } catch {
             setTaskTree([task]);
         }
-    }, []);
+    }, [setSearchParams]);
 
     const handleUpdateTask = useCallback(async (id: string, patch: Partial<Task>) => {
         const updated = await updateTask(id, patch);
@@ -862,7 +964,11 @@ const ProjectView = () => {
                     project={name}
                     refinerAgent={project.refiner || 'refiner'}
                     onUpdate={handleUpdateTask}
-                    onClose={() => { setSelectedTask(null); setTaskTree([]); }}
+                    onClose={() => {
+                        setSelectedTask(null);
+                        setTaskTree([]);
+                        setSearchParams(prev => { prev.delete('task'); return prev; }, { replace: true });
+                    }}
                 />
             )}
 

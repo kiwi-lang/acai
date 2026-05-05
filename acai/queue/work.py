@@ -139,6 +139,10 @@ class WorkQueue:
                 conn.execute(text(
                     "ALTER TABLE tasks ADD COLUMN ext JSON DEFAULT NULL"
                 ))
+            if "worktree" not in cols:
+                conn.execute(text(
+                    "ALTER TABLE tasks ADD COLUMN worktree VARCHAR DEFAULT ''"
+                ))
 
     def session(self) -> Session:
         return self._Session()

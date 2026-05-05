@@ -216,4 +216,5 @@ class ConverseScribeGraph(TaskGraph):
             )
             return
 
-        yield self._done_event()
+        git = await self._finalize_git(work)
+        yield self._done_event(git)

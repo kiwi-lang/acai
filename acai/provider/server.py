@@ -146,7 +146,11 @@ class LLMServer:
     # Start / stop
     # ------------------------------------------------------------------
 
-    def start(self) -> None:
+    def start_process(self) -> None:
+        """Launch the server subprocess without waiting for health.
+
+        Use :meth:`is_healthy` or :meth:`wait_healthy` afterwards.
+        """
         if self.is_running():
             log.info("LLM server already running (pid %s)", self.pid or self._read_lock())
             return
@@ -164,7 +168,7 @@ class LLMServer:
         ts = time.strftime("%Y%m%d_%H%M%S")
         log_path = os.path.join(self._log_dir, f"llm_server_{ts}.log")
         self._current_log_path = log_path
-        self._log_file = open(log_path, "w")
+        self._log_file = open(log_path, "w", buffering=1)
 
         log.info("starting LLM server: %s", cmd)
         log.info("LLM server logs → %s", log_path)
@@ -177,6 +181,10 @@ class LLMServer:
         )
         self._write_lock(self.process.pid)
         log.info("LLM server started (pid %d)", self.process.pid)
+
+    def start(self) -> None:
+        """Launch and block until the server is healthy."""
+        self.start_process()
         self.wait_healthy()
 
     def stop(self, timeout: float = 30) -> None:
@@ -267,6 +275,15 @@ class LLMServer:
             time.sleep(2)
 
         log.warning("timed out waiting for checkpoint loading after %.0fs", timeout)
+
+    def is_healthy(self) -> bool:
+        """Non-blocking check: return ``True`` if the health endpoint responds."""
+        url = f"{self.config.endpoint}/health"
+        try:
+            r = requests.get(url, timeout=2)
+            return r.status_code < 500
+        except (requests.ConnectionError, requests.Timeout):
+            return False
 
     def wait_healthy(self, retries: int = 120, interval: float = 2.0) -> None:
         self._wait_model_loaded()

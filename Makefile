@@ -24,6 +24,10 @@ back-dev:
 vllm:
 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "Qwen/Qwen3-Coder-Next-FP8")
 
+vllm-small:
+	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "google/gemma-3-27b-it")
+
+
 front-dev:
 	(cd acai/ui && npm i && npm run dev)
 

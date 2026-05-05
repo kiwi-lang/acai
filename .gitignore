@@ -87,3 +87,6 @@ env/
 workspace/
 
 node_modules/
+
+# cached voice catalog (fetched from HuggingFace at runtime)
+acai/data/piper_voices.json

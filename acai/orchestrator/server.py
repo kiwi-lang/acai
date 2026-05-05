@@ -96,6 +96,8 @@ class Orchestrator:
         for task in in_progress:
             if task.kind in ("converse", "think"):
                 continue
+            if task.conversation:
+                continue
             if task.started_at is None:
                 continue
             started = task.started_at
@@ -264,6 +266,9 @@ def create_router(config: AcaiConfig | None = None,
 
     from acai.tools.ci import _configure as configure_ci
     configure_ci(config.ci)
+
+    from acai.orchestrator.tts import TTSService, ingest_voice_catalog
+    tts_service = TTSService(config.tts, workspace=config.workspace)
 
     from acai.utils.audit import AuditTrail, NullAuditTrail
 
@@ -1703,6 +1708,283 @@ def create_router(config: AcaiConfig | None = None,
             return JSONResponse({"error": "not found"}, status_code=404)
         return _task_json(task)
 
+    @router.post("/tasks/{task_id}/run")
+    async def run_task(task_id: str):
+        import subprocess as _sp
+        import traceback as _tb
+
+        task = queue.get(task_id)
+        if task is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        if task.status == TaskStatus.IN_PROGRESS:
+            return JSONResponse(
+                {"error": "task is already running"},
+                status_code=409,
+            )
+
+        is_retry = task.status in (TaskStatus.FAILED, TaskStatus.COMPLETED)
+
+        project_name = task.project or ""
+        proj = projects.get(project_name) if project_name else None
+        project_path = proj.path if proj else ""
+
+        # --- task clone setup ---
+        # Each task gets its own clone so concurrent tasks never clash.
+        # The clone is deleted on success; kept on failure for retry.
+        clone_path = ""
+        branch_name = ""
+        if project_path and os.path.isdir(project_path):
+            short_id = task_id[:8]
+            branch_name = f"acai/task-{short_id}"
+            clones_base = os.path.join(os.path.dirname(project_path), ".task-clones")
+            os.makedirs(clones_base, exist_ok=True)
+            clone_path = os.path.join(clones_base, f"task-{short_id}")
+
+            if os.path.isdir(clone_path):
+                log.info("reusing existing task clone for %s: %s", task_id, clone_path)
+            else:
+                try:
+                    _sp.run(
+                        ["git", "clone", project_path, clone_path],
+                        capture_output=True, text=True, timeout=120, check=True,
+                    )
+                    # Point origin at the project repo for push
+                    _sp.run(
+                        ["git", "remote", "set-url", "origin", project_path],
+                        cwd=clone_path,
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    # Check if the branch already exists (from a previous run)
+                    branch_exists = _sp.run(
+                        ["git", "branch", "--list", branch_name],
+                        cwd=clone_path,
+                        capture_output=True, text=True, timeout=10,
+                    ).stdout.strip() != ""
+
+                    if not branch_exists:
+                        branch_exists = _sp.run(
+                            ["git", "ls-remote", "--heads", "origin", branch_name],
+                            cwd=clone_path,
+                            capture_output=True, text=True, timeout=10,
+                        ).stdout.strip() != ""
+
+                    if branch_exists:
+                        _sp.run(
+                            ["git", "checkout", branch_name],
+                            cwd=clone_path,
+                            capture_output=True, text=True, timeout=30, check=True,
+                        )
+                    else:
+                        _sp.run(
+                            ["git", "checkout", "-b", branch_name],
+                            cwd=clone_path,
+                            capture_output=True, text=True, timeout=30, check=True,
+                        )
+                    log.info("task clone ready: %s  branch=%s", clone_path, branch_name)
+                except _sp.CalledProcessError as exc:
+                    log.warning("task clone failed for %s: %s", task_id, exc.stderr)
+                    clone_path = project_path
+
+        queue.update(task_id, status=TaskStatus.IN_PROGRESS, worktree=clone_path)
+
+        agent_name = task.agent or "coder"
+        description = task.description or ""
+        message = task.title
+        if description:
+            message = f"{task.title}\n\n{description}"
+
+        # Task conversations live as conv_N.json in the task dir
+        # (never in the ChatStore UI index).  Load prior work from
+        # the most recent file for resume context.
+        prior_history = chat.task_history(project_name, task_id)
+        prior_messages: list[dict] = []
+        if prior_history:
+            prior_messages = chat.read_task_conversation(prior_history[-1])
+            log.info(
+                "task %s has %d prior run(s), loading context from %s",
+                task_id, len(prior_history), prior_history[-1],
+            )
+
+        # Use an ephemeral conversation for live execution so messages
+        # are persisted during the run but never show in the UI.
+        conv_id = f"ephemeral-task-{task_id}"
+        queue.update(task_id, conversation=conv_id)
+        chat.append(conv_id, {"role": "user", "content": message})
+
+        active_prov = config.active_provider()
+        provider_override = {"name": active_prov.name}
+
+        effective_path = clone_path or project_path
+        work = {
+            "message": message,
+            "conversation": conv_id,
+            "agent": agent_name,
+            "project": project_name,
+            "task_id": task_id,
+            "title": task.title,
+            "description": description,
+            "worktree": effective_path,
+            "spec_path": chat._msg_path(conv_id),
+            "stream_id": conv_id,
+            "kind": "converse",
+            "provider_override": provider_override,
+            "provider": active_prov.name,
+            "prior_work": prior_messages,
+        }
+
+        audit = _make_audit(
+            "task_run", task_id=task_id,
+            agent=agent_name, project=project_name,
+            retry=is_retry,
+        )
+
+        def _sse(event: str, data: dict) -> str:
+            return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def _commit_and_push(cwd: str, tid: str, msg: str) -> str | None:
+            """Fallback: commit partial work when the graph crashes.
+
+            The happy-path commit is handled by ``TaskGraph._finalize_git``.
+            This function only runs in error/timeout branches where the
+            graph never reached its ``done`` event.
+
+            Returns the short commit hash on success, ``None`` if
+            nothing to commit or on error.
+            """
+            if not cwd or not os.path.isdir(cwd):
+                return None
+            try:
+                status = _sp.run(
+                    ["git", "status", "--porcelain"],
+                    cwd=cwd, capture_output=True, text=True, timeout=10,
+                )
+                if not status.stdout.strip():
+                    return None
+                _sp.run(["git", "add", "-A"], cwd=cwd,
+                        capture_output=True, text=True, timeout=30)
+                _sp.run(
+                    ["git", "commit", "-m", msg],
+                    cwd=cwd, capture_output=True, text=True, timeout=30,
+                )
+                push = _sp.run(
+                    ["git", "push", "-u", "origin", "HEAD"],
+                    cwd=cwd, capture_output=True, text=True, timeout=60,
+                )
+                if push.returncode != 0:
+                    log.warning("git push failed for task %s: %s", tid, push.stderr.strip())
+                head = _sp.run(
+                    ["git", "rev-parse", "--short", "HEAD"],
+                    cwd=cwd, capture_output=True, text=True, timeout=10,
+                )
+                sha = head.stdout.strip()
+                log.info("committed work for task %s: %s", tid, sha)
+                return sha
+            except Exception as exc:
+                log.warning("failed to commit work for task %s: %s", tid, exc)
+                return None
+
+        def _cleanup_clone(path: str, tid: str) -> None:
+            """Remove a task clone directory."""
+            import shutil as _shutil
+            if not path or path == project_path or not os.path.isdir(path):
+                return
+            try:
+                _shutil.rmtree(path)
+                log.info("cleaned up task clone for %s: %s", tid, path)
+            except Exception as exc:
+                log.warning("failed to clean up clone for %s: %s", tid, exc)
+
+        async def generate():
+            import asyncio
+
+            yield _sse("meta", {
+                "task_id": task_id, "conversation": conv_id,
+                "status": "in_progress", "retry": is_retry,
+            })
+            try:
+                async with lb.acquire() as worker:
+                    audit.record("worker.acquired", phase="server", worker=worker.url)
+                    graph = get_graph(
+                        "converse", worker, work,
+                        agent_store=agent_store,
+                        chat=chat,
+                        config=config,
+                        tracker=tracker,
+                        projects=projects,
+                        tool_registry=tool_registry,
+                        audit=audit,
+                    )
+                    heartbeat_interval = 15
+                    ait = graph.run(work).__aiter__()
+                    while True:
+                        next_task = asyncio.ensure_future(ait.__anext__())
+                        while not next_task.done():
+                            done, _ = await asyncio.wait(
+                                {next_task}, timeout=heartbeat_interval,
+                            )
+                            if not done:
+                                yield _sse("heartbeat", {
+                                    "task_id": task_id,
+                                    "status": "in_progress",
+                                })
+                        try:
+                            event = next_task.result()
+                        except StopAsyncIteration:
+                            break
+                        yield _sse(
+                            event.get("event_type", "message"),
+                            event.get("data", {}),
+                        )
+
+                queue.update(task_id, status=TaskStatus.COMPLETED)
+                _cleanup_clone(clone_path, task_id)
+                yield _sse("task_status", {"task_id": task_id, "status": "completed"})
+            except TimeoutError:
+                audit.record("error", phase="server", error="worker timeout")
+                sha = _commit_and_push(
+                    effective_path, task_id,
+                    f"acai: partial work for task {task_id[:8]} (timeout)",
+                )
+                if sha:
+                    yield _sse("info", {"message": f"Partial work committed: {sha}"})
+                queue.update(task_id, status=TaskStatus.FAILED, error_log="No worker available (timeout)")
+                yield _sse("error", {"message": "No worker available (timeout waiting for a free worker)."})
+                yield _sse("task_status", {"task_id": task_id, "status": "failed"})
+            except Exception as exc:
+                log.exception("task run error for %s", task_id)
+                error_msg = f"{type(exc).__name__}: {exc}"
+                audit.record("error", phase="server", error=error_msg)
+                sha = _commit_and_push(
+                    effective_path, task_id,
+                    f"acai: partial work for task {task_id[:8]} (error)",
+                )
+                if sha:
+                    yield _sse("info", {"message": f"Partial work committed: {sha}"})
+                queue.update(task_id, status=TaskStatus.FAILED, error_log=error_msg)
+                yield _sse("error", {"message": error_msg, "traceback": _tb.format_exc()})
+                yield _sse("task_status", {"task_id": task_id, "status": "failed"})
+            finally:
+                # Persist the ephemeral conversation to conv_N.json
+                # in the task dir and clean up the tmp directory.
+                try:
+                    final_messages = chat.read(conv_id)
+                    if final_messages and project_name:
+                        saved = chat.save_task_conversation(
+                            project_name, task_id, final_messages,
+                        )
+                        log.info("saved task conversation: %s", saved)
+                    chat.delete(conv_id)
+                except Exception:
+                    log.warning("failed to persist task conversation for %s", task_id, exc_info=True)
+                audit.finalize()
+                yield _sse("done", {"task_id": task_id})
+
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={"X-Task-Id": task_id, "X-Conversation": conv_id},
+        )
+
     # ==================================================================
     # Knowledge documents
     # ==================================================================
@@ -2007,7 +2289,7 @@ def create_router(config: AcaiConfig | None = None,
         from acai.orchestrator.config import config_to_dict, save_config
 
         data = await _json_body(request)
-        for section_name in ("sandbox", "worker", "git", "queue", "audit", "ci"):
+        for section_name in ("sandbox", "worker", "git", "queue", "audit", "ci", "tts"):
             patch = data.get(section_name)
             if not isinstance(patch, dict):
                 continue
@@ -2019,6 +2301,98 @@ def create_router(config: AcaiConfig | None = None,
 
         save_config(config.workspace, config)
         return config_to_dict(config)
+
+    # ==================================================================
+    # TTS
+    # ==================================================================
+
+    @router.get("/tts/voices")
+    def tts_voices():
+        return tts_service.list_voices()
+
+    @router.post("/tts/voices/catalog")
+    async def tts_ingest_catalog(request: Request):
+        data = await _json_body(request)
+        catalog = data.get("catalog")
+        if not catalog or not isinstance(catalog, dict):
+            return JSONResponse({"error": "catalog dict is required"}, status_code=400)
+        ingest_voice_catalog(catalog)
+        return tts_service.list_voices()
+
+    @router.post("/tts/download")
+    async def tts_download(request: Request):
+        data = await _json_body(request)
+        voice_id = data.get("voice", config.tts.voice)
+        if not voice_id:
+            return JSONResponse({"error": "voice is required"}, status_code=400)
+
+        import asyncio, queue as _queue
+
+        progress_q: _queue.Queue[dict] = _queue.Queue()
+
+        def _on_progress(received: int, total: int) -> None:
+            pct = int(received * 100 / total) if total else 0
+            progress_q.put({
+                "received": received,
+                "total": total,
+                "percent": pct,
+            })
+
+        async def _stream():
+            def _sse(event: str, data: dict) -> str:
+                return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            loop = asyncio.get_event_loop()
+            fut = loop.run_in_executor(
+                None, lambda: tts_service.download_voice(voice_id, on_progress=_on_progress),
+            )
+
+            while not fut.done():
+                await asyncio.sleep(0.15)
+                while not progress_q.empty():
+                    try:
+                        yield _sse("progress", progress_q.get_nowait())
+                    except _queue.Empty:
+                        break
+
+            try:
+                path = fut.result()
+                while not progress_q.empty():
+                    try:
+                        yield _sse("progress", progress_q.get_nowait())
+                    except _queue.Empty:
+                        break
+                yield _sse("done", {"voice": voice_id, "path": path, "downloaded": True})
+            except Exception as exc:
+                log.exception("TTS download failed for %s", voice_id)
+                yield _sse("error", {"message": str(exc)})
+
+        return StreamingResponse(_stream(), media_type="text/event-stream")
+
+    @router.post("/tts/synthesize")
+    async def tts_synthesize(request: Request):
+        data = await _json_body(request)
+        text = data.get("text", "")
+        stream = data.get("stream", False)
+
+        if not tts_service.enabled:
+            return JSONResponse({"error": "TTS is not enabled"}, status_code=400)
+        if not text:
+            return JSONResponse({"error": "text is required"}, status_code=400)
+
+        if not stream:
+            wav_bytes = tts_service.synthesize(text)
+            return Response(content=wav_bytes, media_type="audio/wav")
+
+        async def _stream_audio():
+            sentences = tts_service.split_sentences(text)
+            for sentence in sentences:
+                pcm = tts_service.synthesize_pcm(sentence)
+                payload = tts_service.audio_event(pcm)
+                yield _sse("audio", payload)
+            yield _sse("done", {})
+
+        return StreamingResponse(_stream_audio(), media_type="text/event-stream")
 
     # ==================================================================
     # Status

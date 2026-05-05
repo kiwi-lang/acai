@@ -48,17 +48,40 @@ def _model_to_slug(model: str) -> str:
 # ---------------------------------------------------------------------------
 
 _MODEL_PARSER_MAP: list[tuple[str, str]] = [
+    # Qwen family — coder variants use XML, everything else uses hermes
     ("qwen3-coder", "qwen3_xml"),
     ("qwen3_coder", "qwen3_xml"),
+    ("qwen3", "hermes"),
     ("qwen2.5", "hermes"),
+    ("qwen2", "hermes"),
     ("qwq", "hermes"),
+    # Gemma — standard models use hermes
+    ("gemma-3", "hermes"),
+    ("gemma-2", "hermes"),
+    ("gemma3", "hermes"),
+    ("gemma2", "hermes"),
+    # Llama
     ("llama-4", "llama4_pythonic"),
     ("llama-3", "llama3_json"),
+    # Mistral / Codestral
     ("mistral", "mistral"),
+    ("codestral", "mistral"),
+    # DeepSeek
+    ("deepseek-v3.1", "deepseek_v31"),
     ("deepseek-v3", "deepseek_v3"),
     ("deepseek-r1", "deepseek_v3"),
+    # IBM Granite
     ("granite-4", "granite4"),
     ("granite-3", "granite"),
+    # GLM
+    ("glm-4.7", "glm47"),
+    ("glm-4.6", "glm45"),
+    ("glm-4.5", "glm45"),
+    # Others
+    ("kimi-k2", "kimi_k2"),
+    ("minimax", "minimax"),
+    ("olmo-3", "olmo3"),
+    ("hunyuan", "hunyuan_a13b"),
     ("hermes", "hermes"),
 ]
 
@@ -69,7 +92,12 @@ _MODEL_REASONING_PARSER_MAP: list[tuple[str, str]] = [
     ("deepseek-v3", "deepseek_v3"),
     ("granite-3.2", "granite"),
     ("granite-4", "granite"),
+    ("glm-4.7", "glm47"),
+    ("glm-4.6", "glm45"),
+    ("glm-4.5", "glm45"),
     ("glm-4", "glm45"),
+    ("hunyuan", "hunyuan_a13b"),
+    ("olmo-3", "olmo3"),
     ("o1", "openai"),
     ("o3", "openai"),
     ("o4", "openai"),

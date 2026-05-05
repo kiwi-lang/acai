@@ -343,6 +343,23 @@ class CIConfig:
         return cls(**{k: v for k, v in d.items() if k in known})
 
 
+@dataclass
+class TTSConfig:
+    enabled: bool = defaultfield("tts.enabled", bool, False)
+    model_path: str = defaultfield("tts.model_path", str, "")
+    voice: str = defaultfield("tts.voice", str, "en_US-lessac-medium")
+    length_scale: float = defaultfield("tts.length_scale", float, 1.0)
+    noise_scale: float = defaultfield("tts.noise_scale", float, 0.667)
+    noise_w: float = defaultfield("tts.noise_w", float, 0.8)
+    use_cuda: bool = defaultfield("tts.use_cuda", bool, False)
+    sample_rate: int = defaultfield("tts.sample_rate", int, 22050)
+    sentence_silence: float = defaultfield("tts.sentence_silence", float, 0.2)
+    sentence_end: str = defaultfield("tts.sentence_end", str, r"[.!?]\s")
+    clause_break: str = defaultfield("tts.clause_break", str, r"[,;:\n\u2014]\s")
+    min_clause_len: int = defaultfield("tts.min_clause_len", int, 40)
+    volume: float = defaultfield("tts.volume", float, 1.0)
+
+
 from acai.provider.config import (  # noqa: F401
     ModelConfig,
     ProviderConfig,
@@ -364,6 +381,7 @@ class AcaiConfig:
     queue: QueueConfig = field(default_factory=QueueConfig)
     audit: AuditConfig = field(default_factory=AuditConfig)
     ci: CIConfig = field(default_factory=CIConfig)
+    tts: TTSConfig = field(default_factory=TTSConfig)
     providers: list[ProviderConfig] = field(default_factory=_load_providers_from_global)
     _active_name: str = ""
 
@@ -435,7 +453,7 @@ def _yaml_path(workspace: str) -> str:
     return os.path.join(os.path.abspath(workspace), "acai.yaml")
 
 
-_PERSISTABLE_SECTIONS = ("sandbox", "worker", "git", "queue", "audit", "ci")
+_PERSISTABLE_SECTIONS = ("sandbox", "worker", "git", "queue", "audit", "ci", "tts")
 
 
 def config_to_dict(config: AcaiConfig) -> dict:

@@ -527,6 +527,8 @@ def resolve_task(task, config: Any, chat: Any, projects: Any) -> dict:
             except OSError:
                 pass
 
+    resolved["prior_work"] = getattr(task, "prior_work", []) or []
+
     return resolved
 
 

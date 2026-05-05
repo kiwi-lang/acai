@@ -165,8 +165,10 @@ class SandboxProxy:
         context: dict | None = None,
     ) -> StreamingResponse:
         """Forward a tool call to the sandbox, starting it lazily if needed."""
+        import asyncio
+
         try:
-            self._ensure_started(context or {})
+            await asyncio.to_thread(self._ensure_started, context or {})
         except Exception as exc:
             log.error("sandbox startup failed: %s", exc)
             err_msg = f"Sandbox startup failed: {exc}"

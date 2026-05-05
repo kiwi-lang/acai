@@ -36,4 +36,5 @@ class ConverseGraph(TaskGraph):
                 return
 
         self._save_response(self._last_acc)
-        yield self._done_event()
+        git = await self._finalize_git(work)
+        yield self._done_event(git)

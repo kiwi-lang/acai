@@ -37,6 +37,7 @@ dependencies = [
     "qwen_vl_utils",
     "torchvision",
     "vllm",
+    "huggingface-hub",
 ]
 
 [project.optional-dependencies]

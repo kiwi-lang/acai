@@ -256,6 +256,18 @@ export async function updateTask(id: string, fields: Partial<Task>): Promise<Tas
     });
 }
 
+export async function runTask(id: string): Promise<{ stream: SSEStream }> {
+    const response = await fetch(`${API_BASE}/tasks/${id}/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || err.message || `HTTP ${response.status}`);
+    }
+    return { stream: new SSEStream(response) };
+}
+
 // Specs
 export async function listSpecs(): Promise<string[]> {
     return request<string[]>('/specs');
@@ -747,6 +759,73 @@ export async function updateConfig(patch: Record<string, any>): Promise<SystemCo
         method: 'PATCH',
         body: JSON.stringify(patch),
     });
+}
+
+// -- TTS Voices -----------------------------------------------------------
+
+export interface TTSVoiceEntry {
+    id: string;
+    lang: string;
+    locale: string;
+    name: string;
+    quality: string;
+    label: string;
+    downloaded: boolean;
+}
+
+export async function getTTSVoices(): Promise<TTSVoiceEntry[]> {
+    return request<TTSVoiceEntry[]>('/tts/voices');
+}
+
+const _HF_VOICES_URL = 'https://huggingface.co/rhasspy/piper-voices/resolve/main/voices.json';
+
+/**
+ * Fetch the Piper voice catalog from HuggingFace in the browser
+ * (avoids server-side User-Agent blocks), push it to the backend
+ * for caching, and return the processed voice list.
+ */
+export async function fetchAndCacheTTSCatalog(): Promise<TTSVoiceEntry[]> {
+    const resp = await fetch(_HF_VOICES_URL);
+    if (!resp.ok) throw new Error(`HuggingFace fetch failed: HTTP ${resp.status}`);
+    const catalog = await resp.json();
+    return request<TTSVoiceEntry[]>('/tts/voices/catalog', {
+        method: 'POST',
+        body: JSON.stringify({ catalog }),
+    });
+}
+
+/**
+ * Get TTS voices, fetching the catalog from HuggingFace via the
+ * browser if the backend cache is empty.
+ */
+export async function ensureTTSVoices(): Promise<TTSVoiceEntry[]> {
+    const voices = await getTTSVoices();
+    if (voices.length > 0) return voices;
+    return fetchAndCacheTTSCatalog();
+}
+
+export interface TTSDownloadProgress {
+    received: number;
+    total: number;
+    percent: number;
+}
+
+/**
+ * Start a TTS voice model download.  Returns an SSEStream that emits
+ * ``progress`` events with ``{received, total, percent}`` and a final
+ * ``done`` or ``error`` event.
+ */
+export async function downloadTTSVoice(voice: string): Promise<SSEStream> {
+    const response = await fetch(`${API_BASE}/tts/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ voice }),
+    });
+    if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        throw new Error(err.error || `HTTP ${response.status}`);
+    }
+    return new SSEStream(response);
 }
 
 // -- Version / Auto-update ------------------------------------------------
