@@ -31,7 +31,7 @@ from acai.orchestrator.agent_store import AgentDef, AgentStore, hydrate_task, re
 from acai.orchestrator.load_balancer import LoadBalancer
 from acai.orchestrator.stream import StreamTracker
 from acai.orchestrator.chat import ChatStore
-from acai.orchestrator.knowledge import KnowledgeStore
+from acai.knowledge import KnowledgeDB, KnowledgeStore
 from acai.orchestrator.config import AcaiConfig, load_config
 from acai.provider import (
     ProviderConfig, ProviderScheduler, load_providers, save_providers,
@@ -242,6 +242,7 @@ def create_router(config: AcaiConfig | None = None,
 
     knowledge_dir = os.path.join(config.workspace, "knowledge")
     knowledge = KnowledgeStore(knowledge_dir)
+    knowledge_db = KnowledgeDB(os.path.join(knowledge_dir, ".knowledge.db"))
 
     from acai.orchestrator.tools import discover_tools
     tool_registry = discover_tools(config=config)
@@ -2008,6 +2009,34 @@ def create_router(config: AcaiConfig | None = None,
         docs = knowledge.search(query, subject=subject, subsubject=subsubject)
         return [d.to_dict() for d in docs]
 
+    @router.get("/knowledge/query")
+    def query_knowledge(request: Request):
+        params = dict(request.query_params)
+        result = knowledge_db.query(
+            subject=params.get("subject", ""),
+            subsubject=params.get("subsubject", ""),
+            tag=params.get("tag", ""),
+            personality=params.get("personality", ""),
+            matter=params.get("matter", ""),
+            energy=params.get("energy", ""),
+            space=params.get("space", ""),
+            time=params.get("time", ""),
+            limit=int(params.get("limit", "100")),
+            offset=int(params.get("offset", "0")),
+        )
+        return result
+
+    @router.get("/knowledge/tags")
+    def list_knowledge_tags():
+        return knowledge_db.list_tags()
+
+    @router.get("/knowledge/facets/{facet}")
+    def list_knowledge_facet_values(facet: str):
+        try:
+            return knowledge_db.list_facet_values(facet)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
     @router.post("/knowledge", status_code=201)
     async def create_knowledge(request: Request):
         data = await _json_body(request)
@@ -2019,12 +2048,30 @@ def create_router(config: AcaiConfig | None = None,
                 {"error": "subject, subsubject, and title are required"},
                 status_code=400,
             )
+        tags = data.get("tags") or []
+        if not isinstance(tags, list):
+            tags = []
+        facets_raw = data.get("facets") or {}
+        if not isinstance(facets_raw, dict):
+            facets_raw = {}
+
         doc = knowledge.create(
             subject=subject,
             subsubject=subsubject,
             title=title,
             content=data.get("content", ""),
+            tags=tags,
         )
+        try:
+            knowledge_db.upsert(
+                doc.subject, doc.subsubject, doc.title,
+                tags=tags, facets=facets_raw, updated_at=doc.updated_at,
+            )
+        except Exception:
+            log.exception("knowledge_db.upsert failed for %s", doc.path)
+        doc.tags = tags
+        from acai.knowledge import Facets
+        doc.facets = Facets.from_dict(facets_raw)
         return doc.to_dict()
 
     @router.get("/knowledge/{subject}/{subsubject}/{title}")
@@ -2032,6 +2079,11 @@ def create_router(config: AcaiConfig | None = None,
         doc = knowledge.get(subject, subsubject, title)
         if doc is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+        meta = knowledge_db.get(doc.path)
+        if meta:
+            doc.tags = meta["tags"]
+            from acai.knowledge import Facets
+            doc.facets = Facets.from_dict(meta["facets"])
         return doc.to_dict()
 
     @router.patch("/knowledge/{subject}/{subsubject}/{title}")
@@ -2043,6 +2095,24 @@ def create_router(config: AcaiConfig | None = None,
         doc = knowledge.update(subject, subsubject, title, content)
         if doc is None:
             return JSONResponse({"error": "not found"}, status_code=404)
+
+        tags = data.get("tags")
+        facets = data.get("facets")
+        if not isinstance(tags, list):
+            tags = None
+        if not isinstance(facets, dict):
+            facets = None
+        if tags is not None or facets is not None:
+            existing_meta = knowledge_db.get(doc.path) or {}
+            try:
+                knowledge_db.upsert(
+                    doc.subject, doc.subsubject, doc.title,
+                    tags=tags if tags is not None else existing_meta.get("tags", []),
+                    facets=facets if facets is not None else existing_meta.get("facets", {}),
+                    updated_at=doc.updated_at,
+                )
+            except Exception:
+                log.exception("knowledge_db.upsert failed for %s", doc.path)
         return doc.to_dict()
 
     @router.post("/knowledge/{subject}/{subsubject}/{title}/append")
@@ -2061,6 +2131,8 @@ def create_router(config: AcaiConfig | None = None,
         deleted = knowledge.delete(subject, subsubject, title)
         if not deleted:
             return JSONResponse({"error": "not found"}, status_code=404)
+        from acai.knowledge import slugify
+        knowledge_db.remove(f"{slugify(subject)}/{slugify(subsubject)}/{slugify(title)}")
         return {"deleted": True}
 
     # ==================================================================

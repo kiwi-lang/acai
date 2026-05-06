@@ -370,7 +370,7 @@ def _extra_context(ctx: NodeContext) -> dict[str, Any] | None:
     for key, value in ctx.inputs.items():
         if key.startswith("_") or key in _AGENT_NODE_KEYS:
             continue
-        if key in ("agent", "context", "stream_mode", "phase"):
+        if key in ("agent", "context", "stream_mode", "phase", "format", "force_format"):
             continue
         extra[key] = value
     return extra or None
@@ -426,6 +426,11 @@ class AgentCallNode(NodeType):
 
     Returns a bundled dict on the ``stream`` pin so downstream nodes
     (AccForward, ToolLoop, etc.) can inspect or transform the result.
+
+    When a ``format`` is connected, the schema is always passed to the
+    template as ``extra_context["response_format_schema"]``.  If
+    ``force_format`` is enabled, the schema is also set as the API-level
+    ``response_format`` constraint (structured output).
     """
 
     type = "agent_call"
@@ -445,6 +450,8 @@ class AgentCallNode(NodeType):
                  choices=("token", "reasoning", "silent")),
         Pin.data("data_format", "format", "#c06cdb", "left",
                  pin_type="format"),
+        Pin.data("data_force_format", "force_format", "#c06cdb", "left",
+                 pin_type="bool"),
         Pin.data("data_stream", "stream", Colors.green, "right",
                  pin_type="stream"),
         Pin.data("data_payload", "payload", Colors.blue, "right",
@@ -475,7 +482,11 @@ class AgentCallNode(NodeType):
                 ctx.data["prompt_template"], variables,
             )
 
-        extra = _extra_context(ctx)
+        extra = _extra_context(ctx) or {}
+        fmt = ctx.inputs.get("format")
+        if fmt and isinstance(fmt, dict):
+            extra["response_format_schema"] = fmt
+
         prepare_kwargs: dict[str, Any] = {}
         if extra:
             prepare_kwargs["extra_context"] = extra
@@ -489,8 +500,8 @@ class AgentCallNode(NodeType):
             system_msgs = [m for m in prepared if m.get("role") == "system"]
             payload["messages"] = system_msgs + list(context)
 
-        fmt = ctx.inputs.get("format")
-        if fmt and isinstance(fmt, dict):
+        force_format = ctx.inputs.get("force_format", ctx.data.get("force_format", False))
+        if fmt and isinstance(fmt, dict) and force_format:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -743,6 +754,11 @@ class SimpleAgentNode(NodeType):
 
     Equivalent to wiring ``agent_call.data_stream → accumulate.data_stream``
     but collapsed into one canvas node for simpler workflows.
+
+    When a ``format`` is connected, the schema is always passed to the
+    template as ``extra_context["response_format_schema"]``.  If
+    ``force_format`` is enabled, the schema is also set as the API-level
+    ``response_format`` constraint (structured output).
     """
 
     type = "simple_agent"
@@ -762,6 +778,8 @@ class SimpleAgentNode(NodeType):
                  choices=("token", "reasoning", "silent")),
         Pin.data("data_format", "format", "#c06cdb", "left",
                  pin_type="format"),
+        Pin.data("data_force_format", "force_format", "#c06cdb", "left",
+                 pin_type="bool"),
         Pin.data("data_response", "response", Colors.amber, "right",
                  pin_type="message"),
         Pin.data("data_text", "text", Colors.green, "right",
@@ -800,7 +818,11 @@ class SimpleAgentNode(NodeType):
                 ctx.data["prompt_template"], variables,
             )
 
-        extra = _extra_context(ctx)
+        extra = _extra_context(ctx) or {}
+        fmt = ctx.inputs.get("format")
+        if fmt and isinstance(fmt, dict):
+            extra["response_format_schema"] = fmt
+
         prepare_kwargs: dict[str, Any] = {}
         if extra:
             prepare_kwargs["extra_context"] = extra
@@ -814,8 +836,8 @@ class SimpleAgentNode(NodeType):
             system_msgs = [m for m in prepared if m.get("role") == "system"]
             payload["messages"] = system_msgs + list(context)
 
-        fmt = ctx.inputs.get("format")
-        if fmt and isinstance(fmt, dict):
+        force_format = ctx.inputs.get("force_format", ctx.data.get("force_format", False))
+        if fmt and isinstance(fmt, dict) and force_format:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -1025,6 +1047,11 @@ class BackgroundAgentNode(NodeType):
     Emits phase-scoped events (``{phase}_start``, ``{phase}_token``,
     ``{phase}_tool_start/end``, ``{phase}_end``) so the frontend
     groups everything inside the agent's own collapsible bubble.
+
+    When a ``format`` is connected, the schema is always passed to the
+    template as ``extra_context["response_format_schema"]``.  If
+    ``force_format`` is enabled, the schema is also set as the API-level
+    ``response_format`` constraint (structured output).
     """
 
     type = "background_agent"
@@ -1043,6 +1070,8 @@ class BackgroundAgentNode(NodeType):
                  pin_type="string"),
         Pin.data("data_format", "format", "#c06cdb", "left",
                  pin_type="format"),
+        Pin.data("data_force_format", "force_format", "#c06cdb", "left",
+                 pin_type="bool"),
         Pin.data("data_response", "response", Colors.amber, "right",
                  pin_type="message"),
         Pin.data("data_text", "text", Colors.green, "right",
@@ -1069,7 +1098,11 @@ class BackgroundAgentNode(NodeType):
             context_str = str(context)
         agent_work["message"] = context_str
 
-        extra = _extra_context(ctx)
+        extra = _extra_context(ctx) or {}
+        fmt = ctx.inputs.get("format")
+        if fmt and isinstance(fmt, dict):
+            extra["response_format_schema"] = fmt
+
         prepare_kwargs: dict[str, Any] = {}
         if extra:
             prepare_kwargs["extra_context"] = extra
@@ -1081,8 +1114,8 @@ class BackgroundAgentNode(NodeType):
             system_msgs = [m for m in prepared if m.get("role") == "system"]
             payload["messages"] = system_msgs + list(context)
 
-        fmt = ctx.inputs.get("format")
-        if fmt and isinstance(fmt, dict):
+        force_format = ctx.inputs.get("force_format", ctx.data.get("force_format", False))
+        if fmt and isinstance(fmt, dict) and force_format:
             payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
@@ -1424,7 +1457,7 @@ class LoadKnowledgeNode(NodeType):
 
     async def execute(self, ctx: NodeContext):
         import os
-        from acai.orchestrator.knowledge import KnowledgeStore
+        from acai.knowledge import KnowledgeStore
 
         paths = ctx.inputs.get("paths", [])
         if isinstance(paths, str):

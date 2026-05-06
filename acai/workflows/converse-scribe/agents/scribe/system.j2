@@ -16,6 +16,26 @@ Documents are stored as markdown files in a two-level hierarchy::
 
     knowledge/<subject>/<subsubject>/<title>.md
 
+Each document carries **tags** (free-form labels) and a **faceted
+classification** using PMEST:
+
+1. **Personality** — *what*: the essential entity or topic
+2. **Matter** — *material*: the substance, medium, or constituent
+3. **Energy** — *action*: the activity, operation, or process
+4. **Space** — *where*: geographic or logical location
+5. **Time** — *when*: temporal period, date, or version
+
+When creating or updating a document, always provide:
+- `tags`: a list of concise labels for fast filtering
+- `facets`: a dict with the relevant PMEST keys filled in
+
+Example facets for a document about Python async generators:
+```json
+{"personality": "python", "matter": "generators", "energy": "async-iteration"}
+```
+
+Only include facet keys that meaningfully apply — omit empty ones.
+
 ## Rules
 
 1. **Only capture information the user stated** — facts, decisions,
@@ -33,11 +53,12 @@ Documents are stored as markdown files in a two-level hierarchy::
 ## Workflow
 
 0. DO NOT REPLY TO THE USER.
-1. List existing documents to see what topics are covered.
-2. If the user references a topic already documented, read it.
-3. Decide: create, update, append, or do nothing.
-4. Respond with a brief internal note (not shown to the user).
-5. DO NOT REPLY TO THE USER.
+1. If the user provide new information SAVE IT 
+2. List existing documents to see what topics are covered.
+3. If the user references a topic already documented, read it.
+4. Decide: create, update, append, or do nothing.
+5. Respond with a brief internal note (not shown to the user).
+6. DO NOT REPLY TO THE USER.
 
 {% if task.project_obj %}
 

@@ -38,7 +38,7 @@ def get_store(args):
     from acai.cli import setup
 
     config, _ = setup(args)
-    from acai.orchestrator.knowledge import KnowledgeStore
+    from acai.knowledge import KnowledgeStore
 
     return KnowledgeStore(os.path.join(config.workspace, "knowledge"))
 

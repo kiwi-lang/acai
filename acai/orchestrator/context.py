@@ -31,21 +31,35 @@ class OrchestratorClient:
     def __init__(self, base_url: str):
         self.base_url = base_url.rstrip("/")
 
+    def _parse_response(self, resp: http.Response) -> dict | Any:
+        if not resp.content:
+            resp.raise_for_status()
+            return {}
+        try:
+            data = resp.json()
+        except ValueError:
+            resp.raise_for_status()
+            return {"error": f"HTTP {resp.status_code}: {resp.text[:200]}"}
+        if resp.status_code >= 400:
+            if isinstance(data, dict) and "error" not in data:
+                data["error"] = f"HTTP {resp.status_code}"
+        return data
+
     def _post(self, path: str, payload: dict, timeout: int = 15) -> dict:
         resp = http.post(f"{self.base_url}{path}", json=payload, timeout=timeout)
-        return resp.json()
+        return self._parse_response(resp)
 
     def _get(self, path: str, params: dict | None = None, timeout: int = 15) -> Any:
         resp = http.get(f"{self.base_url}{path}", params=params, timeout=timeout)
-        return resp.json()
+        return self._parse_response(resp)
 
     def _put(self, path: str, payload: dict, timeout: int = 15) -> dict:
         resp = http.put(f"{self.base_url}{path}", json=payload, timeout=timeout)
-        return resp.json()
+        return self._parse_response(resp)
 
     def _patch(self, path: str, payload: dict, timeout: int = 15) -> dict:
         resp = http.patch(f"{self.base_url}{path}", json=payload, timeout=timeout)
-        return resp.json()
+        return self._parse_response(resp)
 
     def post(self, path: str, payload: dict, timeout: int = 15) -> dict:
         return self._post(path, payload, timeout)

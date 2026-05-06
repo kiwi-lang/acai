@@ -22,23 +22,16 @@ log = logging.getLogger(__name__)
 _WORKFLOW_DIR = os.path.join(os.path.dirname(__file__), os.pardir, "workflows", "converse-scribe")
 _WORKFLOW_DIR = os.path.normpath(_WORKFLOW_DIR)
 
-_CURATOR_RESPONSE_FORMAT = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "curator_paths",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "paths": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                },
-            },
-            "required": ["paths"],
-            "additionalProperties": False,
+_CURATOR_FORMAT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "paths": {
+            "type": "array",
+            "items": {"type": "string"},
         },
     },
+    "required": ["paths"],
+    "additionalProperties": False,
 }
 
 
@@ -69,7 +62,7 @@ def _parse_curator_paths(text: str) -> list[str]:
 
 def _load_knowledge_context(workspace: str, paths: list[str]) -> str:
     """Load knowledge documents by path and format as context string."""
-    from acai.orchestrator.knowledge import KnowledgeStore
+    from acai.knowledge import KnowledgeStore
 
     knowledge_dir = os.path.join(workspace, "knowledge")
     store = KnowledgeStore(knowledge_dir)
@@ -163,8 +156,10 @@ class ConverseScribeGraph(TaskGraph):
             # ==============================================================
             # Phase 1: Curator — find relevant knowledge paths
             # ==============================================================
-            curator_payload = self.prepare("curator", work)
-            curator_payload["response_format"] = _CURATOR_RESPONSE_FORMAT
+            curator_payload = self.prepare(
+                "curator", work,
+                extra_context={"response_format_schema": _CURATOR_FORMAT_SCHEMA},
+            )
 
             async for event in self._background_agent("curator", curator_payload):
                 yield event

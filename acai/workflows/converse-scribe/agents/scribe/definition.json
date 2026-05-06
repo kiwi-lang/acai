@@ -24,6 +24,6 @@
   ],
   "max_iterations": 20,
   "approval_required": false,
-  "uses_sandbox": true,
+  "uses_sandbox": false,
   "scope": "global"
 }
