@@ -28,7 +28,6 @@ dependencies = [
     "flask",
     "flask-socketio",
     "requests",
-    "httpx",
     "sqlalchemy",
     "pyyaml",
     "importlib_resources",
@@ -36,14 +35,30 @@ dependencies = [
     "voir",
     "qwen_vl_utils",
     "torchvision",
-    "vllm",
+    "torch==2.10+cu130",
+    "vllm==0.18.1+cu130",
+    "websocket-client",
+    "jinja2",
     "huggingface-hub",
 ]
+
+# Same indexes / find-links as requirements.txt so `uv pip install .` resolves
+# torch and vllm CUDA wheels without manual -r (see docs.astral.sh/uv/settings).
+[tool.uv]
+extra-index-url = [
+    "https://flashinfer.ai/whl/cu130",
+    "https://download.pytorch.org/whl/cu130",
+]
+find-links = [
+    "https://github.com/milabench/wheels/releases/expanded_assets/cu130-wheels",
+    "https://github.com/vllm-project/vllm/releases/expanded_assets/v0.18.1",
+]
+index-strategy = "unsafe-best-match"
+prerelease = "allow"
 
 [project.optional-dependencies]
 models = [
     "accelerate",
-    "torch",
     "torchcompat",
     "transformers",
     "sentencepiece",

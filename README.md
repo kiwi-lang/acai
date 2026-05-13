@@ -7,6 +7,24 @@ through a modern web UI backed by a streaming FastAPI server.
 
 Make your own workflow tailored to your work
 
+## Install
+
+One-liner (installs to `/opt/acai`, creates a venv, installs `acai-swarm`, and sets up `systemd`; see [`install.sh`](install.sh) for flags and behaviour):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/kiwi-lang/acai/main/install.sh | bash
+```
+
+**From source** (same layout under `/opt/acai`, but clones `https://github.com/kiwi-lang/acai.git` into `/opt/acai/.source` when needed, then syncs that tree to `origin` with `git fetch` + `reset --hard` and installs instead of PyPI):
+
+```bash
+curl -sSL https://raw.githubusercontent.com/kiwi-lang/acai/main/install.sh | bash -s -- --from-source
+```
+
+Use a different fork or branch via `ACAI_SOURCE_CLONE_URL` (see [`install.sh`](install.sh) `--help`).
+
+If you already have this repository checked out, run `bash install.sh --from-source` from that tree (or set `ACAI_SOURCE_ROOT` / `--source-root`). Otherwise the one-liner above clones into `/opt/acai/.source` when needed.
+
 ## Architecture overview
 
 ```mermaid

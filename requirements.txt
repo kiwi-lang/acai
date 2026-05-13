@@ -1,3 +1,5 @@
+# CUDA stack: install.sh uses pip for this file by default (uv often cannot resolve torch+vllm pins).
+# To try uv first: ACAI_UV_REQUIREMENTS=1
 
 --extra-index-url https://flashinfer.ai/whl/cu130
 --extra-index-url https://download.pytorch.org/whl/cu130
@@ -22,3 +24,4 @@ torch==2.10+cu130
 vllm==0.18.1+cu130
 websocket-client
 jinja2
+huggingface-hub

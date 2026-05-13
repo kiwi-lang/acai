@@ -63,3 +63,5 @@ def scaffold_plugin(name: str, dest: str | None = None) -> str:
                 f.write(content)
 
     return os.path.abspath(project_dir)
+
+COMMANDS = []
