@@ -4,6 +4,7 @@ Usage::
 
     acai serve                            # use defaults from config
     acai serve --model Qwen/Qwen3-Coder-Next-FP8 --port 8000
+    acai serve --host 127.0.0.1           # local only (default bind is 0.0.0.0)
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ class ServeArguments(CommonArguments):
     model: str = argument(default=None, help="override model name/path")
     backend: str = argument(default=None, help="override backend (vllm, llamacpp)")
     port: int = argument(default=None, help="override server port")
+    host: str = argument(default=None, help="bind address for local server (default 0.0.0.0 = all interfaces)")
     launch_template: str = argument(
         default=None,
         help="provide an explicit launch command template instead of auto-generating one",
@@ -111,6 +113,8 @@ class Serve(Command):
         if args.port:
             provider.server_port = args.port
             provider.endpoint = f"http://127.0.0.1:{args.port}"
+        if args.host:
+            provider.server_host = args.host
         if args.launch_template:
             provider.launch_template = args.launch_template
 
@@ -132,7 +136,8 @@ class Serve(Command):
         print(f"  │ Model:    {provider.model}")
         print(f"  │ Source:   {model_source}")
         print(f"  │ Backend:  {provider.backend}")
-        print(f"  │ Endpoint: {provider.endpoint}")
+        print(f"  │ Listen:   {provider.server_host}:{provider.server_port}  (use this host's IP from other machines)")
+        print(f"  │ Local:    http://127.0.0.1:{provider.server_port}")
         print(f"  ├─ Starting ...")
 
         try:

@@ -133,6 +133,7 @@ def _default_vllm_template(model: str) -> str:
     parser = _guess_tool_parser(model)
     parts = [
         "vllm serve {model}",
+        "--host {server_host}",
         "--served-model-name {slug}",
         "--port {server_port}",
         "--enable-auto-tool-choice",
@@ -159,8 +160,8 @@ def _default_vllm_template(model: str) -> str:
 
 
 _DEFAULT_TEMPLATES: dict[str, str] = {
-    "llamacpp": "llama-server -m {model} --host 0.0.0.0 --port {server_port}",
-    "local": "llama-server -m {model} --host 0.0.0.0 --port {server_port}",
+    "llamacpp": "llama-server -m {model} --host {server_host} --port {server_port}",
+    "local": "llama-server -m {model} --host {server_host} --port {server_port}",
 }
 
 
@@ -187,6 +188,7 @@ class ProviderConfig:
     endpoint: str = ""
     api_key: str = ""
     server_port: int = 9123
+    server_host: str = "0.0.0.0"
     launch_template: str = ""
     max_tokens: int = 4096
     temperature: float = 1.0
@@ -295,6 +297,7 @@ class ProviderConfig:
             endpoint=d.get("endpoint", ""),
             api_key=d.get("api_key", ""),
             server_port=int(d.get("server_port", 9123)),
+            server_host=str(d.get("server_host", "0.0.0.0") or "0.0.0.0"),
             launch_template=d.get("launch_template", d.get("server_command", "")),
             max_tokens=int(d.get("max_tokens", 4096)),
             temperature=float(d.get("temperature", 1.0)),
@@ -320,6 +323,7 @@ def _default_provider() -> ProviderConfig:
         endpoint=option("llm.endpoint", str, "") or "",
         api_key=option("llm.api_key", str, "") or "",
         server_port=option("llm.server_port", int, 9123) or 9123,
+        server_host=option("llm.server_host", str, "0.0.0.0") or "0.0.0.0",
         launch_template=option("llm.server_command", str, "") or "",
         max_tokens=option("llm.max_tokens", int, 4096) or 4096,
         temperature=option("llm.temperature", float, 1.0) or 1.0,
@@ -371,6 +375,7 @@ def _provider_to_dict(p: ProviderConfig) -> dict:
         "endpoint": p.endpoint,
         "api_key": p.api_key,
         "server_port": p.server_port,
+        "server_host": p.server_host,
         "launch_template": p.launch_template,
         "max_tokens": p.max_tokens,
         "temperature": p.temperature,
