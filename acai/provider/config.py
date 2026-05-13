@@ -55,7 +55,9 @@ _MODEL_PARSER_MAP: list[tuple[str, str]] = [
     ("qwen2.5", "hermes"),
     ("qwen2", "hermes"),
     ("qwq", "hermes"),
-    # Gemma — standard models use hermes
+    # Gemma
+    ("gemma-4", "gemma4"),
+    ("gemma4", "gemma4"),
     ("gemma-3", "hermes"),
     ("gemma-2", "hermes"),
     ("gemma3", "hermes"),
@@ -86,6 +88,8 @@ _MODEL_PARSER_MAP: list[tuple[str, str]] = [
 ]
 
 _MODEL_REASONING_PARSER_MAP: list[tuple[str, str]] = [
+    ("gemma-4", "gemma4"),
+    ("gemma4", "gemma4"),
     ("qwen3", "qwen3"),
     ("qwq", "deepseek_r1"),
     ("deepseek-r1", "deepseek_r1"),
@@ -125,6 +129,7 @@ def _guess_reasoning_parser(model: str) -> str | None:
 
 def _default_vllm_template(model: str) -> str:
     """Build the default vLLM launch template for a given model."""
+    lower = model.lower().replace("/", "-")
     parser = _guess_tool_parser(model)
     parts = [
         "vllm serve {model}",
@@ -136,23 +141,20 @@ def _default_vllm_template(model: str) -> str:
         "--kv-cache-dtype fp8",
         "--max-num-seqs 1",
     ]
-    supports_reasoning = False
 
-    if supports_reasoning:
-        reasoning_parser = _guess_reasoning_parser(model)
-        if reasoning_parser:
-            parts.append(f"--reasoning-parser {reasoning_parser}")
-            parts.append("--default-chat-template-kwargs '{{\"enable_thinking\": false}}'")
-            parts.append(
-                "--reasoning-config '{{\"reasoning_start_str\": \"<think>\", \"reasoning_end_str\": \"I have to give the solution based on the reasoning directly now.</think>\"}}'"
-            )
+    reasoning_parser = _guess_reasoning_parser(model)
+    if reasoning_parser:
+        parts.append(f"--reasoning-parser {reasoning_parser}")
 
-    if "qwen3-coder" in model.lower().replace("/", "-"):
+    if "qwen3-coder" in lower:
         parts += [
             "--max-model-len 170000",
             "--gpu-memory-utilization 0.90",
             "--attention-backend flashinfer",
         ]
+    elif "gemma-4" in lower or "gemma4" in lower:
+        parts.append("--quantization fp8")
+
     return " ".join(parts)
 
 

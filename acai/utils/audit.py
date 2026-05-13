@@ -58,6 +58,10 @@ class NullAuditTrail:
     ) -> AsyncIterator[None]:
         yield
 
+    def client_summary(self) -> dict[str, Any]:
+        """Empty summary when auditing is disabled."""
+        return {}
+
 
 # ------------------------------------------------------------------
 # AuditTrail — the real implementation
@@ -209,6 +213,27 @@ class AuditTrail:
             return
 
         self._update_latest_symlink()
+
+    def client_summary(self) -> dict[str, Any]:
+        """JSON-serialisable summary for ``audit_complete`` SSE payloads.
+
+        Call after :meth:`finalize` so the timeline includes the ``finalize``
+        row with ``total_duration_ms``. When ``finalize`` skipped early
+        (no ``output_dir``), fall back to elapsed monotonic time.
+        """
+        total_ms = 0.0
+        for ev in reversed(self.events):
+            if ev.get("event") == "finalize" and ev.get("phase") == "audit":
+                total_ms = float(ev.get("total_duration_ms") or 0)
+                break
+        else:
+            total_ms = round((time.monotonic() - self._t0) * 1000, 2)
+        return {
+            "request_id": self.request_id,
+            "total_duration_ms": total_ms,
+            "events": list(self.events),
+            "meta": dict(self._meta),
+        }
 
     # ------------------------------------------------------------------
     # Internal helpers

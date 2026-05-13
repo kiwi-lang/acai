@@ -25,7 +25,7 @@ vllm:
 	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "Qwen/Qwen3-Coder-Next-FP8")
 
 vllm-small:
-	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "google/gemma-3-27b-it")
+	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "google/gemma-4-31B-it")
 
 
 front-dev:

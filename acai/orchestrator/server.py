@@ -564,6 +564,9 @@ def create_router(config: AcaiConfig | None = None,
                 })
             finally:
                 audit.finalize()
+                summary = audit.client_summary()
+                if summary.get("request_id"):
+                    yield _sse("audit_complete", summary)
 
         return StreamingResponse(
             generate(),
@@ -1225,7 +1228,9 @@ def create_router(config: AcaiConfig | None = None,
                 })
             finally:
                 audit.finalize()
-                yield _sse("audit_complete", {"audit_id": audit.request_id})
+                summary = audit.client_summary()
+                if summary.get("request_id"):
+                    yield _sse("audit_complete", summary)
 
         return StreamingResponse(
             generate(),

@@ -1633,6 +1633,62 @@ const WorkflowEditor: FC = () => {
     }),
   [edges, nodes, activeEdgeId]);
 
+  const handleWorkflowGraphEvent = useCallback((event: string, data: Record<string, unknown>) => {
+    if (event === 'workflow_start') {
+      setRunLog(['\u25b6 Workflow started']);
+      setLastAudit(null);
+      setActiveNodeId(null);
+      setActiveEdgeId(null);
+      setCompletedNodeIds(new Set());
+      return;
+    }
+    if (event === 'node_start') {
+      const nid = String(data.node_id || '');
+      const label = String(data.label || nid);
+      setActiveNodeId(nid || null);
+      setActiveEdgeId(null);
+      setRunLog(prev => [...prev, `\u2192 ${label} (${nid})`]);
+      return;
+    }
+    if (event === 'node_end') {
+      const nid = String(data.node_id || '');
+      const preview = String(data.output_preview || '').slice(0, 120);
+      setActiveNodeId(null);
+      if (nid) {
+        setCompletedNodeIds(prev => new Set([...prev, nid]));
+      }
+      setRunLog(prev => [...prev, `\u2713 ${nid}${preview ? `: ${preview}` : ''}`]);
+      return;
+    }
+    if (event === 'edge_traversed') {
+      const eid = String(data.edge_id || '');
+      setActiveEdgeId(eid || null);
+      return;
+    }
+    if (event === 'workflow_end') {
+      setActiveEdgeId(null);
+      setActiveNodeId(null);
+      const out = String(data.output || '').slice(0, 160);
+      setRunLog(prev => [...prev, `\u25bc Workflow finished${out ? `: ${out}` : ''}`]);
+      return;
+    }
+    if (event === 'audit_complete') {
+      const rid = String(data.request_id || '');
+      if (rid) {
+        setLastAudit(data);
+      }
+      return;
+    }
+    if (event === 'done' || event === 'error') {
+      setActiveNodeId(null);
+      setActiveEdgeId(null);
+      if (event === 'error') {
+        const msg = String(data.message || data.error || 'Stream error');
+        setRunLog(prev => [...prev, `\u2717 ${msg}`]);
+      }
+    }
+  }, []);
+
   const onConnect = useCallback((params: Connection) => {
     const etype = edgeTypeFromHandles(params.sourceHandle);
     const color = edgeColorFromHandle(params.sourceHandle, nodes.find(n => n.id === params.source)?.type);
@@ -2400,6 +2456,7 @@ const WorkflowEditor: FC = () => {
                   ephemeral
                   initialGraph={workflowId ? `workflow:${workflowId}` : undefined}
                   placeholder="Send a message to test the workflow..."
+                  onGraphExecutionEvent={handleWorkflowGraphEvent}
                 />
               </Box>
             </Box>

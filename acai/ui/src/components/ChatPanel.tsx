@@ -199,6 +199,8 @@ export interface ChatPanelProps {
     taskId?: string;
     /** Extra context dict passed alongside each converse call (e.g. current workflow for the builder agent). */
     context?: Record<string, unknown>;
+    /** Workflow graph SSE events from /converse when graph is ``workflow:…`` (node_start, audit_complete, …). */
+    onGraphExecutionEvent?: (event: string, data: Record<string, unknown>) => void;
 }
 
 const ChatPanel = ({
@@ -224,6 +226,7 @@ const ChatPanel = ({
     ephemeral = false,
     taskId,
     context,
+    onGraphExecutionEvent,
 }: ChatPanelProps) => {
     const fallbackAgent = project ? (refinerAgent ?? 'refiner') : 'default';
     const resolvedInitialAgent = initialAgent ?? fallbackAgent;
@@ -322,6 +325,8 @@ const ChatPanel = ({
     ephemeralRef.current = ephemeral;
     const contextRef = useRef(context);
     contextRef.current = context;
+    const onGraphExecutionEventRef = useRef(onGraphExecutionEvent);
+    onGraphExecutionEventRef.current = onGraphExecutionEvent;
 
     const { joinConversation, leaveConversation } = useAgentSocket();
 
@@ -376,6 +381,20 @@ const ChatPanel = ({
             const data = JSON.parse(e.data);
             _handleConvSwitch(data.conversation);
         });
+
+        const graphExecEvents = [
+            'workflow_start', 'node_start', 'node_end', 'edge_traversed', 'workflow_end', 'audit_complete',
+        ] as const;
+        for (const evt of graphExecEvents) {
+            es.addEventListener(evt, (e: MessageEvent) => {
+                try {
+                    const data = JSON.parse(e.data) as Record<string, unknown>;
+                    onGraphExecutionEventRef.current?.(evt, data);
+                } catch {
+                    onGraphExecutionEventRef.current?.(evt, {});
+                }
+            });
+        }
 
         es.addEventListener('route', (e: MessageEvent) => {
             const data = JSON.parse(e.data);
@@ -563,17 +582,23 @@ const ChatPanel = ({
             );
             activeTaskRef.current = null;
             setIsLoading(false);
-            closeEventSource();
-            onResponseCompleteRef.current?.();
+            onGraphExecutionEventRef.current?.('done', {});
+            /* Defer close so a trailing ``audit_complete`` frame in the same chunk is still dispatched. */
+            queueMicrotask(() => {
+                closeEventSource();
+                onResponseCompleteRef.current?.();
+            });
         });
 
         es.addEventListener('error', (e: MessageEvent) => {
             let errorMsg = 'Stream error';
             let tracebackStr = '';
+            let parsed: Record<string, unknown> = {};
             try {
                 const data = JSON.parse(e.data);
-                errorMsg = data.message || data.error || errorMsg;
-                tracebackStr = data.traceback || '';
+                parsed = typeof data === 'object' && data !== null ? data as Record<string, unknown> : {};
+                errorMsg = (parsed.message as string) || (parsed.error as string) || errorMsg;
+                tracebackStr = (parsed.traceback as string) || '';
             } catch { /* raw error event from EventSource */ }
             const detail = tracebackStr
                 ? `${errorMsg}\n\n\`\`\`\n${tracebackStr}\`\`\``
@@ -590,11 +615,13 @@ const ChatPanel = ({
             });
             activeTaskRef.current = null;
             setIsLoading(false);
+            onGraphExecutionEventRef.current?.('error', parsed);
             closeEventSource();
         });
 
         es.onerror = (evt?: Event | string) => {
             const reason = typeof evt === 'string' ? evt : 'Connection lost';
+            onGraphExecutionEventRef.current?.('error', { message: reason });
             setMessages(prev => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
