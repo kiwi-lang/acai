@@ -90,6 +90,21 @@ def create_provider_router(config: AcaiConfig) -> APIRouter:
             return JSONResponse({"error": "not found"}, status_code=404)
 
         data = await _json_body(request)
+
+        if "name" in data:
+            new_name = str(data["name"]).strip()
+            if not new_name:
+                return JSONResponse({"error": "name cannot be empty"}, status_code=400)
+            if new_name != name:
+                if config.get_provider(new_name) is not None:
+                    return JSONResponse(
+                        {"error": f"provider '{new_name}' already exists"},
+                        status_code=409,
+                    )
+                if config._active_name == name:
+                    config._active_name = new_name
+                prov.name = new_name
+
         for key in ("backend", "endpoint", "api_key",
                      "server_port", "launch_template", "max_tokens",
                      "temperature", "context_window", "priority"):

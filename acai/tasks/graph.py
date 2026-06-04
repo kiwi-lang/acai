@@ -49,6 +49,89 @@ log = logging.getLogger(__name__)
 
 
 # ------------------------------------------------------------------
+# Context limit enforcement
+# ------------------------------------------------------------------
+
+# Leave headroom for output tokens + model overhead
+_HARD_LIMIT_RATIO = 0.90
+_TRUNCATION_MARKER = "[Earlier messages were truncated to fit the context window]"
+
+
+def _estimate_tokens(messages: list[dict]) -> int:
+    """Rough token estimate: chars / 4 (consistent with the rest of the codebase)."""
+    total = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            total += len(c)
+        elif isinstance(c, list):
+            total += sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
+        for tc in m.get("tool_calls", []):
+            fn = tc.get("function", {})
+            total += len(fn.get("name", "")) + len(fn.get("arguments", ""))
+    return total // 4
+
+
+def enforce_context_limit(
+    messages: list[dict],
+    context_window: int,
+    max_tokens: int,
+    *,
+    keep_recent: int = 10,
+) -> tuple[list[dict], bool]:
+    """Truncate messages to fit within the context budget.
+
+    Returns ``(messages, was_truncated)``.  Keeps the system message(s)
+    at the start and the last *keep_recent* messages.  Drops the middle
+    and inserts a truncation marker.
+    """
+    if not messages or context_window <= 0:
+        return messages, False
+
+    available = int((context_window - max_tokens) * _HARD_LIMIT_RATIO)
+    estimated = _estimate_tokens(messages)
+
+    if estimated <= available:
+        return messages, False
+
+    # Identify system messages at the start (there may be more than one)
+    system_end = 0
+    for i, m in enumerate(messages):
+        if m.get("role") == "system":
+            system_end = i + 1
+        else:
+            break
+
+    system_msgs = messages[:system_end]
+    non_system = messages[system_end:]
+
+    if len(non_system) <= keep_recent:
+        return messages, False
+
+    recent = non_system[-keep_recent:]
+    system_tokens = _estimate_tokens(system_msgs)
+    recent_tokens = _estimate_tokens(recent)
+
+    if system_tokens + recent_tokens >= available:
+        # Even recent messages are too large — progressively trim
+        while len(recent) > 2 and _estimate_tokens(system_msgs) + _estimate_tokens(recent) >= available:
+            recent = recent[1:]
+
+    truncated = system_msgs + [
+        {"role": "system", "content": _TRUNCATION_MARKER},
+    ] + recent
+
+    log.warning(
+        "Context hard-truncated: ~%d tokens -> ~%d tokens "
+        "(%d messages dropped, kept %d system + %d recent)",
+        estimated, _estimate_tokens(truncated),
+        len(non_system) - len(recent),
+        len(system_msgs), len(recent),
+    )
+    return truncated, True
+
+
+# ------------------------------------------------------------------
 # Acc — pass-through stream accumulator
 # ------------------------------------------------------------------
 
@@ -312,6 +395,21 @@ class TaskGraph:
                 extra_context=extra_context,
                 template_src=wf_template_src,
             )
+
+            # -- Enforce context limit to prevent OOM -----------------
+            active_prov = self.config.active_provider()
+            ctx_window = active_prov.context_window or 128000
+            max_out = active_prov.max_tokens or 4096
+            messages, was_truncated = enforce_context_limit(
+                messages, ctx_window, max_out,
+            )
+            if was_truncated:
+                self.audit.record(
+                    "context.truncated", phase="prepare",
+                    context_window=ctx_window,
+                    estimated_tokens=_estimate_tokens(messages),
+                )
+            # ---------------------------------------------------------
 
             provider_info = work.get("provider_override")
             if agent_def:
@@ -796,6 +894,13 @@ class TaskGraph:
                 yield end_ev
 
             followup_payload = dict(payload)
+            # Enforce context limit on the growing followup messages
+            active_prov = self.config.active_provider()
+            ctx_window = active_prov.context_window or 128000
+            max_out = active_prov.max_tokens or 4096
+            followup, _ = enforce_context_limit(
+                followup, ctx_window, max_out, keep_recent=12,
+            )
             followup_payload["messages"] = followup
             payload = followup_payload
             _tool_round += 1
@@ -808,6 +913,77 @@ class TaskGraph:
                     return
 
         self._last_acc = acc
+
+    # ------------------------------------------------------------------
+    # Context compression
+    # ------------------------------------------------------------------
+
+    async def _try_compress_conversation(self, work: dict) -> dict | None:
+        """Attempt to compress the conversation if it's approaching the context limit.
+
+        Calls the LLM to summarize old messages, then updates the
+        conversation on disk so subsequent reads get the compressed
+        version.  Returns an SSE event dict if compression occurred,
+        or ``None`` if skipped.
+        """
+        from acai.orchestrator.agent_store import needs_compression, compress_messages
+        from acai.provider import create_llm
+
+        conv = self.conversation or work.get("conversation", "")
+        if not conv:
+            return None
+
+        messages = self.chat.read(conv)
+        if not messages:
+            return None
+
+        active_prov = self.config.active_provider()
+        ctx_window = active_prov.context_window or 128000
+
+        # Filter out display-only roles (same as resolve_task)
+        _DISPLAY_ROLES = {"tool_call", "tool_result"}
+        eligible = [m for m in messages if m.get("role") not in _DISPLAY_ROLES]
+
+        if not needs_compression(eligible, ctx_window):
+            return None
+
+        log.info("Proactive compression starting for conversation %s", conv)
+
+        try:
+            llm = create_llm(active_prov)
+            compressed, did_compress = compress_messages(
+                eligible, ctx_window, llm,
+            )
+        except Exception:
+            log.exception("Compression failed for conversation %s", conv)
+            return None
+
+        if not did_compress:
+            return None
+
+        # Persist the compressed conversation (replace full history)
+        try:
+            self.chat.write(conv, compressed)
+        except Exception:
+            log.exception("Failed to persist compressed conversation %s", conv)
+            return None
+
+        ev = {
+            "event_type": "context_compressed",
+            "data": {
+                "conversation": conv,
+                "original_messages": len(eligible),
+                "compressed_messages": len(compressed),
+            },
+        }
+        if self.tracker and self.stream_id:
+            self.tracker.push(self.stream_id, ev)
+
+        self.audit.record(
+            "context.compressed", phase="prepare",
+            original=len(eligible), compressed=len(compressed),
+        )
+        return ev
 
     # ------------------------------------------------------------------
     # run — abstract, subclasses must override

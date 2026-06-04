@@ -107,8 +107,19 @@ def _error_or_raise(resp: requests.Response) -> None:
     raise LLMRequestError(f"Failed: {resp.status_code} — {msg}")
 
 
-def _parse_openai_sse(resp: requests.Response) -> Generator[StreamEvent, None, None]:
-    """Parse an OpenAI-format SSE stream into :class:`StreamEvent` objects."""
+def _parse_openai_sse(
+    resp: requests.Response,
+    *,
+    split_reasoning: bool = True,
+) -> Generator[StreamEvent, None, None]:
+    """Parse an OpenAI-format SSE stream into :class:`StreamEvent` objects.
+
+    vLLM with ``--reasoning-parser`` (e.g. Qwen3) may put plain assistant text in
+    ``delta.reasoning`` / ``reasoning_content`` while leaving ``content`` empty.
+    When *split_reasoning* is false (native thinking disabled), those fields are
+    treated as normal completion text so the UI does not label the whole reply
+    as "Reasoning".
+    """
     for line in resp.iter_lines(decode_unicode=True):
         if not line or not line.startswith("data: "):
             continue
@@ -131,12 +142,18 @@ def _parse_openai_sse(resp: requests.Response) -> Generator[StreamEvent, None, N
             continue
 
         reasoning = delta.get("reasoning") or delta.get("reasoning_content") or ""
-        if reasoning:
-            yield ReasoningToken(text=reasoning)
+        content = delta.get("content") or ""
 
-        content = delta.get("content", "")
-        if content:
-            yield ContentToken(text=content)
+        if split_reasoning:
+            if reasoning:
+                yield ReasoningToken(text=reasoning)
+            if content:
+                yield ContentToken(text=content)
+        else:
+            if reasoning:
+                yield ContentToken(text=reasoning)
+            if content:
+                yield ContentToken(text=content)
 
         for tc in delta.get("tool_calls", []):
             yield ToolCallDelta(

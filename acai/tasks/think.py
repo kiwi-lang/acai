@@ -34,6 +34,11 @@ class ThinkGraph(TaskGraph):
         return super().from_work(worker, work, **kwargs)
 
     async def run(self, work: dict) -> AsyncIterator[dict]:
+        # Proactively compress the conversation if approaching context limit
+        compress_ev = await self._try_compress_conversation(work)
+        if compress_ev:
+            yield compress_ev
+
         thinker_agent = work.get("thinker_agent", THINKER_AGENT)
         agent_name = work.get("agent", "default")
 

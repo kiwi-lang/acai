@@ -253,7 +253,7 @@ const ChatPanel = ({
             if (initialThinkingMode) return initialThinkingMode === 'native';
             if (initialThinking !== undefined) return initialThinking !== false;
             const stored = localStorage.getItem('acai.thinking');
-            return stored ? stored === 'native' : true;
+            return stored ? stored === 'native' : false;
         },
     );
     const thinkingMode: ThinkingMode = thinkingEnabled ? 'native' : 'off';
@@ -574,6 +574,14 @@ const ChatPanel = ({
                 }
                 return copy;
             });
+        });
+
+        es.addEventListener('context_compressed', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            setMessages(prev => [...prev, {
+                role: 'system' as const,
+                content: `Context compressed: ${data.original_messages} messages summarized to ${data.compressed_messages} to stay within model limits.`,
+            }]);
         });
 
         es.addEventListener('done', () => {
@@ -1120,6 +1128,20 @@ const ChatPanel = ({
                                                 maxH={isLong ? '200px' : undefined} overflowY={isLong ? 'auto' : undefined}>
                                                 {msg.content || '(empty)'}
                                             </Box>
+                                        </Box>
+                                    </Box>
+                                );
+                            }
+
+                            if (msg.role === 'system') {
+                                return (
+                                    <Box key={i} w="100%" py={1.5} px={compact ? 3 : 4}>
+                                        <Box maxW={maxW} mx={mx} px={3} py={2}
+                                            borderRadius="md" fontSize="xs"
+                                            bg="color-mix(in srgb, var(--accent) 6%, transparent)"
+                                            border="1px solid" borderColor="color-mix(in srgb, var(--accent) 20%, transparent)"
+                                            color="var(--text-muted)" textAlign="center">
+                                            {msg.content}
                                         </Box>
                                     </Box>
                                 );

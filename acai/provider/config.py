@@ -48,9 +48,13 @@ def _model_to_slug(model: str) -> str:
 # ---------------------------------------------------------------------------
 
 _MODEL_PARSER_MAP: list[tuple[str, str]] = [
-    # Qwen family — coder variants use XML, everything else uses hermes
-    ("qwen3-coder", "qwen3_xml"),
-    ("qwen3_coder", "qwen3_xml"),
+    # Qwen3 *Coder* (incl. Qwen3-Coder-Next-FP8): vLLM's ``qwen3_coder`` parser matches
+    # the tokenizer sentinels for ``<tool_call>`` / ``<function=…>``.  ``qwen3_xml`` is
+    # the generic streaming XML parser and can miss or mis-handle coder-only models.
+    ("qwen3-coder", "qwen3_coder"),
+    ("qwen3_coder", "qwen3_coder"),
+    ("qwen3.5-coder", "qwen3_coder"),
+    ("qwen3_5_coder", "qwen3_coder"),
     ("qwen3", "hermes"),
     ("qwen2.5", "hermes"),
     ("qwen2", "hermes"),
@@ -121,6 +125,11 @@ def _guess_tool_parser(model: str) -> str:
 def _guess_reasoning_parser(model: str) -> str | None:
     """Return the reasoning parser name for *model*, or ``None`` if not a reasoning model."""
     lower = model.lower().replace("/", "-").replace("_", "-")
+    # Do not pair the *chat* Qwen3 reasoning parser with Coder / Coder-Next models:
+    # the id substring ``qwen3`` matches ``qwen3-coder-next``, but ``--reasoning-parser
+    # qwen3`` breaks or races with the coder tool stream (XML tool calls stay in text).
+    if "qwen" in lower and "coder" in lower:
+        return None
     for pattern, parser in _MODEL_REASONING_PARSER_MAP:
         if pattern in lower:
             return parser

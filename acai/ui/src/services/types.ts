@@ -1,7 +1,7 @@
 // Type definitions for Açaí Agent Swarm
 
 export interface AgentMessage {
-    role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'phase' | 'print';
+    role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'phase' | 'print' | 'system';
     content: string;
     reasoning?: string;
     name?: string;

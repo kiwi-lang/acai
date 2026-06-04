@@ -374,37 +374,55 @@ class AgentStore:
 # Context compression
 # ------------------------------------------------------------------
 
+def _content_len(m: dict) -> int:
+    """Estimate character length of a message's content."""
+    c = m.get("content")
+    if isinstance(c, str):
+        return len(c)
+    if isinstance(c, list):
+        return sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
+    return 0
+
+
+def needs_compression(
+    messages: list[dict],
+    context_window: int,
+    *,
+    threshold: float = 0.70,
+    keep_recent: int = 6,
+) -> bool:
+    """Return True if the conversation should be compressed."""
+    total_chars = sum(_content_len(m) for m in messages if isinstance(m, dict))
+    estimated_tokens = total_chars // 4
+    limit = int(context_window * threshold)
+    return estimated_tokens > limit and len(messages) > keep_recent + 2
+
+
 def compress_messages(
     messages: list[dict],
     context_window: int,
-    llm_client,
+    llm,
     *,
-    threshold: float = 0.75,
+    threshold: float = 0.70,
     keep_recent: int = 6,
-    model: str | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], bool]:
     """Compress a conversation if it exceeds *threshold* of *context_window*.
+
+    Accepts any object with a ``complete(messages, **kwargs)`` method
+    (i.e. an :class:`acai.provider.base.LLM` adapter).
 
     Keeps the system message (index 0) and the last *keep_recent* messages
     intact.  Everything in between is summarized by the compressor LLM
     into a single ``{"role": "system", "content": "..."}`` message.
 
-    Returns the (possibly shortened) messages list.
+    Returns ``(messages, was_compressed)``.
     """
-    def _content_len(m: dict) -> int:
-        c = m.get("content")
-        if isinstance(c, str):
-            return len(c)
-        if isinstance(c, list):
-            return sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
-        return 0
-
     total_chars = sum(_content_len(m) for m in messages if isinstance(m, dict))
     estimated_tokens = total_chars // 4
     limit = int(context_window * threshold)
 
     if estimated_tokens <= limit or len(messages) <= keep_recent + 2:
-        return messages
+        return messages, False
 
     log.info(
         "Context compression triggered: ~%d tokens vs %d limit (%d messages)",
@@ -418,7 +436,7 @@ def compress_messages(
     recent_messages = messages[split:]
 
     if not old_messages:
-        return messages
+        return messages, False
 
     compressor_tpl_path = os.path.join(_PACKAGE_AGENTS_DIR, "compressor", "system.j2")
     try:
@@ -426,7 +444,7 @@ def compress_messages(
             compressor_tpl_src = f.read()
     except OSError:
         log.warning("Compressor template not found at %s", compressor_tpl_path)
-        return messages
+        return messages, False
 
     env = jinja2.Environment(
         undefined=jinja2.Undefined,
@@ -436,16 +454,18 @@ def compress_messages(
     prompt = tpl.render(messages=old_messages).strip()
 
     try:
-        resp = llm_client.chat.completions.create(
-            model=model or "default",
-            messages=[{"role": "user", "content": prompt}],
+        summary = llm.complete(
+            [{"role": "user", "content": prompt}],
             temperature=0.2,
             max_tokens=min(2048, context_window // 4),
         )
-        summary = resp.choices[0].message.content.strip()
+        if not summary or not summary.strip():
+            log.warning("Compression returned empty summary")
+            return messages, False
+        summary = summary.strip()
     except Exception:
         log.exception("Compression LLM call failed, keeping original messages")
-        return messages
+        return messages, False
 
     summary_msg = {
         "role": "system",
@@ -462,7 +482,7 @@ def compress_messages(
         "Compressed %d messages -> %d (%d old -> 1 summary + %d recent)",
         len(messages), len(compressed), len(old_messages), len(recent_messages),
     )
-    return compressed
+    return compressed, True
 
 
 # ------------------------------------------------------------------

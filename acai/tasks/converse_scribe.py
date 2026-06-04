@@ -152,6 +152,11 @@ class ConverseScribeGraph(TaskGraph):
         }}
 
     async def run(self, work: dict) -> AsyncIterator[dict]:  # noqa: C901
+        # Proactively compress the conversation if approaching context limit
+        compress_ev = await self._try_compress_conversation(work)
+        if compress_ev:
+            yield compress_ev
+
         try:
             # ==============================================================
             # Phase 1: Curator — find relevant knowledge paths

@@ -57,6 +57,11 @@ usage() {
       ACAI_UV_REQUIREMENTS=1 Try uv first for requirements.txt, then pip if resolution
                              fails. By default pip is used for requirements.txt because
                              the CUDA / vLLM pin set is often unsatisfiable under uv alone.
+      ACAI_SKIP_UI_BUILD=1 Skip npm build when acai/ui/dist/index.html already exists
+                             (from-source only). Otherwise Node.js + npm are required.
+
+    From-source installs run ``npm ci`` and ``npm run build`` in acai/ui so the
+    packaged app includes the static UI (same as ``make build-ui``).
 
     Resolution order: --source-root, ACAI_SOURCE_ROOT, then /opt/acai/.source if it
     is already a valid checkout, then the directory of this script, then the current
@@ -221,6 +226,36 @@ install_requirements_bundle() {
     "$py" -m pip install --upgrade -r "$req"
 }
 
+# Build the Vite/React bundle into acai/ui/dist so ``uv pip install <repo>`` picks up
+# package-data (see pyproject.toml / MANIFEST.in). PyPI wheels ship a pre-built dist;
+# source installs must build it here unless ACAI_SKIP_UI_BUILD=1 and dist exists.
+build_acai_ui_from_source() {
+    local root="$1"
+    local ui="$root/acai/ui"
+    [[ -f "$ui/package.json" ]] || fail "Missing UI project: $ui/package.json"
+
+    if [[ "${ACAI_SKIP_UI_BUILD:-0}" == "1" ]] || [[ "${ACAI_SKIP_UI_BUILD:-}" == "true" ]]; then
+        if [[ -f "$ui/dist/index.html" ]]; then
+            warn "Skipping UI build (ACAI_SKIP_UI_BUILD=1); using existing $ui/dist"
+            return 0
+        fi
+        fail "ACAI_SKIP_UI_BUILD=1 but $ui/dist/index.html is missing — build the UI or unset ACAI_SKIP_UI_BUILD"
+    fi
+
+    command -v npm &>/dev/null || fail "npm is required for --from-source (to build acai/ui). Install Node.js 18+, or pre-build the UI and use ACAI_SKIP_UI_BUILD=1."
+
+    info "Building web UI (npm ci + npm run build in acai/ui)…"
+    (
+        cd "$ui"
+        npm ci
+        export VITE_API_URL="${VITE_API_URL:-}"
+        export VITE_BASE_PATH="${VITE_BASE_PATH:-/}"
+        npm run build
+    )
+    [[ -f "$ui/dist/index.html" ]] || fail "UI build failed: expected $ui/dist/index.html"
+    ok "Web UI built → $ui/dist"
+}
+
 # -- Pre-flight -------------------------------------------------------------
 
 info "Installing Acai to $BASE"
@@ -278,6 +313,7 @@ if $INSTALL_FROM_SOURCE; then
     fi
     info "Syncing source tree to match origin in $SOURCE_ROOT (fetch + reset --hard; discards local divergence)..."
     sync_git_source_to_remote "$SOURCE_ROOT"
+    build_acai_ui_from_source "$SOURCE_ROOT"
     if [[ -f "$SOURCE_ROOT/requirements.txt" ]]; then
         info "Installing Python dependencies from requirements.txt (indexes + pins)..."
         install_requirements_bundle "$SOURCE_ROOT/requirements.txt"

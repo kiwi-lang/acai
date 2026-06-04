@@ -19,6 +19,11 @@ class ConverseGraph(TaskGraph):
     """
 
     async def run(self, work: dict) -> AsyncIterator[dict]:
+        # Proactively compress the conversation if approaching context limit
+        compress_ev = await self._try_compress_conversation(work)
+        if compress_ev:
+            yield compress_ev
+
         try:
             agent_name = work.get("agent", "default")
             payload = self.prepare(agent_name, work)

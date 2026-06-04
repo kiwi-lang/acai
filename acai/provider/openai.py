@@ -86,7 +86,8 @@ class OpenAIAdapter(LLM):
                              headers=self._headers(), stream=True,
                              timeout=self.timeout)
         _error_or_raise(resp)
-        yield from _parse_openai_sse(resp)
+        split_reasoning = kwargs.get("enable_thinking") is True
+        yield from _parse_openai_sse(resp, split_reasoning=split_reasoning)
 
 
 def fetch_models(prov: ProviderConfig) -> list[dict]:

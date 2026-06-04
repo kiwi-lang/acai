@@ -411,7 +411,6 @@ const StatusPage = () => {
                                             size="sm" placeholder="e.g. OpenAI"
                                             value={form.name}
                                             onChange={e => setField('name', e.target.value)}
-                                            disabled={!!editingName}
                                             bg="var(--bg-input)" color="var(--text-primary)"
                                             borderColor="var(--border-input)"
                                         />
