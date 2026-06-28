@@ -33,13 +33,15 @@ def _new_id() -> str:
 
 class ConversationMeta:
     __slots__ = ("id", "title", "description", "project", "task_id",
-                 "provider", "agent", "tags", "created_at")
+                 "provider", "agent", "tags", "created_at",
+                 "budget", "spent")
 
     def __init__(self, id: str, title: str = "", description: str = "",
                  project: str = "", task_id: str = "",
                  provider: str = "auto", agent: str = "",
                  tags: list[str] | None = None,
-                 created_at: float | None = None):
+                 created_at: float | None = None,
+                 budget: float = 0.0, spent: float = 0.0):
         self.id = id
         self.title = title or id
         self.description = description or ""
@@ -49,6 +51,15 @@ class ConversationMeta:
         self.agent = agent or ""
         self.tags = tags or []
         self.created_at = created_at or time.time()
+        self.budget = budget
+        self.spent = spent
+
+    @property
+    def remaining_budget(self) -> float | None:
+        """Return remaining budget in dollars, or None if unlimited."""
+        if self.budget <= 0:
+            return None
+        return max(0.0, self.budget - self.spent)
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -60,6 +71,8 @@ class ConversationMeta:
             "agent": self.agent,
             "tags": self.tags,
             "created_at": self.created_at,
+            "budget": self.budget,
+            "spent": self.spent,
         }
         if self.task_id:
             d["task_id"] = self.task_id
@@ -77,6 +90,8 @@ class ConversationMeta:
             agent=d.get("agent", ""),
             tags=d.get("tags", []),
             created_at=d.get("created_at"),
+            budget=float(d.get("budget", 0.0)),
+            spent=float(d.get("spent", 0.0)),
         )
 
 
@@ -384,6 +399,18 @@ class ChatStore:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp, path)
+
+    def record_spend(self, conv_id: str, cost: float) -> float:
+        """Add *cost* dollars to the conversation's spend tracker.
+
+        Returns the new total spent.
+        """
+        meta = self.get_meta(conv_id)
+        if meta is None:
+            return 0.0
+        new_spent = float(meta.get("spent", 0.0)) + cost
+        self.update_meta(conv_id, spent=new_spent)
+        return new_spent
 
     def _auto_title(self, conv_id: str, first_message: str) -> None:
         """Set the conversation title from the first user message."""

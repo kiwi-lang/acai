@@ -11,8 +11,12 @@ from fastapi.responses import JSONResponse
 
 from acai.provider.config import (
     ModelConfig,
+    ModelSet,
+    ModelSetEntry,
     ProviderConfig,
+    _model_set_to_dict,
     _provider_to_dict,
+    save_model_sets,
     save_providers,
 )
 from acai.provider.registry import _FETCH_MAP
@@ -193,5 +197,92 @@ def create_provider_router(config: AcaiConfig) -> APIRouter:
         except _requests.RequestException as exc:
             log.warning("fetch-models failed for %s: %s", name, exc)
             return JSONResponse({"error": str(exc)}, status_code=502)
+
+    # ------------------------------------------------------------------
+    # Model Sets
+    # ------------------------------------------------------------------
+
+    @router.get("/model-sets")
+    def list_model_sets():
+        return [_model_set_to_dict(ms) for ms in config.model_sets]
+
+    @router.post("/model-sets", status_code=201)
+    async def create_model_set(request: Request):
+        data = await _json_body(request)
+        name = data.get("name", "").strip()
+        if not name:
+            return JSONResponse({"error": "name is required"}, status_code=400)
+        if config.get_model_set(name) is not None:
+            return JSONResponse({"error": f"model set '{name}' already exists"}, status_code=409)
+
+        ms = ModelSet.from_dict({**data, "name": name})
+        if ms.default:
+            for existing in config.model_sets:
+                existing.default = False
+        config.model_sets.append(ms)
+        save_model_sets(config.workspace, config.model_sets)
+        return _model_set_to_dict(ms)
+
+    @router.get("/model-sets/{name}")
+    def get_model_set(name: str):
+        ms = config.get_model_set(name)
+        if ms is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return _model_set_to_dict(ms)
+
+    @router.put("/model-sets/{name}")
+    async def update_model_set(name: str, request: Request):
+        ms = config.get_model_set(name)
+        if ms is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+
+        data = await _json_body(request)
+
+        if "name" in data:
+            new_name = str(data["name"]).strip()
+            if not new_name:
+                return JSONResponse({"error": "name cannot be empty"}, status_code=400)
+            if new_name != name and config.get_model_set(new_name) is not None:
+                return JSONResponse(
+                    {"error": f"model set '{new_name}' already exists"},
+                    status_code=409,
+                )
+            ms.name = new_name
+
+        if "default" in data:
+            is_default = bool(data["default"])
+            if is_default:
+                for other in config.model_sets:
+                    other.default = False
+            ms.default = is_default
+
+        if "entries" in data and isinstance(data["entries"], list):
+            ms.entries = [
+                ModelSetEntry.from_dict(e) if isinstance(e, dict) else e
+                for e in data["entries"]
+            ]
+
+        save_model_sets(config.workspace, config.model_sets)
+        return _model_set_to_dict(ms)
+
+    @router.delete("/model-sets/{name}")
+    def delete_model_set(name: str):
+        ms = config.get_model_set(name)
+        if ms is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        config.model_sets = [m for m in config.model_sets if m.name != name]
+        save_model_sets(config.workspace, config.model_sets)
+        return {"deleted": True}
+
+    @router.post("/model-sets/{name}/default")
+    def set_default_model_set(name: str):
+        ms = config.get_model_set(name)
+        if ms is None:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        for other in config.model_sets:
+            other.default = False
+        ms.default = True
+        save_model_sets(config.workspace, config.model_sets)
+        return _model_set_to_dict(ms)
 
     return router

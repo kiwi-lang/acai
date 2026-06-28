@@ -369,6 +369,47 @@ export async function fetchAllModels(): Promise<ModelEntry[]> {
     return request<ModelEntry[]>('/models');
 }
 
+// Model Sets
+export interface ModelSetEntry {
+    provider: string;
+    model: string;
+    price_input: number;
+    price_output: number;
+    complexity_min: string;
+}
+
+export interface ModelSet {
+    name: string;
+    default: boolean;
+    entries: ModelSetEntry[];
+}
+
+export async function listModelSets(): Promise<ModelSet[]> {
+    return request<ModelSet[]>('/model-sets');
+}
+
+export async function createModelSet(data: Partial<ModelSet>): Promise<ModelSet> {
+    return request<ModelSet>('/model-sets', {
+        method: 'POST',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function updateModelSet(name: string, data: Partial<ModelSet>): Promise<ModelSet> {
+    return request<ModelSet>(`/model-sets/${encodeURIComponent(name)}`, {
+        method: 'PUT',
+        body: JSON.stringify(data),
+    });
+}
+
+export async function deleteModelSet(name: string): Promise<void> {
+    await request(`/model-sets/${encodeURIComponent(name)}`, { method: 'DELETE' });
+}
+
+export async function setDefaultModelSet(name: string): Promise<ModelSet> {
+    return request<ModelSet>(`/model-sets/${encodeURIComponent(name)}/default`, { method: 'POST' });
+}
+
 // Agents
 export async function listAgents(workflowId?: string): Promise<AgentDef[]> {
     const qs = workflowId ? `?workflow_id=${encodeURIComponent(workflowId)}` : '';

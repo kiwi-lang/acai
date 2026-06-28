@@ -335,6 +335,64 @@ class TaskGraph:
         return tool_defs, "\n".join(lines)
 
     # ------------------------------------------------------------------
+    # Model routing
+    # ------------------------------------------------------------------
+
+    def _route_model(self, agent_def: AgentDef, work: dict):
+        """Use ModelRouter to pick a model from the agent's model set.
+
+        Returns ``(ProviderConfig, ModelConfig, ModelSetEntry)`` or ``None``.
+        """
+        from acai.provider.router import ModelRouter
+
+        set_name = work.get("model_set") or agent_def.model_set or ""
+        complexity = work.get("complexity") or agent_def.complexity or "medium"
+
+        model_set = (
+            self.config.get_model_set(set_name) if set_name
+            else self.config.default_model_set()
+        )
+        if model_set is None:
+            return None
+
+        remaining_budget = None
+        if self.conversation:
+            meta = self.chat.get_meta(self.conversation)
+            if meta:
+                budget = float(meta.get("budget", 0))
+                if budget > 0:
+                    remaining_budget = max(0.0, budget - float(meta.get("spent", 0)))
+
+        router = ModelRouter(self.config.providers)
+        return router.select(model_set, complexity=complexity, remaining_budget=remaining_budget)
+
+    def _record_cost(self, payload: dict, done_data: dict) -> None:
+        """Record the cost of a completed LLM call against the session budget."""
+        entry_info = payload.get("_routed_entry")
+        if not entry_info or not self.conversation:
+            return
+
+        output_tokens = done_data.get("output_tokens", 0)
+        input_tokens = _estimate_tokens(payload.get("messages", []))
+
+        price_input = entry_info.get("price_input", 0.0)
+        price_output = entry_info.get("price_output", 0.0)
+        cost = (
+            (input_tokens * price_input) / 1_000_000
+            + (output_tokens * price_output) / 1_000_000
+        )
+        if cost > 0:
+            self.chat.record_spend(self.conversation, cost)
+            self.audit.record(
+                "dispatch.cost", phase="dispatch",
+                cost_usd=round(cost, 8),
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                provider=entry_info.get("provider", ""),
+                model=entry_info.get("model", ""),
+            )
+
+    # ------------------------------------------------------------------
     # prepare — render an agent template into an LLM payload
     # ------------------------------------------------------------------
 
@@ -412,6 +470,17 @@ class TaskGraph:
             # ---------------------------------------------------------
 
             provider_info = work.get("provider_override")
+
+            # -- Model routing via model sets --------------------------
+            routed_entry = None
+            if not provider_info and agent_def and self.config.model_sets:
+                routed_entry = self._route_model(agent_def, work)
+                if routed_entry is not None:
+                    prov_cfg, model_cfg, entry = routed_entry
+                    provider_info = {"name": prov_cfg.name, "model": model_cfg.slug}
+                    routed_entry = entry
+            # ---------------------------------------------------------
+
             if agent_def:
                 override_name = (
                     provider_info.get("name")
@@ -442,6 +511,14 @@ class TaskGraph:
 
             if provider_info:
                 payload["provider"] = provider_info
+
+            if routed_entry is not None:
+                payload["_routed_entry"] = {
+                    "provider": routed_entry.provider,
+                    "model": routed_entry.model,
+                    "price_input": routed_entry.price_input,
+                    "price_output": routed_entry.price_output,
+                }
 
             if task_proxy.enable_thinking is not None:
                 payload["enable_thinking"] = task_proxy.enable_thinking
@@ -511,6 +588,7 @@ class TaskGraph:
                                 itl_ms=itl,
                                 generation_ms=gen,
                             )
+                        self._record_cost(payload, edata)
                         return
 
                     if etype == "token" and stream_mode == "reasoning":

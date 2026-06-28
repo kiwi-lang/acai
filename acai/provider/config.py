@@ -44,6 +44,66 @@ def _model_to_slug(model: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# ModelSetEntry / ModelSet — named pools of models for routing
+# ---------------------------------------------------------------------------
+
+COMPLEXITY_LEVELS = ("low", "medium", "high")
+
+
+@dataclass
+class ModelSetEntry:
+    """A single model available for routing within a :class:`ModelSet`.
+
+    Pricing is in US dollars per million tokens (input and output
+    separately).  ``complexity_min`` declares the minimum task complexity
+    this model is suitable for — a model marked ``"high"`` will only be
+    selected when the task complexity is ``"high"``.
+    """
+
+    provider: str = ""
+    model: str = ""
+    price_input: float = 0.0
+    price_output: float = 0.0
+    complexity_min: str = "low"
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ModelSetEntry:
+        return cls(
+            provider=d.get("provider", ""),
+            model=d.get("model", ""),
+            price_input=float(d.get("price_input", 0.0)),
+            price_output=float(d.get("price_output", 0.0)),
+            complexity_min=d.get("complexity_min", "low"),
+        )
+
+
+@dataclass
+class ModelSet:
+    """A named collection of model entries used for automatic routing.
+
+    When ``default`` is ``True`` this set is used for agents that don't
+    explicitly specify a model set.
+    """
+
+    name: str = ""
+    default: bool = False
+    entries: list[ModelSetEntry] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ModelSet:
+        raw_entries = d.get("entries", [])
+        entries = [
+            ModelSetEntry.from_dict(e) if isinstance(e, dict) else e
+            for e in raw_entries
+        ]
+        return cls(
+            name=d.get("name", ""),
+            default=bool(d.get("default", False)),
+            entries=entries,
+        )
+
+
+# ---------------------------------------------------------------------------
 # Tool-call parser heuristics (used by the default vLLM launch template)
 # ---------------------------------------------------------------------------
 
@@ -353,6 +413,17 @@ def _load_providers_from_global() -> list[ProviderConfig]:
     return [ProviderConfig.from_dict(d) for d in raw if isinstance(d, dict)]
 
 
+def _load_model_sets_from_global() -> list[ModelSet]:
+    """Read the ``model_sets`` list from the global config dict."""
+    from acai.orchestrator.config import config_global
+
+    config = config_global.get() or {}
+    raw = config.get("model_sets")
+    if not isinstance(raw, list):
+        return []
+    return [ModelSet.from_dict(d) for d in raw if isinstance(d, dict)]
+
+
 # ---------------------------------------------------------------------------
 # Provider persistence (workspace/acai.yaml)
 # ---------------------------------------------------------------------------
@@ -412,6 +483,62 @@ def save_providers(workspace: str, providers: list[ProviderConfig]) -> None:
             existing = yaml.safe_load(f) or {}
 
     existing["providers"] = [_provider_to_dict(p) for p in providers]
+
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        yaml.safe_dump(existing, f, default_flow_style=False, sort_keys=False)
+    os.replace(tmp, path)
+
+
+# ---------------------------------------------------------------------------
+# Model set persistence (workspace/acai.yaml)
+# ---------------------------------------------------------------------------
+
+def _model_set_entry_to_dict(e: ModelSetEntry) -> dict:
+    return {
+        "provider": e.provider,
+        "model": e.model,
+        "price_input": e.price_input,
+        "price_output": e.price_output,
+        "complexity_min": e.complexity_min,
+    }
+
+
+def _model_set_to_dict(ms: ModelSet) -> dict:
+    d: dict = {"name": ms.name, "default": ms.default}
+    if ms.entries:
+        d["entries"] = [_model_set_entry_to_dict(e) for e in ms.entries]
+    return d
+
+
+def load_model_sets(workspace: str) -> list[ModelSet]:
+    """Read the ``model_sets`` list from ``workspace/acai.yaml``."""
+    path = _yaml_path(workspace)
+    if not os.path.isfile(path):
+        return []
+    import yaml
+
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    raw = data.get("model_sets")
+    if not isinstance(raw, list):
+        return []
+    return [ModelSet.from_dict(d) for d in raw if isinstance(d, dict)]
+
+
+def save_model_sets(workspace: str, model_sets: list[ModelSet]) -> None:
+    """Write back only the ``model_sets`` section of ``workspace/acai.yaml``."""
+    import yaml
+
+    path = _yaml_path(workspace)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+
+    existing: dict = {}
+    if os.path.isfile(path):
+        with open(path, encoding="utf-8") as f:
+            existing = yaml.safe_load(f) or {}
+
+    existing["model_sets"] = [_model_set_to_dict(ms) for ms in model_sets]
 
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:

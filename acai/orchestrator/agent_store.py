@@ -59,6 +59,8 @@ class AgentDef:
     max_iterations: int = 20
     approval_required: bool = False
     compressor: str = "compressor"
+    complexity: str = "medium"
+    model_set: str = ""
     provider_allow: list[str] = field(default_factory=list)
     provider_forbid: list[str] = field(default_factory=list)
     created_at: str = ""

@@ -6,9 +6,12 @@ import {
 import {
     getStatus, listEvents, listProviders, createProvider,
     updateProvider, deleteProvider, activateProvider, fetchProviderModels,
+    listModelSets, createModelSet, updateModelSet, deleteModelSet, setDefaultModelSet,
 } from '../services/api';
+import type { ModelSet, ModelSetEntry } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
 import type { AgentEvent, AgentStatus, ModelConfig, Provider } from '../services/types';
+import DevServices from './DevServices';
 
 const EVENT_COLORS: Record<string, string> = {
     new_requirement: 'blue',
@@ -238,6 +241,87 @@ const StatusPage = () => {
 
     const setField = (key: keyof ProviderFormData, value: string) =>
         setForm(prev => ({ ...prev, [key]: value }));
+
+    // ------------------------------------------------------------------
+    // Model Sets state and handlers
+    // ------------------------------------------------------------------
+    const [modelSets, setModelSets] = useState<ModelSet[]>([]);
+    const [showMsForm, setShowMsForm] = useState(false);
+    const [editingMsName, setEditingMsName] = useState<string | null>(null);
+    const [msForm, setMsForm] = useState<ModelSet>({ name: '', default: false, entries: [] });
+    const [msFormError, setMsFormError] = useState('');
+    const [msBusy, setMsBusy] = useState(false);
+
+    const COMPLEXITY_LEVELS = ['low', 'medium', 'high'];
+
+    const refreshModelSets = useCallback(() => {
+        listModelSets().then(setModelSets).catch(() => {});
+    }, []);
+
+    useEffect(() => { refreshModelSets(); }, [refreshModelSets]);
+
+    const openMsAdd = () => {
+        setMsForm({ name: '', default: modelSets.length === 0, entries: [] });
+        setEditingMsName(null);
+        setMsFormError('');
+        setShowMsForm(true);
+    };
+
+    const openMsEdit = (ms: ModelSet) => {
+        setMsForm({ ...ms, entries: ms.entries.map(e => ({ ...e })) });
+        setEditingMsName(ms.name);
+        setMsFormError('');
+        setShowMsForm(true);
+    };
+
+    const handleMsSubmit = async () => {
+        if (!msForm.name.trim()) { setMsFormError('Name is required'); return; }
+        setMsBusy(true);
+        setMsFormError('');
+        try {
+            if (editingMsName) {
+                await updateModelSet(editingMsName, msForm);
+            } else {
+                await createModelSet(msForm);
+            }
+            setShowMsForm(false);
+            refreshModelSets();
+        } catch (err) {
+            setMsFormError(err instanceof Error ? err.message : 'Failed');
+        } finally {
+            setMsBusy(false);
+        }
+    };
+
+    const handleMsDelete = async (name: string) => {
+        setMsBusy(true);
+        try { await deleteModelSet(name); refreshModelSets(); }
+        catch { /* ignore */ } finally { setMsBusy(false); }
+    };
+
+    const handleMsDefault = async (name: string) => {
+        setMsBusy(true);
+        try { await setDefaultModelSet(name); refreshModelSets(); }
+        catch { /* ignore */ } finally { setMsBusy(false); }
+    };
+
+    const addMsEntry = () => {
+        setMsForm(prev => ({
+            ...prev,
+            entries: [...prev.entries, { provider: '', model: '', price_input: 0, price_output: 0, complexity_min: 'low' }],
+        }));
+    };
+
+    const removeMsEntry = (idx: number) => {
+        setMsForm(prev => ({ ...prev, entries: prev.entries.filter((_, i) => i !== idx) }));
+    };
+
+    const updateMsEntry = (idx: number, key: keyof ModelSetEntry, value: string | number) => {
+        setMsForm(prev => ({
+            ...prev,
+            entries: prev.entries.map((e, i) => i === idx ? { ...e, [key]: value } : e),
+        }));
+    };
 
     return (
         <Box h="100vh" w="100%" bg="var(--bg-page)" overflowY="auto" p={6}>
@@ -693,6 +777,291 @@ const StatusPage = () => {
                     )}
                 </Box>
 
+                {/* Model Sets */}
+                <Box mb={8}>
+                    <HStack justify="space-between" mb={3}>
+                        <Text fontWeight="semibold" color="var(--text-heading)" fontSize="lg">
+                            Model Sets
+                        </Text>
+                        <IconButton
+                            aria-label="Add model set"
+                            size="sm"
+                            variant="outline"
+                            onClick={openMsAdd}
+                            borderColor="var(--border-primary)"
+                            color="var(--text-primary)"
+                        >
+                            <PlusIcon />
+                        </IconButton>
+                    </HStack>
+
+                    {modelSets.length === 0 && !showMsForm && (
+                        <Text color="var(--text-muted)" fontSize="sm" py={4} textAlign="center">
+                            No model sets configured. Create one to enable automatic model routing.
+                        </Text>
+                    )}
+
+                    <VStack gap={3} align="stretch">
+                        {modelSets.map(ms => (
+                            <Box
+                                key={ms.name}
+                                p={4}
+                                bg="var(--bg-card)"
+                                borderRadius="lg"
+                                border="2px solid"
+                                borderColor={ms.default ? 'var(--accent)' : 'var(--border-primary)'}
+                            >
+                                <HStack justify="space-between" mb={2}>
+                                    <HStack gap={2}>
+                                        <Text fontWeight="bold" color="var(--text-heading)" fontSize="sm">
+                                            {ms.name}
+                                        </Text>
+                                        {ms.default && (
+                                            <Badge colorScheme="green" fontSize="2xs">default</Badge>
+                                        )}
+                                        <Badge variant="outline" fontSize="2xs">
+                                            {ms.entries.length} model{ms.entries.length !== 1 ? 's' : ''}
+                                        </Badge>
+                                    </HStack>
+                                    <HStack gap={1}>
+                                        {!ms.default && (
+                                            <IconButton
+                                                aria-label="Set default"
+                                                size="xs"
+                                                variant="ghost"
+                                                onClick={() => handleMsDefault(ms.name)}
+                                                color="var(--accent)"
+                                                title="Set as default model set"
+                                                disabled={msBusy}
+                                            >
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                                                    <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                                                </svg>
+                                            </IconButton>
+                                        )}
+                                        <IconButton
+                                            aria-label="Edit" size="xs" variant="ghost"
+                                            onClick={() => openMsEdit(ms)}
+                                            color="var(--text-tertiary)"
+                                        >
+                                            <EditIcon />
+                                        </IconButton>
+                                        <IconButton
+                                            aria-label="Delete" size="xs" variant="ghost"
+                                            onClick={() => handleMsDelete(ms.name)}
+                                            color="var(--text-error)" disabled={msBusy}
+                                        >
+                                            <TrashIcon />
+                                        </IconButton>
+                                    </HStack>
+                                </HStack>
+
+                                {ms.entries.length > 0 && (
+                                    <VStack gap={1} align="stretch">
+                                        {ms.entries.map((entry, idx) => (
+                                            <HStack key={idx} gap={3} fontSize="xs" color="var(--text-secondary)">
+                                                <Text fontFamily="mono" minW="120px">{entry.provider}/{entry.model}</Text>
+                                                <Badge variant="outline" fontSize="2xs">{entry.complexity_min}</Badge>
+                                                <Text color="var(--text-muted)">
+                                                    ${entry.price_input}/{entry.price_output} per Mtok
+                                                </Text>
+                                            </HStack>
+                                        ))}
+                                    </VStack>
+                                )}
+                            </Box>
+                        ))}
+                    </VStack>
+
+                    {/* Model Set Add/Edit form */}
+                    {showMsForm && (
+                        <Box
+                            mt={3} p={4} bg="var(--bg-elevated)" borderRadius="lg"
+                            border="1px solid" borderColor="var(--border-primary)"
+                        >
+                            <Text fontWeight="semibold" color="var(--text-heading)" mb={3} fontSize="sm">
+                                {editingMsName ? `Edit "${editingMsName}"` : 'New Model Set'}
+                            </Text>
+
+                            {msFormError && (
+                                <Box p={2} bg="var(--bg-error)" borderRadius="md" mb={3}>
+                                    <Text color="var(--text-error)" fontSize="xs">{msFormError}</Text>
+                                </Box>
+                            )}
+
+                            <VStack gap={3} align="stretch">
+                                <HStack gap={3}>
+                                    <Box flex={1}>
+                                        <Text fontSize="xs" color="var(--text-muted)" mb={1}>Name</Text>
+                                        <Input
+                                            size="sm" placeholder="e.g. default"
+                                            value={msForm.name}
+                                            onChange={e => setMsForm(prev => ({ ...prev, name: e.target.value }))}
+                                            bg="var(--bg-input)" color="var(--text-primary)"
+                                            borderColor="var(--border-input)"
+                                        />
+                                    </Box>
+                                    <Box pt={5}>
+                                        <HStack gap={2}>
+                                            <input
+                                                type="checkbox"
+                                                checked={msForm.default}
+                                                onChange={e => setMsForm(prev => ({ ...prev, default: e.target.checked }))}
+                                            />
+                                            <Text fontSize="xs" color="var(--text-muted)">Default</Text>
+                                        </HStack>
+                                    </Box>
+                                </HStack>
+
+                                {/* Entries */}
+                                <Box>
+                                    <HStack justify="space-between" mb={2}>
+                                        <Text fontSize="xs" fontWeight="semibold" color="var(--text-heading)">
+                                            Models {msForm.entries.length > 0 && `(${msForm.entries.length})`}
+                                        </Text>
+                                        <Box
+                                            as="button" px={2} py={0.5} borderRadius="md" fontSize="xs"
+                                            border="1px solid" borderColor="var(--border-primary)"
+                                            color="var(--text-tertiary)" cursor="pointer"
+                                            onClick={addMsEntry}
+                                            _hover={{ borderColor: 'var(--accent)' }}
+                                        >
+                                            + Add Model
+                                        </Box>
+                                    </HStack>
+
+                                    {msForm.entries.length === 0 ? (
+                                        <Text fontSize="xs" color="var(--text-muted)" py={2}>
+                                            No models in this set. Add provider:model entries.
+                                        </Text>
+                                    ) : (
+                                        <VStack gap={2} align="stretch">
+                                            {msForm.entries.map((entry, idx) => (
+                                                <Box
+                                                    key={idx} p={2} bg="var(--bg-card)" borderRadius="md"
+                                                    border="1px solid" borderColor="var(--border-primary)"
+                                                >
+                                                    <HStack gap={2} mb={1}>
+                                                        <Box flex={1}>
+                                                            <Text fontSize="2xs" color="var(--text-muted)">Provider</Text>
+                                                            <NativeSelect.Root size="sm">
+                                                                <NativeSelect.Field
+                                                                    value={entry.provider}
+                                                                    onChange={e => updateMsEntry(idx, 'provider', e.target.value)}
+                                                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                                                    borderColor="var(--border-input)" fontSize="xs"
+                                                                >
+                                                                    <option value="" style={{ background: 'var(--option-bg)' }}>Select...</option>
+                                                                    {providers.map(p => (
+                                                                        <option key={p.name} value={p.name} style={{ background: 'var(--option-bg)' }}>
+                                                                            {p.name}
+                                                                        </option>
+                                                                    ))}
+                                                                </NativeSelect.Field>
+                                                            </NativeSelect.Root>
+                                                        </Box>
+                                                        <Box flex={1}>
+                                                            <Text fontSize="2xs" color="var(--text-muted)">Model</Text>
+                                                            <NativeSelect.Root size="sm">
+                                                                <NativeSelect.Field
+                                                                    value={entry.model}
+                                                                    onChange={e => updateMsEntry(idx, 'model', e.target.value)}
+                                                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                                                    borderColor="var(--border-input)" fontSize="xs"
+                                                                >
+                                                                    <option value="" style={{ background: 'var(--option-bg)' }}>Select...</option>
+                                                                    {(providers.find(p => p.name === entry.provider)?.models || []).map(m => (
+                                                                        <option key={m.slug} value={m.slug} style={{ background: 'var(--option-bg)' }}>
+                                                                            {m.name || m.slug}
+                                                                        </option>
+                                                                    ))}
+                                                                </NativeSelect.Field>
+                                                            </NativeSelect.Root>
+                                                        </Box>
+                                                        <Box>
+                                                            <Text fontSize="2xs" color="var(--text-muted)">Complexity</Text>
+                                                            <NativeSelect.Root size="sm">
+                                                                <NativeSelect.Field
+                                                                    value={entry.complexity_min}
+                                                                    onChange={e => updateMsEntry(idx, 'complexity_min', e.target.value)}
+                                                                    bg="var(--bg-input)" color="var(--text-primary)"
+                                                                    borderColor="var(--border-input)" fontSize="xs"
+                                                                >
+                                                                    {COMPLEXITY_LEVELS.map(l => (
+                                                                        <option key={l} value={l} style={{ background: 'var(--option-bg)' }}>{l}</option>
+                                                                    ))}
+                                                                </NativeSelect.Field>
+                                                            </NativeSelect.Root>
+                                                        </Box>
+                                                        <Box
+                                                            as="button" cursor="pointer" pt={4}
+                                                            color="var(--text-error)" _hover={{ opacity: 0.8 }}
+                                                            onClick={() => removeMsEntry(idx)}
+                                                        >
+                                                            <TrashIcon />
+                                                        </Box>
+                                                    </HStack>
+                                                    <HStack gap={2}>
+                                                        <Box flex={1}>
+                                                            <Text fontSize="2xs" color="var(--text-muted)">Input $/Mtok</Text>
+                                                            <Input
+                                                                size="xs" type="number" step="0.01" placeholder="0.00"
+                                                                value={entry.price_input || ''}
+                                                                onChange={e => updateMsEntry(idx, 'price_input', parseFloat(e.target.value) || 0)}
+                                                                bg="var(--bg-input)" color="var(--text-primary)"
+                                                                borderColor="var(--border-input)" fontSize="xs"
+                                                            />
+                                                        </Box>
+                                                        <Box flex={1}>
+                                                            <Text fontSize="2xs" color="var(--text-muted)">Output $/Mtok</Text>
+                                                            <Input
+                                                                size="xs" type="number" step="0.01" placeholder="0.00"
+                                                                value={entry.price_output || ''}
+                                                                onChange={e => updateMsEntry(idx, 'price_output', parseFloat(e.target.value) || 0)}
+                                                                bg="var(--bg-input)" color="var(--text-primary)"
+                                                                borderColor="var(--border-input)" fontSize="xs"
+                                                            />
+                                                        </Box>
+                                                    </HStack>
+                                                </Box>
+                                            ))}
+                                        </VStack>
+                                    )}
+                                </Box>
+
+                                <HStack gap={2} justify="flex-end">
+                                    <Box
+                                        as="button"
+                                        px={4} py={1.5}
+                                        borderRadius="md"
+                                        fontSize="sm"
+                                        bg="transparent"
+                                        color="var(--text-secondary)"
+                                        cursor="pointer"
+                                        onClick={() => setShowMsForm(false)}
+                                    >
+                                        Cancel
+                                    </Box>
+                                    <Box
+                                        as="button"
+                                        px={4} py={1.5}
+                                        borderRadius="md"
+                                        fontSize="sm"
+                                        fontWeight="medium"
+                                        bg="var(--accent)"
+                                        color="var(--text-inverse)"
+                                        cursor="pointer"
+                                        onClick={handleMsSubmit}
+                                        _hover={{ bg: 'var(--accent-hover)' }}
+                                    >
+                                        {msBusy ? <Spinner size="xs" /> : editingMsName ? 'Save' : 'Add'}
+                                    </Box>
+                                </HStack>
+                            </VStack>
+                        </Box>
+                    )}
+                </Box>
+
                 {/* Queue */}
                 {status && (
                     <VStack gap={4} mb={8} align="stretch">
@@ -709,6 +1078,11 @@ const StatusPage = () => {
                         </Box>
                     </VStack>
                 )}
+
+                {/* Dev Services */}
+                <Box mb={6}>
+                    <DevServices />
+                </Box>
 
                 {/* Events */}
                 <Heading size="md" color="var(--text-heading)" mb={4}>Events</Heading>

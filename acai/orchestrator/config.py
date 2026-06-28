@@ -360,12 +360,49 @@ class TTSConfig:
     volume: float = defaultfield("tts.volume", float, 1.0)
 
 
+@dataclass
+class DevServiceConfig:
+    """Schema for a single dev service entry."""
+
+    name: str = ""
+    command: str = ""
+    cwd: str = "."
+    env: dict = field(default_factory=dict)
+    auto_start: bool = True
+
+
+def _load_dev_services() -> list[DevServiceConfig]:
+    """Load dev.services from the global config dict."""
+    raw = (config_global.get() or {}).get("dev", {}).get("services", [])
+    result = []
+    for entry in raw:
+        result.append(DevServiceConfig(
+            name=entry.get("name", ""),
+            command=entry.get("command", ""),
+            cwd=entry.get("cwd", "."),
+            env=entry.get("env", {}),
+            auto_start=entry.get("auto_start", True),
+        ))
+    return result
+
+
+@dataclass
+class DevConfig:
+    """Dev spawner settings (used by ``acai dev``)."""
+
+    port: int = defaultfield("dev.port", int, 5100)
+    services: list[DevServiceConfig] = field(default_factory=_load_dev_services)
+
+
 from acai.provider.config import (  # noqa: F401
     ModelConfig,
+    ModelSet,
+    ModelSetEntry,
     ProviderConfig,
     _model_to_slug,
     _default_provider,
     _load_providers_from_global,
+    _load_model_sets_from_global,
 )
 
 
@@ -382,7 +419,9 @@ class AcaiConfig:
     audit: AuditConfig = field(default_factory=AuditConfig)
     ci: CIConfig = field(default_factory=CIConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
+    dev: DevConfig = field(default_factory=DevConfig)
     providers: list[ProviderConfig] = field(default_factory=_load_providers_from_global)
+    model_sets: list[ModelSet] = field(default_factory=_load_model_sets_from_global)
     _active_name: str = ""
 
     def __post_init__(self):
@@ -437,11 +476,28 @@ class AcaiConfig:
                 return p
         return None
 
+    def default_model_set(self) -> ModelSet | None:
+        """Return the model set marked as default, or the first one."""
+        for ms in self.model_sets:
+            if ms.default:
+                return ms
+        return self.model_sets[0] if self.model_sets else None
+
+    def get_model_set(self, name: str) -> ModelSet | None:
+        """Look up a model set by name."""
+        for ms in self.model_sets:
+            if ms.name == name:
+                return ms
+        return None
+
 
 from acai.provider.config import (  # noqa: F401
     load_providers,
     save_providers,
     _provider_to_dict,
+    load_model_sets,
+    save_model_sets,
+    _model_set_to_dict,
 )
 
 

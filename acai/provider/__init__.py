@@ -9,13 +9,20 @@ Usage::
 
 from acai.provider.config import (  # noqa: F401
     ModelConfig,
+    ModelSet,
+    ModelSetEntry,
+    COMPLEXITY_LEVELS,
     ProviderConfig,
     _model_to_slug,
     _provider_to_dict,
+    _model_set_to_dict,
     _default_provider,
     _load_providers_from_global,
+    _load_model_sets_from_global,
     load_providers,
     save_providers,
+    load_model_sets,
+    save_model_sets,
 )
 
 from acai.provider.base import (  # noqa: F401
@@ -34,6 +41,7 @@ from acai.provider.server import (  # noqa: F401
 )
 
 from acai.provider.scheduler import ProviderScheduler  # noqa: F401
+from acai.provider.router import ModelRouter  # noqa: F401
 
 from acai.provider.registry import create_llm  # noqa: F401
 

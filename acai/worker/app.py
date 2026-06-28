@@ -195,7 +195,10 @@ def create_worker_router(
                             "arguments": event.arguments,
                         })
                     elif isinstance(event, StreamDone):
-                        yield _sse_event("done", {"task_id": task_id})
+                        yield _sse_event("done", {
+                            "task_id": task_id,
+                            "output_tokens": idx,
+                        })
                         log.info("[%s] llm/complete done  tokens=%d", task_id, idx)
 
             except Exception as exc:

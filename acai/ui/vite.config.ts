@@ -5,18 +5,22 @@ export default defineConfig({
   plugins: [react()],
   base: process.env.VITE_BASE_PATH || '/',
   server: {
-    port: 8081,
+    port: 5101,
     host: true,
     open: true,
     proxy: {
       '/api/agent': {
-        target: 'http://localhost:5050',
+        target: 'http://localhost:5102',
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api/, '')
       },
       '/socket.io': {
-        target: 'http://localhost:5050',
+        target: 'http://localhost:5102',
         ws: true,
+        changeOrigin: true,
+      },
+      '/dev': {
+        target: 'http://localhost:5100',
         changeOrigin: true,
       }
     }
