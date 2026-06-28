@@ -10,7 +10,7 @@ import sys
 from flask import Flask, jsonify, request, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask.json.provider import DefaultJSONProvider
-from acai.tools import system_monitor
+from acai.worker import system_monitor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, '..', '..'))

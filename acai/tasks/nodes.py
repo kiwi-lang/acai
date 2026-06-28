@@ -1459,26 +1459,53 @@ class LoadKnowledgeNode(NodeType):
         import os
         from acai.knowledge import KnowledgeStore
 
-        paths = ctx.inputs.get("paths", [])
+        raw_paths = ctx.inputs.get("paths", [])
+        paths = raw_paths
+        parse_error = ""
+
         if isinstance(paths, str):
             try:
                 paths = json.loads(paths)
             except (json.JSONDecodeError, TypeError):
-                paths = [p.strip() for p in paths.split(",") if p.strip()]
+                if paths.strip():
+                    paths = [p.strip() for p in paths.split(",") if p.strip()]
+                else:
+                    parse_error = "LoadKnowledge received empty string for paths input."
+                    paths = []
 
         if not isinstance(paths, list):
+            parse_error = (
+                f"LoadKnowledge received non-list paths input "
+                f"(type={type(raw_paths).__name__}): {str(raw_paths)[:200]}"
+            )
             paths = []
+
+        if parse_error:
+            log.warning(parse_error)
+            yield {"type": "warning", "data": {"message": parse_error}}
 
         knowledge_dir = os.path.join(ctx.graph.config.workspace, "knowledge")
         store = KnowledgeStore(knowledge_dir)
 
         parts: list[str] = []
+        missing: list[str] = []
         for doc_path in paths[:10]:
-            doc = store.get_by_path(str(doc_path))
+            try:
+                doc = store.get_by_path(str(doc_path))
+            except Exception as exc:
+                log.warning("LoadKnowledge: error reading '%s': %s",
+                            doc_path, exc)
+                missing.append(str(doc_path))
+                continue
             if doc and doc.content:
                 parts.append(f"### {doc.subject}/{doc.subsubject}/{doc.title}\n\n{doc.content}")
             else:
-                log.debug("load_knowledge: %r not found or empty", doc_path)
+                missing.append(str(doc_path))
+
+        if missing:
+            msg = f"LoadKnowledge: {len(missing)} path(s) not found or empty: {missing}"
+            log.warning(msg)
+            yield {"type": "warning", "data": {"message": msg}}
 
         knowledge_context = "\n\n---\n\n".join(parts) if parts else ""
         log.info("load_knowledge: loaded %d/%d docs, %d chars",

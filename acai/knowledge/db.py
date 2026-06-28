@@ -4,6 +4,10 @@ The database stores document metadata (subject, subsubject, title, tags,
 faceted classification) for fast queries.  The actual document *content*
 stays on the filesystem — this index is purely for lookup and filtering.
 
+An FTS5 full-text index (``knowledge_fts``) is maintained alongside the
+metadata table.  It enables ranked keyword search with Porter stemming
+and BM25 scoring via :meth:`KnowledgeDB.fts_search`.
+
 Faceted classification follows PMEST (Ranganathan):
     - personality: what (entity/topic)
     - matter: material (medium/substance)
@@ -30,12 +34,41 @@ from sqlalchemy import (
     create_engine,
     func,
     select,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .models import FACETS, Facets, slugify
 
 log = logging.getLogger(__name__)
+
+# FTS5 virtual table DDL — tokenize with Porter stemmer + unicode61.
+_FTS_CREATE = """
+CREATE VIRTUAL TABLE IF NOT EXISTS knowledge_fts USING fts5(
+    path,
+    title,
+    tags,
+    content,
+    tokenize = 'porter unicode61'
+);
+"""
+
+
+_STOP_WORDS = frozenset({
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "have", "has", "had", "do", "does", "did", "will", "would", "could",
+    "should", "may", "might", "shall", "can", "need", "dare", "ought",
+    "i", "me", "my", "we", "our", "you", "your", "he", "him", "his",
+    "she", "her", "it", "its", "they", "them", "their", "what", "which",
+    "who", "whom", "this", "that", "these", "those", "am", "or", "and",
+    "but", "if", "of", "at", "by", "for", "with", "about", "against",
+    "between", "through", "during", "before", "after", "above", "below",
+    "to", "from", "up", "down", "in", "out", "on", "off", "over", "under",
+    "again", "further", "then", "once", "here", "there", "when", "where",
+    "why", "how", "all", "each", "every", "both", "few", "more", "most",
+    "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+    "so", "than", "too", "very", "just", "don", "now", "also", "like",
+})
 
 
 # ------------------------------------------------------------------
@@ -123,6 +156,7 @@ class KnowledgeDB:
 
         with self._engine.connect() as conn:
             conn.exec_driver_sql("PRAGMA journal_mode=WAL")
+            conn.exec_driver_sql(_FTS_CREATE)
             conn.commit()
 
     def _session(self) -> Session:
@@ -141,8 +175,12 @@ class KnowledgeDB:
         tags: list[str] | None = None,
         facets: Facets | dict[str, str] | None = None,
         updated_at: float = 0.0,
+        content: str = "",
     ) -> None:
-        """Insert or update a document's metadata."""
+        """Insert or update a document's metadata.
+
+        When *content* is provided, the FTS5 index is also updated.
+        """
         path = f"{subject}/{subsubject}/{title}"
         tags_json = json.dumps(tags or [])
 
@@ -175,6 +213,10 @@ class KnowledgeDB:
                 existing.updated_at = updated_at
             session.commit()
 
+        if content:
+            tags_text = " ".join(tags or [])
+            self._fts_upsert(path, title, tags_text, content)
+
     def remove(self, path: str) -> bool:
         """Remove a document from the index. Returns True if it existed."""
         with self._session() as session:
@@ -183,7 +225,8 @@ class KnowledgeDB:
                 return False
             session.delete(row)
             session.commit()
-            return True
+        self._fts_remove(path)
+        return True
 
     # ------------------------------------------------------------------
     # Query operations
@@ -293,6 +336,83 @@ class KnowledgeDB:
             return session.execute(stmt).scalar() or 0
 
     # ------------------------------------------------------------------
+    # FTS5 full-text search
+    # ------------------------------------------------------------------
+
+    def _fts_upsert(self, path: str, title: str, tags: str, content: str) -> None:
+        """Insert or replace a document in the FTS5 index."""
+        with self._engine.connect() as conn:
+            conn.exec_driver_sql(
+                "DELETE FROM knowledge_fts WHERE path = ?", (path,)
+            )
+            conn.exec_driver_sql(
+                "INSERT INTO knowledge_fts (path, title, tags, content) VALUES (?, ?, ?, ?)",
+                (path, title, tags, content),
+            )
+            conn.commit()
+
+    def _fts_remove(self, path: str) -> None:
+        """Remove a document from the FTS5 index."""
+        with self._engine.connect() as conn:
+            conn.exec_driver_sql(
+                "DELETE FROM knowledge_fts WHERE path = ?", (path,)
+            )
+            conn.commit()
+
+    def fts_search(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+        mode: str = "or",
+    ) -> list[dict[str, Any]]:
+        """Ranked full-text search using FTS5 with BM25 scoring.
+
+        Returns a list of dicts with ``path``, ``title``, ``snippet``,
+        and ``rank`` (lower is better).  Results are ordered by relevance.
+
+        *mode* controls how terms are combined:
+        - ``"or"`` (default): any matching term contributes to ranking —
+          best for natural language queries.
+        - ``"and"``: all terms must be present — best for precise keyword
+          searches.
+        """
+        if not query.strip():
+            return []
+
+        terms = [t for t in query.strip().split() if t and t.lower() not in _STOP_WORDS]
+        if not terms:
+            return []
+
+        joiner = " OR " if mode == "or" else " "
+        fts_query = joiner.join(f'"{t}"' for t in terms)
+
+        sql = text("""
+            SELECT
+                knowledge_fts.path,
+                knowledge_fts.title,
+                snippet(knowledge_fts, 3, '**', '**', '...', 40) AS snippet,
+                bm25(knowledge_fts) AS rank
+            FROM knowledge_fts
+            WHERE knowledge_fts MATCH :query
+            ORDER BY rank
+            LIMIT :limit
+        """)
+
+        with self._engine.connect() as conn:
+            rows = conn.execute(sql, {"query": fts_query, "limit": limit}).fetchall()
+
+        results = []
+        for row in rows:
+            results.append({
+                "path": row[0],
+                "title": row[1],
+                "snippet": row[2],
+                "rank": row[3],
+            })
+        return results
+
+    # ------------------------------------------------------------------
     # Sync from filesystem
     # ------------------------------------------------------------------
 
@@ -300,8 +420,9 @@ class KnowledgeDB:
         """Rebuild the index from the filesystem.
 
         Walks ``knowledge_dir/<subject>/<subsubject>/<title>.md`` and
-        upserts each document.  Documents in the DB that no longer exist
-        on disk are removed.  Existing tags/facets are preserved during sync.
+        upserts each document (including FTS5 content).  Documents in the
+        DB that no longer exist on disk are removed.  Existing tags/facets
+        are preserved during sync.
 
         Returns a summary dict: {added, updated, removed, total}.
         """
@@ -330,9 +451,16 @@ class KnowledgeDB:
                     fpath = os.path.join(subsub_dir, fname)
                     mtime = os.path.getmtime(fpath)
 
+                    try:
+                        with open(fpath, encoding="utf-8") as f:
+                            content = f.read()
+                    except OSError:
+                        content = ""
+
                     existing = self.get(path)
                     if existing is None:
-                        self.upsert(subject, subsubject, title, updated_at=mtime)
+                        self.upsert(subject, subsubject, title,
+                                    updated_at=mtime, content=content)
                         added += 1
                     elif existing["updated_at"] < mtime:
                         self.upsert(
@@ -340,8 +468,14 @@ class KnowledgeDB:
                             tags=existing["tags"],
                             facets=existing["facets"],
                             updated_at=mtime,
+                            content=content,
                         )
                         updated += 1
+                    else:
+                        # Ensure FTS is populated even if metadata unchanged
+                        self._fts_upsert(path, title,
+                                         " ".join(existing.get("tags", [])),
+                                         content)
 
         # Remove entries for documents that no longer exist on disk
         with self._session() as session:

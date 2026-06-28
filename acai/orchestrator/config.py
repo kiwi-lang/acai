@@ -394,6 +394,16 @@ class DevConfig:
     services: list[DevServiceConfig] = field(default_factory=_load_dev_services)
 
 
+@dataclass
+class EmbeddingConfig:
+    """Configuration for the embedding/vector search backend."""
+
+    endpoint: str = defaultfield("embedding.endpoint", str, "")
+    model: str = defaultfield("embedding.model", str, "text-embedding")
+    chunk_size: int = defaultfield("embedding.chunk_size", int, 512)
+    chunk_overlap: int = defaultfield("embedding.chunk_overlap", int, 64)
+
+
 from acai.provider.config import (  # noqa: F401
     ModelConfig,
     ModelSet,
@@ -420,6 +430,7 @@ class AcaiConfig:
     ci: CIConfig = field(default_factory=CIConfig)
     tts: TTSConfig = field(default_factory=TTSConfig)
     dev: DevConfig = field(default_factory=DevConfig)
+    embedding: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     providers: list[ProviderConfig] = field(default_factory=_load_providers_from_global)
     model_sets: list[ModelSet] = field(default_factory=_load_model_sets_from_global)
     _active_name: str = ""

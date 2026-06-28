@@ -52,24 +52,41 @@ log = logging.getLogger(__name__)
 # Context limit enforcement
 # ------------------------------------------------------------------
 
-# Leave headroom for output tokens + model overhead
-_HARD_LIMIT_RATIO = 0.90
+# Leave headroom for output tokens + model overhead + chat template
+_HARD_LIMIT_RATIO = 0.85
 _TRUNCATION_MARKER = "[Earlier messages were truncated to fit the context window]"
+
+# Tool-loop safety limits
+_MAX_TOOL_ROUNDS = 20
+_MAX_TOOL_RESULT_CHARS = 50_000
+_TOOL_RESULT_TRUNCATION_MSG = "\n...[truncated — result exceeded 50 KB]"
+
+# Context budget warning threshold (emit event when usage exceeds this)
+_CONTEXT_WARNING_RATIO = 0.70
 
 
 def _estimate_tokens(messages: list[dict]) -> int:
-    """Rough token estimate: chars / 4 (consistent with the rest of the codebase)."""
-    total = 0
-    for m in messages:
-        c = m.get("content")
-        if isinstance(c, str):
-            total += len(c)
-        elif isinstance(c, list):
-            total += sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
-        for tc in m.get("tool_calls", []):
-            fn = tc.get("function", {})
-            total += len(fn.get("name", "")) + len(fn.get("arguments", ""))
-    return total // 4
+    """Estimate token count using the model tokenizer (with char fallback).
+
+    Prefers the accurate tokenizer from ``acai.utils.tokens`` when available.
+    Falls back to conservative char/3.2 ratio otherwise.
+    """
+    try:
+        from acai.utils.tokens import count_messages_tokens
+        return count_messages_tokens(messages)
+    except Exception:
+        # Fallback: conservative char/3.2 (not 4, which underestimates code)
+        total = 0
+        for m in messages:
+            c = m.get("content")
+            if isinstance(c, str):
+                total += len(c)
+            elif isinstance(c, list):
+                total += sum(len(p.get("text", "")) for p in c if isinstance(p, dict))
+            for tc in m.get("tool_calls", []):
+                fn = tc.get("function", {})
+                total += len(fn.get("name", "")) + len(fn.get("arguments", ""))
+        return int(total / 3.2)
 
 
 def enforce_context_limit(
@@ -467,6 +484,10 @@ class TaskGraph:
                     context_window=ctx_window,
                     estimated_tokens=_estimate_tokens(messages),
                 )
+
+            # Store context budget info for downstream use
+            self._context_window = ctx_window
+            self._max_output_tokens = max_out
             # ---------------------------------------------------------
 
             provider_info = work.get("provider_override")
@@ -636,12 +657,14 @@ class TaskGraph:
             if allowed.endswith(f"_{name}"):
                 log.info("resolved tool alias %s -> %s", name, allowed)
                 return allowed
-        # Wrong namespace prefix (e.g. "filesystem_search_grep" -> "search_grep")
-        bare = name.rsplit("_", 1)[-1] if "_" in name else name
-        for allowed in self._allowed_tools:
-            if allowed.endswith(f"_{bare}") or allowed == bare:
-                log.info("resolved tool alias %s -> %s", name, allowed)
-                return allowed
+        # Wrong namespace prefix — match on full function part after first underscore
+        # (e.g. "filesystem_search_grep" -> "search_grep" where func="search_grep")
+        if "_" in name:
+            func_part = name.split("_", 1)[1]
+            for allowed in self._allowed_tools:
+                if "_" in allowed and allowed.split("_", 1)[1] == func_part:
+                    log.info("resolved tool alias %s -> %s", name, allowed)
+                    return allowed
         # Singular/plural mismatch (e.g. "task_create" -> "tasks_create")
         for allowed in self._allowed_tools:
             a_parts = allowed.split("_", 1)
@@ -872,7 +895,10 @@ class TaskGraph:
             msg: dict = {"role": "assistant", "content": acc.text}
             if acc.reasoning:
                 msg["reasoning"] = acc.reasoning
-            self.chat.append(self.conversation, msg)
+            try:
+                self.chat.append(self.conversation, msg)
+            except Exception:
+                log.exception("Failed to save response to chat %s", self.conversation)
 
         self.audit.record(
             "response.saved", phase="response",
@@ -884,7 +910,7 @@ class TaskGraph:
             "reasoning": acc.reasoning,
         })
 
-    async def _run_with_tools(self, payload: dict) -> AsyncIterator[dict]:
+    async def _run_with_tools(self, payload: dict, *, max_iterations: int = _MAX_TOOL_ROUNDS) -> AsyncIterator[dict]:
         """Dispatch a payload and handle the tool-call follow-up loop.
 
         Yields SSE event dicts.  After iteration the final ``Acc`` is
@@ -900,6 +926,13 @@ class TaskGraph:
                 return
 
         while acc.tool_calls:
+            if _tool_round >= max_iterations:
+                log.warning("tool loop hit max_iterations=%d, stopping", max_iterations)
+                yield self._error_event(
+                    f"Tool loop exceeded maximum iterations ({max_iterations})"
+                )
+                break
+
             followup = list(payload["messages"])
             followup.append({
                 "role": "assistant",
@@ -927,16 +960,22 @@ class TaskGraph:
                     self.tracker.push(self.stream_id, start_ev)
                 yield start_ev
 
-                async with self.audit.aspan(
-                    "tool", phase="tool",
-                    tool=tool_name, args=tool_args,
-                    tool_round=_tool_round,
-                ):
-                    try:
-                        result_text = await self.dispatch_tool(tool_name, tool_args)
-                    except Exception as exc:
-                        log.exception("tool dispatch error: %s", tool_name)
-                        result_text = f"[Tool error] {type(exc).__name__}: {exc}"
+                if not tool_name:
+                    result_text = "[Tool error] Tool call has an empty function name"
+                else:
+                    async with self.audit.aspan(
+                        "tool", phase="tool",
+                        tool=tool_name, args=tool_args,
+                        tool_round=_tool_round,
+                    ):
+                        try:
+                            result_text = await self.dispatch_tool(tool_name, tool_args)
+                        except Exception as exc:
+                            log.exception("tool dispatch error: %s", tool_name)
+                            result_text = f"[Tool error] {type(exc).__name__}: {exc}"
+
+                if len(result_text) > _MAX_TOOL_RESULT_CHARS:
+                    result_text = result_text[:_MAX_TOOL_RESULT_CHARS] + _TOOL_RESULT_TRUNCATION_MSG
 
                 followup.append({
                     "role": "tool",
@@ -973,12 +1012,41 @@ class TaskGraph:
 
             followup_payload = dict(payload)
             # Enforce context limit on the growing followup messages
-            active_prov = self.config.active_provider()
-            ctx_window = active_prov.context_window or 128000
-            max_out = active_prov.max_tokens or 4096
-            followup, _ = enforce_context_limit(
+            ctx_window = getattr(self, "_context_window", None)
+            max_out = getattr(self, "_max_output_tokens", None)
+            if not ctx_window or not max_out:
+                active_prov = self.config.active_provider()
+                ctx_window = active_prov.context_window or 128000
+                max_out = active_prov.max_tokens or 4096
+
+            # Check budget before truncation
+            estimated = _estimate_tokens(followup)
+            available = int((ctx_window - max_out) * _HARD_LIMIT_RATIO)
+            usage_ratio = estimated / available if available > 0 else 1.0
+
+            if usage_ratio >= _CONTEXT_WARNING_RATIO:
+                budget_ev = {
+                    "event_type": "context_budget",
+                    "data": {
+                        "estimated_tokens": estimated,
+                        "available_tokens": available,
+                        "context_window": ctx_window,
+                        "usage_percent": round(usage_ratio * 100, 1),
+                        "tool_round": _tool_round,
+                    },
+                }
+                if self.tracker and self.stream_id:
+                    self.tracker.push(self.stream_id, budget_ev)
+                yield budget_ev
+
+            followup, was_truncated = enforce_context_limit(
                 followup, ctx_window, max_out, keep_recent=12,
             )
+            if was_truncated:
+                log.warning(
+                    "Tool loop round %d: context truncated (%d -> %d tokens)",
+                    _tool_round, estimated, _estimate_tokens(followup),
+                )
             followup_payload["messages"] = followup
             payload = followup_payload
             _tool_round += 1

@@ -312,8 +312,25 @@ class DynamicGraph(TaskGraph):
                                 final_reasoning += (edata.get("data", {})
                                                     .get("token", ""))
                             yield edata
+                        elif etype == "warning":
+                            yield {
+                                "event_type": "warning",
+                                "data": edata,
+                            }
             except Exception as exc:
                 log.exception("node %s failed", current_id)
+                if foreach_stack:
+                    yield {
+                        "event_type": "warning",
+                        "data": {
+                            "message": (
+                                f"Node '{current_id}' ({ntype}) failed "
+                                f"during ForEach iteration: {exc}"
+                            ),
+                        },
+                    }
+                    current_id = None
+                    continue
                 yield self._error_event(
                     f"Node '{current_id}' ({ntype}) failed: {exc}",
                     _tb.format_exc(),
@@ -360,6 +377,11 @@ class DynamicGraph(TaskGraph):
             if nexts:
                 yield _edge_event(nexts[0])
             current_id = nexts[0]["target"] if nexts else None
+        else:
+            yield self._error_event(
+                f"Workflow exceeded max steps ({max_steps}). "
+                "This may indicate an infinite loop in the workflow."
+            )
 
         # -- persist final response to conversation ----------------------
         if final_text and self.conversation:

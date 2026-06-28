@@ -19,11 +19,11 @@ import os
 from typing import TYPE_CHECKING
 
 from acai.retired import Agent, load_prompt
-from acai.events import EventKind
+from acai.orchestrator.events import EventKind
 
 if TYPE_CHECKING:
     from acai.provider import LLM
-    from acai.events import EventBus
+    from acai.orchestrator.events import EventBus
 
 
 SYSTEM_PROMPT = load_prompt("converse_system.md")

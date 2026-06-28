@@ -390,12 +390,21 @@ def needs_compression(
     messages: list[dict],
     context_window: int,
     *,
-    threshold: float = 0.70,
+    threshold: float = 0.60,
     keep_recent: int = 6,
 ) -> bool:
-    """Return True if the conversation should be compressed."""
-    total_chars = sum(_content_len(m) for m in messages if isinstance(m, dict))
-    estimated_tokens = total_chars // 4
+    """Return True if the conversation should be compressed.
+
+    Uses accurate token estimation when the tokenizer is available.
+    Threshold lowered from 0.70 to 0.60 to trigger compression earlier
+    and avoid OOM on models with tight KV cache budgets.
+    """
+    try:
+        from acai.utils.tokens import count_messages_tokens
+        estimated_tokens = count_messages_tokens(messages)
+    except Exception:
+        total_chars = sum(_content_len(m) for m in messages if isinstance(m, dict))
+        estimated_tokens = int(total_chars / 3.2)
     limit = int(context_window * threshold)
     return estimated_tokens > limit and len(messages) > keep_recent + 2
 
@@ -405,7 +414,7 @@ def compress_messages(
     context_window: int,
     llm,
     *,
-    threshold: float = 0.70,
+    threshold: float = 0.60,
     keep_recent: int = 6,
 ) -> tuple[list[dict], bool]:
     """Compress a conversation if it exceeds *threshold* of *context_window*.
@@ -419,8 +428,12 @@ def compress_messages(
 
     Returns ``(messages, was_compressed)``.
     """
-    total_chars = sum(_content_len(m) for m in messages if isinstance(m, dict))
-    estimated_tokens = total_chars // 4
+    try:
+        from acai.utils.tokens import count_messages_tokens
+        estimated_tokens = count_messages_tokens(messages)
+    except Exception:
+        total_chars = sum(_content_len(m) for m in messages if isinstance(m, dict))
+        estimated_tokens = int(total_chars / 3.2)
     limit = int(context_window * threshold)
 
     if estimated_tokens <= limit or len(messages) <= keep_recent + 2:

@@ -35,9 +35,17 @@ _CURATOR_FORMAT_SCHEMA = {
 }
 
 
-def _parse_curator_paths(text: str) -> list[str]:
-    """Extract a list of knowledge paths from curator JSON output."""
+def _parse_curator_paths(text: str) -> tuple[list[str], str]:
+    """Extract a list of knowledge paths from curator JSON output.
+
+    Returns (paths, error_message).  error_message is non-empty when
+    parsing failed — the caller should surface this to the client so
+    they know why knowledge was not attached.
+    """
     text = text.strip()
+    if not text:
+        return [], "Curator returned empty output — no knowledge paths extracted."
+
     if text.startswith("```"):
         text = text.split("\n", 1)[-1]
     if text.endswith("```"):
@@ -47,17 +55,20 @@ def _parse_curator_paths(text: str) -> list[str]:
     try:
         parsed = json.loads(text)
     except (json.JSONDecodeError, TypeError):
-        log.warning("Curator output is not valid JSON: %.200s", text)
-        return []
+        msg = f"Curator output is not valid JSON (cannot extract knowledge paths): {text[:200]}"
+        log.warning(msg)
+        return [], msg
 
     if isinstance(parsed, dict):
         paths = parsed.get("paths", [])
     elif isinstance(parsed, list):
         paths = parsed
     else:
-        return []
+        msg = f"Curator returned unexpected JSON type ({type(parsed).__name__}), expected object or array."
+        log.warning(msg)
+        return [], msg
 
-    return [str(p) for p in paths if isinstance(p, str) and p.strip()]
+    return [str(p) for p in paths if isinstance(p, str) and p.strip()], ""
 
 
 def _load_knowledge_context(workspace: str, paths: list[str]) -> str:
@@ -69,7 +80,11 @@ def _load_knowledge_context(workspace: str, paths: list[str]) -> str:
 
     parts: list[str] = []
     for doc_path in paths[:10]:
-        doc = store.get_by_path(doc_path)
+        try:
+            doc = store.get_by_path(doc_path)
+        except Exception:
+            log.exception("load_knowledge: error reading %r", doc_path)
+            continue
         if doc and doc.content:
             parts.append(f"### {doc.subject}/{doc.subsubject}/{doc.title}\n\n{doc.content}")
         else:
@@ -169,14 +184,31 @@ class ConverseScribeGraph(TaskGraph):
             async for event in self._background_agent("curator", curator_payload):
                 yield event
 
-            paths = _parse_curator_paths(self._last_acc.text)
+            paths, parse_error = _parse_curator_paths(self._last_acc.text)
             log.info("curator done, paths=%s", paths)
+
+            if parse_error:
+                yield {"event_type": "warning", "data": {
+                    "phase": "curator",
+                    "message": parse_error,
+                }}
 
             knowledge_context = _load_knowledge_context(
                 self.config.workspace, paths,
             )
             log.info("knowledge loaded, %d chars from %d paths",
                      len(knowledge_context), len(paths))
+
+            if paths and not knowledge_context:
+                msg = (
+                    f"Curator found {len(paths)} path(s) but none resolved to "
+                    f"documents: {paths!r}"
+                )
+                log.warning(msg)
+                yield {"event_type": "warning", "data": {
+                    "phase": "load_knowledge",
+                    "message": msg,
+                }}
 
             # ==============================================================
             # Phase 2: Converse — main agent reply with knowledge

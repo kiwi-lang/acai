@@ -126,6 +126,36 @@ def create_worker_router(
             provider_override.get("name") if isinstance(provider_override, dict) else None,
         )
 
+        # Pre-dispatch size guard — reject obviously oversized requests
+        # before they hit vLLM and potentially OOM the GPU
+        try:
+            from acai.utils.tokens import fits_context, estimate_payload_tokens
+            ctx_window = provider.context_window or 128000
+            max_out = provider.max_tokens or 4096
+            fits, est_tokens, avail = fits_context(body, ctx_window, max_out)
+            if not fits:
+                log.error(
+                    "[%s] REJECTED: payload ~%d tokens exceeds budget %d "
+                    "(context_window=%d, max_output=%d)",
+                    task_id, est_tokens, avail, ctx_window, max_out,
+                )
+                return Response(
+                    content=_sse_event("error", {
+                        "task_id": task_id,
+                        "error": (
+                            f"Request too large: ~{est_tokens} input tokens "
+                            f"exceeds available budget of {avail} tokens "
+                            f"(context_window={ctx_window}, reserved_output={max_out}). "
+                            f"The conversation needs to be compressed or truncated."
+                        ),
+                    }),
+                    status_code=413,
+                    media_type="text/event-stream",
+                )
+            log.debug("[%s] token budget OK: ~%d / %d", task_id, est_tokens, avail)
+        except Exception:
+            log.debug("[%s] token budget check skipped", task_id, exc_info=True)
+
         if isinstance(provider_override, dict) and provider_override.get("name"):
             resolved = config.get_provider(provider_override["name"])
             if resolved:
@@ -264,6 +294,11 @@ def create_worker_router(
     @router.get("/status")
     def worker_status():
         active = config.active_provider()
+        ctx_window = active.context_window or 128000
+        # Try to get the real context window from vLLM
+        detected = _detect_context_window(active)
+        if detected and detected != ctx_window:
+            ctx_window = detected
         return {
             "telemetry": True,
             "tools": [td.qualified_name for td in registry.all_tools()],
@@ -274,6 +309,8 @@ def create_worker_router(
             "llm_backend": active.backend,
             "extern_llm": extern_llm,
             "log_path": llm_server.latest_log_path(),
+            "context_window": ctx_window,
+            "max_tokens": active.max_tokens or 4096,
         }
 
     # ------------------------------------------------------------------
@@ -288,6 +325,30 @@ def create_worker_router(
         }
 
     return router, llm_server, registry, sandbox_proxy
+
+
+def _detect_context_window(provider_cfg) -> int | None:
+    """Query the vLLM/OpenAI-compatible server for the real max_model_len.
+
+    Returns the detected context window or None if unavailable.
+    Uses the /v1/models endpoint which vLLM populates with max_model_len.
+    """
+    try:
+        endpoint = provider_cfg.endpoint.rstrip("/")
+        resp = http.get(f"{endpoint}/v1/models", timeout=3)
+        if resp.status_code != 200:
+            return None
+        data = resp.json().get("data", [])
+        if not data:
+            return None
+        # vLLM reports max_model_len in the model info
+        model_info = data[0]
+        max_model_len = model_info.get("max_model_len")
+        if max_model_len and isinstance(max_model_len, int) and max_model_len > 0:
+            return max_model_len
+    except Exception:
+        pass
+    return None
 
 
 # Keep the old name as an alias for backward compat with CLI imports

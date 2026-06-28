@@ -1,5 +1,5 @@
 .PHONY: doc build-doc serve-doc update-doc virtual-env install back-dev front-dev \
-       build-ui build-wheel build clean tests hello vllm
+       build-ui build-wheel build clean tests test-all test-integration hello vllm
 
 doc: build-doc
 
@@ -11,21 +11,23 @@ serve-doc:
 
 update-doc: build-doc serve-doc
 
+VENV ?= /opt/work/.venv
+
 virtual-env:
-	@[ -d .venv ] || uv venv --python=3.12 --seed
+	@[ -d $(VENV) ] || uv venv --python=3.12 --seed $(VENV)
 
 install: virtual-env
-	(. .venv/bin/activate && pip install -r requirements.txt)
-	(. .venv/bin/activate && pip install -e '.[models]')
+	(. $(VENV)/bin/activate && pip install -r requirements.txt)
+	(. $(VENV)/bin/activate && pip install -e '.[models]')
 
 back-dev:
-	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai uber --debug 1 --extern_llm 1)
+	(. $(VENV)/bin/activate && FLASK_STATIC=$(pwd) acai uber --debug 1 --extern_llm 1)
 
 vllm:
-	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "Qwen/Qwen3-Coder-Next-FP8")
+	(. $(VENV)/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "Qwen/Qwen3-Coder-Next-FP8")
 
 vllm-small:
-	(. .venv/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "google/gemma-4-31B-it")
+	(. $(VENV)/bin/activate && FLASK_STATIC=$(pwd) acai serve --model "google/gemma-4-31B-it")
 
 
 front-dev:
@@ -48,7 +50,15 @@ clean:
 
 tests:
 	$(eval _MOD := acai.$(subst /,.,$(basename $(FILE))))
-	(. .venv/bin/activate && python -m pytest tests/$(dir $(FILE))test_$(notdir $(FILE)) --cov=$(_MOD) --cov-report=term-missing -v)
+	(. $(VENV)/bin/activate && python -m pytest tests/$(dir $(FILE))test_$(notdir $(FILE)) --cov=$(_MOD) --cov-report=term-missing -v)
+
+test-all:
+	(. $(VENV)/bin/activate && python -m pytest tests/ --cov=acai --cov-report=term-missing --cov-report=html -v \
+		--cov-config=tox.ini)
+
+test-integration:
+	(. $(VENV)/bin/activate && python -m pytest tests/integrations/ -v -s \
+		--timeout=120)
 
 hello:
 	@echo "hello world"

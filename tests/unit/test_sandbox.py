@@ -313,17 +313,18 @@ class TestEnsureImage:
         containerfile.touch()
         sb = ContainerSandbox(runtime="podman", image="localhost/acai-sandbox")
 
-        side_effects = [
-            _mock_run(returncode=1),   # image inspect fails
-            _mock_run(returncode=0),   # build succeeds
-        ]
-        with patch("subprocess.run", side_effect=side_effects) as mock, \
+        mock_popen = MagicMock()
+        mock_popen.stdout = iter([])
+        mock_popen.wait.return_value = 0
+
+        with patch("subprocess.run", return_value=_mock_run(returncode=1)), \
+             patch("subprocess.Popen", return_value=mock_popen) as popen_mock, \
              patch("acai.worker.sandbox.container._find_repo_root", return_value=str(tmp_path)):
             sb._ensure_image()
 
-        build_call = mock.call_args_list[1]
-        assert build_call[0][0][:2] == ["podman", "build"]
-        assert "-t" in build_call[0][0]
+        build_cmd = popen_mock.call_args[0][0]
+        assert build_cmd[:2] == ["podman", "build"]
+        assert "-t" in build_cmd
 
     def test_image_missing_no_containerfile_raises(self):
         sb = ContainerSandbox(runtime="podman", image="localhost/acai-sandbox")
@@ -337,11 +338,12 @@ class TestEnsureImage:
         containerfile.touch()
         sb = ContainerSandbox(runtime="podman", image="localhost/acai-sandbox")
 
-        side_effects = [
-            _mock_run(returncode=1),
-            _mock_run(returncode=1, stderr="build error"),
-        ]
-        with patch("subprocess.run", side_effect=side_effects), \
+        mock_popen = MagicMock()
+        mock_popen.stdout = iter(["build error\n"])
+        mock_popen.wait.return_value = 1
+
+        with patch("subprocess.run", return_value=_mock_run(returncode=1)), \
+             patch("subprocess.Popen", return_value=mock_popen), \
              patch("acai.worker.sandbox.container._find_repo_root", return_value=str(tmp_path)):
             with pytest.raises(RuntimeError, match="Failed to build"):
                 sb._ensure_image()

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from acai.events import Event, EventBus, EventKind
+from acai.orchestrator.events import Event, EventBus, EventKind
 
 
 _PROMPTS_DIR = Path(__file__).resolve().parent.parent / "prompts"

@@ -496,10 +496,11 @@ class ToolRegistry:
                     return await sandbox_proxy.proxy_call(tool_name, args, ctx_data)
                 except Exception as exc:
                     log.error("sandbox proxy failed for %s: %s", tool_name, exc)
+                    err_msg = str(exc)
                     def _sse_err(event: str, data: dict) -> str:
                         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
                     async def _error_stream():
-                        yield _sse_err("error", {"tool": tool_name, "error": str(exc)})
+                        yield _sse_err("error", {"tool": tool_name, "error": err_msg})
                         yield _sse_err("done", {})
                     return StreamingResponse(_error_stream(), media_type="text/event-stream")
 

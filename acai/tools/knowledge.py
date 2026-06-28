@@ -36,20 +36,20 @@ def create(
     subject: str,
     subsubject: str,
     title: str,
-    content: str = "",
+    content: str,
     tags: list[str] | None = None,
     facets: dict[str, str] | None = None,
 ) -> str:
     """Create a new knowledge document.
 
     The document is stored at ``knowledge/<subject>/<subsubject>/<title>.md``.
-    All three path components are required.
+    All three path components and content are required.
 
     Args:
         subject: Top-level category (e.g. "python", "architecture", "milabench").
         subsubject: Sub-category (e.g. "asyncio", "decisions", "benchmarks").
         title: Document title, used as the filename (e.g. "generators", "overview").
-        content: The document body in markdown.
+        content: The document body in markdown. Must not be empty.
         tags: List of free-form tags for filtering (e.g. ["async", "coroutine"]).
         facets: PMEST faceted classification dict. Keys:
             - personality: what (the essential entity/topic)
@@ -249,20 +249,28 @@ def search(
     query: str,
     subject: str = "",
     subsubject: str = "",
+    mode: str = "hybrid",
 ) -> str:
-    """Search knowledge documents by text query.
+    """Search knowledge documents using text or semantic similarity.
 
-    Performs a case-insensitive substring search across document
-    paths and content.
+    Supports three modes:
+    - "hybrid" (default): Combines vector similarity with full-text search
+      using reciprocal rank fusion. Best overall relevance.
+    - "semantic" / "vector": Pure vector similarity search. Best for
+      conceptual queries that may not share exact words with documents.
+    - "fts": Full-text search only. Best for exact keyword matching.
+
+    Falls back to FTS if the embedding endpoint is not available.
 
     Args:
-        query: The search string.
-        subject: Restrict search to a subject (empty for all).
+        query: Natural language search query.
+        subject: Restrict search to a subject prefix (empty for all).
         subsubject: Restrict search to a subsubject (empty for all).
+        mode: Search mode — "hybrid", "semantic"/"vector", or "fts".
     """
     try:
         client = _require_client()
-        params: dict[str, str] = {"q": query}
+        params: dict[str, str] = {"q": query, "mode": mode}
         if subject:
             params["subject"] = subject
         if subsubject:

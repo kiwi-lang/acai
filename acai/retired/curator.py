@@ -13,11 +13,11 @@ import time
 from typing import TYPE_CHECKING
 
 from acai.retired import Agent, load_prompt
-from acai.events import EventKind
+from acai.orchestrator.events import EventKind
 
 if TYPE_CHECKING:
     from acai.provider import LLM
-    from acai.events import EventBus
+    from acai.orchestrator.events import EventBus
     from acai.queue.work import WorkQueue
 
 

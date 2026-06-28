@@ -8,6 +8,7 @@
 *.log
 *.pkl
 *.lock
+.gitconfig
 
 # StarUML documentation
 *.mdj
