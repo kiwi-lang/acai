@@ -49,6 +49,14 @@ export async function deleteConversation(id: string): Promise<void> {
     await request(`/conversations/${id}`, { method: 'DELETE' });
 }
 
+export async function submitInteractionInput(convId: string, text: string): Promise<{ ok: boolean }> {
+    return request<{ ok: boolean }>(`/conversations/${convId}/input`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+    });
+}
+
 // SSE stream from a POST response (EventSource only supports GET)
 export class SSEStream {
     private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;

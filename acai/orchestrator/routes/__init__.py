@@ -14,10 +14,12 @@ if TYPE_CHECKING:
     from acai.orchestrator.agent_store import AgentStore
     from acai.orchestrator.chat import ChatStore
     from acai.orchestrator.config import AcaiConfig
+    from acai.orchestrator.input_queue import InputQueue
     from acai.orchestrator.load_balancer import LoadBalancer
     from acai.orchestrator.projects import ProjectStore
     from acai.orchestrator.skill_store import SkillStore
     from acai.orchestrator.stream import StreamTracker
+    from acai.orchestrator.task_runner import TaskRunner
     from acai.orchestrator.tools import ToolRegistry
     from acai.orchestrator.events import EventBus
     from acai.queue.work import WorkQueue
@@ -42,3 +44,5 @@ class RouterDeps:
     workflows_dir: str = ""
     builtin_wf_dir: str = ""
     socketio_ref: list = field(default_factory=lambda: [None])
+    task_runner: TaskRunner | None = None
+    input_queue: InputQueue | None = None

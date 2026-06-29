@@ -264,6 +264,8 @@ def create_conversations_router(
                         projects=projects,
                         tool_registry=tool_registry,
                         audit=audit,
+                        task_runner=deps.task_runner,
+                        input_queue=deps.input_queue,
                     )
                     async for event in graph.run(work):
                         yield _sse(
@@ -304,6 +306,21 @@ def create_conversations_router(
             "max_context": max_context,
             "message_count": len(messages),
         }
+
+    @router.post("/conversations/{conv_id}/input")
+    async def conversation_input(conv_id: str, request: Request):
+        """Submit the user's answer to a pending interaction tool."""
+        data = await request.json()
+        text = data.get("text", "").strip()
+        if not text:
+            return {"ok": False, "error": "empty response"}
+
+        input_queue = deps.input_queue
+        if not input_queue or not input_queue.has_pending(conv_id):
+            return {"ok": False, "error": "no pending interaction"}
+
+        input_queue.submit_input(conv_id, {"text": text})
+        return {"ok": True}
 
     @router.get("/conversations/{conv_id}/inflight")
     def conversation_inflight(conv_id: str):

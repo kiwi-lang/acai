@@ -1491,6 +1491,9 @@ def create_router(config: AcaiConfig | None = None,
     from acai.orchestrator.routes.workflows import create_workflows_router
     from acai.orchestrator.routes.conversations import create_conversations_router
 
+    from acai.orchestrator.input_queue import InputQueue
+    _input_queue = InputQueue()
+
     _deps = RouterDeps(
         config=config,
         queue=queue,
@@ -1507,6 +1510,7 @@ def create_router(config: AcaiConfig | None = None,
         workflows_dir=workflows_dir,
         builtin_wf_dir=_builtin_wf_dir,
         socketio_ref=_socketio_ref,
+        input_queue=_input_queue,
     )
 
     # Register sub-routers (these provide the same endpoints as the inline

@@ -1,5 +1,19 @@
 // Type definitions for Açaí Agent Swarm
 
+export interface UIElement {
+    type: 'ask' | 'confirm' | 'notify';
+    question?: string;
+    message?: string;
+    options?: Array<{ id: string; label: string }>;
+    allow_free_text?: boolean;
+    /** "single" (radio) or "multiple" (checkbox). Default "single". */
+    select_mode?: 'single' | 'multiple';
+    context?: string;
+    id?: string;
+    level?: string;
+    title?: string;
+}
+
 export interface AgentMessage {
     role: 'user' | 'assistant' | 'tool_call' | 'tool_result' | 'phase' | 'print' | 'system';
     content: string;
@@ -14,6 +28,8 @@ export interface AgentMessage {
     isStreaming?: boolean;
     taskId?: string;
     error?: string;
+    /** Interactive UI elements attached to this message (questions, confirmations). */
+    uiElements?: UIElement[];
     /** Number of TTS audio chunks received for this message. */
     audioChunks?: number;
     /** Current audio player state for this message. */

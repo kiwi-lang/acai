@@ -263,6 +263,8 @@ class TaskGraph:
         audit: AuditTrail | NullAuditTrail | None = None,
         stream_id: str = "",
         conversation: str = "",
+        input_queue: Any = None,
+        task_runner: Any = None,
     ):
         self.worker = worker
         self.agent_store = agent_store
@@ -274,6 +276,9 @@ class TaskGraph:
         self.audit = audit or NullAuditTrail()
         self.stream_id = stream_id
         self.conversation = conversation
+        self.input_queue = input_queue
+        self.task_runner = task_runner
+        self._ui_elements: list[dict] = []  # legacy — kept for done event compatibility
         self._allowed_tools: set[str] | None = None
         self._last_work: dict | None = None
         self._agent_uses_sandbox: bool = False
@@ -884,6 +889,9 @@ class TaskGraph:
         data: dict = {}
         if git_result:
             data["git"] = git_result
+        if self._ui_elements:
+            data["ui_elements"] = self._ui_elements
+            self._ui_elements = []
         ev: dict = {"event_type": "done", "data": data}
         if self.tracker and self.stream_id:
             self.tracker.push(self.stream_id, ev)
@@ -909,6 +917,279 @@ class TaskGraph:
             "text": acc.text,
             "reasoning": acc.reasoning,
         })
+
+    # ------------------------------------------------------------------
+    # Interaction tool handling (UI element collection)
+    # ------------------------------------------------------------------
+
+    def _is_interaction_tool(self, tool_name: str) -> bool:
+        """Check if a tool is an interaction tool (produces UI elements)."""
+        from acai.tools.interaction import INTERACTION_TOOLS
+        return tool_name in INTERACTION_TOOLS
+
+    # ------------------------------------------------------------------
+    # Sub-agent tool handling
+    # ------------------------------------------------------------------
+
+    def _is_subagent_tool(self, tool_name: str) -> bool:
+        """Check if a tool is a subagent tool handled orchestrator-side."""
+        from acai.tools.subagent import SUBAGENT_TOOLS
+        return tool_name in SUBAGENT_TOOLS or tool_name in (
+            "subagent_spawn_agent_async",
+            "subagent_await_task",
+            "subagent_check_task",
+            "subagent_run_task",
+        )
+
+    async def _handle_subagent_tool(
+        self, tool_name: str, args: dict, emit: list[dict],
+    ) -> str:
+        """Handle a subagent tool call. Returns the tool result text."""
+        short_name = tool_name.replace("subagent_", "")
+
+        if not self.task_runner:
+            return json.dumps({"error": "Task runner not configured"})
+
+        if short_name == "spawn_agent":
+            return await self._spawn_agent_blocking(args, emit)
+        elif short_name == "spawn_agent_async":
+            return await self._spawn_agent_async(args, emit)
+        elif short_name == "await_task":
+            return await self._await_task(args)
+        elif short_name == "check_task":
+            return self._check_task(args)
+        elif short_name == "run_task":
+            return await self._run_background_task(args, emit)
+        else:
+            return json.dumps({"error": f"Unknown subagent tool: {tool_name}"})
+
+    async def _spawn_agent_blocking(self, args: dict, emit: list[dict]) -> str:
+        """Run a sub-agent inline and return its response."""
+        agent_name = args.get("agent", "")
+        message = args.get("message", "")
+        context_text = args.get("context", "")
+        max_iter = args.get("max_iterations", 10)
+
+        if not agent_name or not message:
+            return json.dumps({"error": "Both 'agent' and 'message' are required"})
+
+        full_message = f"{context_text}\n\n{message}".strip() if context_text else message
+
+        # Emit subagent_start event
+        start_ev = {
+            "event_type": "subagent_start",
+            "data": {
+                "agent": agent_name,
+                "message_preview": full_message[:200],
+                "conversation": self.conversation,
+                "blocking": True,
+            },
+        }
+        if self.tracker and self.stream_id:
+            self.tracker.push(self.stream_id, start_ev)
+        emit.append(start_ev)
+
+        # Run a nested graph using the same infrastructure
+        try:
+            result = await self._run_nested_agent(
+                agent_name, full_message, max_iterations=max_iter,
+            )
+        except Exception as exc:
+            log.exception("Blocking sub-agent %s failed", agent_name)
+            result = f"[Sub-agent error] {type(exc).__name__}: {exc}"
+
+        # Emit subagent_complete
+        complete_ev = {
+            "event_type": "subagent_complete",
+            "data": {
+                "agent": agent_name,
+                "result_preview": result[:500] if result else "",
+                "conversation": self.conversation,
+                "success": not result.startswith("[Sub-agent error]"),
+            },
+        }
+        if self.tracker and self.stream_id:
+            self.tracker.push(self.stream_id, complete_ev)
+        emit.append(complete_ev)
+
+        return result
+
+    async def _spawn_agent_async(self, args: dict, emit: list[dict]) -> str:
+        """Start a sub-agent in background, return task_id."""
+        agent_name = args.get("agent", "")
+        message = args.get("message", "")
+        context_text = args.get("context", "")
+        max_iter = args.get("max_iterations", 10)
+
+        if not agent_name or not message:
+            return json.dumps({"error": "Both 'agent' and 'message' are required"})
+
+        full_message = f"{context_text}\n\n{message}".strip() if context_text else message
+
+        async def _graph_factory(*, agent_name, message, conversation, **kw):
+            return await self._run_nested_agent(
+                agent_name, message, max_iterations=max_iter,
+            )
+
+        task_id = await self.task_runner.run_subagent_async(
+            agent_name=agent_name,
+            message=full_message,
+            graph_factory=_graph_factory,
+            parent_conversation=self.conversation,
+        )
+
+        start_ev = {
+            "event_type": "subagent_start",
+            "data": {
+                "agent": agent_name,
+                "task_id": task_id,
+                "conversation": self.conversation,
+                "blocking": False,
+            },
+        }
+        if self.tracker and self.stream_id:
+            self.tracker.push(self.stream_id, start_ev)
+        emit.append(start_ev)
+
+        return json.dumps({"task_id": task_id, "status": "running"})
+
+    async def _await_task(self, args: dict) -> str:
+        """Wait for a task to complete."""
+        task_id = args.get("task_id", "")
+        timeout = args.get("timeout", 300.0)
+
+        if not task_id:
+            return json.dumps({"error": "'task_id' is required"})
+
+        try:
+            task = await self.task_runner.wait_for_task(task_id, timeout=timeout)
+            return json.dumps({
+                "status": task.status.value,
+                "result": task.result,
+                "error": task.error,
+            })
+        except KeyError:
+            return json.dumps({"error": f"Task {task_id!r} not found"})
+        except TimeoutError:
+            return json.dumps({"error": "Task did not complete in time", "timed_out": True})
+
+    def _check_task(self, args: dict) -> str:
+        """Non-blocking task status check."""
+        task_id = args.get("task_id", "")
+        if not task_id:
+            return json.dumps({"error": "'task_id' is required"})
+
+        task = self.task_runner.get_task(task_id)
+        if task is None:
+            return json.dumps({"error": f"Task {task_id!r} not found"})
+
+        return json.dumps({
+            "task_id": task_id,
+            "status": task.status.value,
+            "result": task.result if task.status.value == "completed" else "",
+            "error": task.error if task.status.value == "failed" else "",
+            "progress": task.progress,
+        })
+
+    async def _run_background_task(self, args: dict, emit: list[dict]) -> str:
+        """Start a registered background task."""
+        name = args.get("name", "")
+        try:
+            params = json.loads(args.get("params", "{}"))
+        except (json.JSONDecodeError, TypeError):
+            params = {}
+
+        if not name:
+            return json.dumps({"error": "'name' is required"})
+
+        try:
+            task_id = await self.task_runner.run_background(name, **params)
+        except KeyError as exc:
+            return json.dumps({"error": str(exc)})
+
+        ev = {
+            "event_type": "task_status",
+            "data": {
+                "task_id": task_id,
+                "name": name,
+                "status": "running",
+                "conversation": self.conversation,
+            },
+        }
+        if self.tracker and self.stream_id:
+            self.tracker.push(self.stream_id, ev)
+        emit.append(ev)
+
+        return json.dumps({"task_id": task_id, "status": "running"})
+
+    async def _run_nested_agent(
+        self, agent_name: str, message: str, *, max_iterations: int = 10,
+    ) -> str:
+        """Run a nested agent graph and return its final text."""
+        agent_def = self.agent(agent_name)
+        if agent_def is None:
+            return f"[Sub-agent error] Agent '{agent_name}' not found"
+
+        from acai.orchestrator.agent_store import hydrate_task
+
+        # Build a minimal work dict for the sub-agent
+        work: dict = {
+            "conversation": "",
+            "messages": [{"role": "user", "content": message}],
+            "agent": agent_name,
+            "project": (self._last_work or {}).get("project", ""),
+        }
+
+        payload = self.prepare(agent_name, work)
+        if not payload:
+            return "[Sub-agent error] Failed to prepare payload"
+
+        # Run the sub-agent's tool loop silently (no SSE forwarding)
+        acc = Acc(self.dispatch(payload, stream_mode="silent"))
+        async for _ in acc:
+            pass
+
+        _tool_round = 0
+        while acc.tool_calls and _tool_round < max_iterations:
+            followup = list(payload["messages"])
+            followup.append({
+                "role": "assistant",
+                "content": acc.text or None,
+                "tool_calls": acc.tool_calls,
+            })
+
+            for call in acc.tool_calls:
+                fn = call.get("function", {})
+                tool_name = fn.get("name", "")
+                try:
+                    tool_args = json.loads(fn.get("arguments", "{}"))
+                except (json.JSONDecodeError, TypeError):
+                    tool_args = {}
+
+                if not tool_name:
+                    result_text = "[Tool error] Empty function name"
+                else:
+                    try:
+                        result_text = await self.dispatch_tool(tool_name, tool_args)
+                    except Exception as exc:
+                        result_text = f"[Tool error] {type(exc).__name__}: {exc}"
+
+                if len(result_text) > _MAX_TOOL_RESULT_CHARS:
+                    result_text = result_text[:_MAX_TOOL_RESULT_CHARS] + _TOOL_RESULT_TRUNCATION_MSG
+
+                followup.append({
+                    "role": "tool",
+                    "tool_call_id": call.get("id", ""),
+                    "content": result_text,
+                })
+
+            payload = {**payload, "messages": followup}
+            _tool_round += 1
+            acc = Acc(self.dispatch(payload, stream_mode="silent"))
+            async for _ in acc:
+                pass
+
+        return acc.text or ""
 
     async def _run_with_tools(self, payload: dict, *, max_iterations: int = _MAX_TOOL_ROUNDS) -> AsyncIterator[dict]:
         """Dispatch a payload and handle the tool-call follow-up loop.
@@ -940,6 +1221,13 @@ class TaskGraph:
                 "tool_calls": acc.tool_calls,
             })
 
+            # Persist intermediate assistant text so it's not lost
+            if acc.text and self.conversation:
+                self.chat.append(self.conversation, {
+                    "role": "assistant",
+                    "content": acc.text,
+                })
+
             for call in acc.tool_calls:
                 fn = call.get("function", {})
                 tool_name = fn.get("name", "")
@@ -962,6 +1250,23 @@ class TaskGraph:
 
                 if not tool_name:
                     result_text = "[Tool error] Tool call has an empty function name"
+                elif self._is_subagent_tool(tool_name):
+                    # Sub-agent tools are handled orchestrator-side
+                    subagent_events: list[dict] = []
+                    async with self.audit.aspan(
+                        "tool", phase="subagent",
+                        tool=tool_name, args=tool_args,
+                        tool_round=_tool_round,
+                    ):
+                        try:
+                            result_text = await self._handle_subagent_tool(
+                                tool_name, tool_args, subagent_events,
+                            )
+                        except Exception as exc:
+                            log.exception("subagent tool error: %s", tool_name)
+                            result_text = f"[Tool error] {type(exc).__name__}: {exc}"
+                    for sev in subagent_events:
+                        yield sev
                 else:
                     async with self.audit.aspan(
                         "tool", phase="tool",
@@ -976,6 +1281,54 @@ class TaskGraph:
 
                 if len(result_text) > _MAX_TOOL_RESULT_CHARS:
                     result_text = result_text[:_MAX_TOOL_RESULT_CHARS] + _TOOL_RESULT_TRUNCATION_MSG
+
+                is_interaction = self._is_interaction_tool(tool_name)
+
+                # Interaction tools execute on the user's browser — emit
+                # the UI widget, then block until the user answers.
+                if is_interaction and self.input_queue and self.conversation:
+                    ui_element = None
+                    try:
+                        parsed = json.loads(result_text)
+                        if isinstance(parsed, dict) and "ui_element" in parsed:
+                            ui_element = parsed["ui_element"]
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+
+                    if ui_element:
+                        # Emit SSE so the frontend renders the widget
+                        interaction_ev = {
+                            "event_type": "interaction",
+                            "data": {"ui_element": ui_element},
+                        }
+                        if self.tracker and self.stream_id:
+                            self.tracker.push(self.stream_id, interaction_ev)
+                        yield interaction_ev
+
+                        # Tell frontend we're waiting on the user, not processing
+                        wait_ev = {
+                            "event_type": "waiting_for_input",
+                            "data": {"conversation": self.conversation},
+                        }
+                        if self.tracker and self.stream_id:
+                            self.tracker.push(self.stream_id, wait_ev)
+                        yield wait_ev
+
+                        # Wait for the user's answer
+                        from acai.orchestrator.input_queue import InputRequest
+                        request = InputRequest(
+                            conversation_id=self.conversation,
+                            request_id=ui_element.get("id", tool_name),
+                            question=ui_element.get("question", ui_element.get("message", "")),
+                            options=ui_element.get("options", []),
+                        )
+                        try:
+                            response = await self.input_queue.wait_for_input(
+                                self.conversation, request,
+                            )
+                            result_text = response.get("text", "")
+                        except TimeoutError:
+                            result_text = "[No response — timed out]"
 
                 followup.append({
                     "role": "tool",

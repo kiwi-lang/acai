@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback, KeyboardEvent, useLayoutEffect, type ReactNode } from 'react';
 import { Box, VStack, HStack, Text, Textarea, IconButton, Spinner, NativeSelect, Button } from '@chakra-ui/react';
-import { converse, uberConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, fetchAllModels, getConfig, type SSEStream, type GraphDef } from '../services/api';
+import { converse, uberConverse, getHistory, listProviders, listAgents, listGraphs, checkInflight, getContextStats, fetchAllModels, getConfig, submitInteractionInput, type SSEStream, type GraphDef } from '../services/api';
 import { useAgentSocket } from '../contexts/WebSocketContext';
-import type { AgentDef, AgentMessage, ModelEntry, Provider } from '../services/types';
+import type { AgentDef, AgentMessage, ModelEntry, Provider, UIElement } from '../services/types';
 import { AudioPlayer, type AudioChunk, type PlayerState, type AudioProgress } from '../services/audioPlayer';
 import Markdown from './Markdown';
 
@@ -43,6 +43,12 @@ const ReasoningBlock = ({ content }: { content: string }) => {
         </Box>
     );
 };
+
+/* ─── Interaction tool names (rendered as UI elements, not raw tool calls) ── */
+
+const INTERACTION_TOOLS = new Set([
+    'interaction_ask_user', 'interaction_confirm', 'interaction_notify',
+]);
 
 /* ─── Icons ──────────────────────────────────────────────────────── */
 
@@ -234,6 +240,7 @@ const ChatPanel = ({
     const [messages, setMessages] = useState<AgentMessage[]>([]);
     const [input, setInput] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [isWaitingForInput, setIsWaitingForInput] = useState(false);
     const [providers, setProviders] = useState<Provider[]>([]);
     const [modelEntries, setModelEntries] = useState<ModelEntry[]>([]);
     const [selectedProvider, setSelectedProvider] = useState(
@@ -426,6 +433,7 @@ const ChatPanel = ({
         });
 
         es.addEventListener('token', (e: MessageEvent) => {
+            setIsWaitingForInput(false);
             const data = JSON.parse(e.data);
             setMessages(prev => {
                 const copy = [...prev];
@@ -441,6 +449,7 @@ const ChatPanel = ({
 
         es.addEventListener('tool_start', (e: MessageEvent) => {
             const data = JSON.parse(e.data);
+            if (INTERACTION_TOOLS.has(data.tool_name)) return;
             setMessages(prev => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
@@ -458,11 +467,45 @@ const ChatPanel = ({
 
         es.addEventListener('tool_end', (e: MessageEvent) => {
             const data = JSON.parse(e.data);
+            if (INTERACTION_TOOLS.has(data.tool_name)) {
+                // Add tool_result so the widget transitions to "answered" state
+                setMessages(prev => [...prev, {
+                    role: 'tool_result' as const,
+                    content: data.result_preview || '',
+                    name: data.tool_name,
+                }]);
+                setIsWaitingForInput(false);
+                return;
+            }
             setMessages(prev => [...prev, {
                 role: 'tool_result' as const,
                 content: data.result_preview || '(done)',
                 name: data.tool_name,
             }]);
+        });
+
+        es.addEventListener('interaction', (e: MessageEvent) => {
+            const data = JSON.parse(e.data);
+            const el = data.ui_element;
+            if (!el) return;
+            setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last && last.isStreaming) {
+                    copy[copy.length - 1] = { ...last, isStreaming: false };
+                }
+                copy.push({
+                    role: 'tool_call' as const,
+                    content: JSON.stringify({ tool: `interaction_${el.type === 'ask' ? 'ask_user' : el.type}`, args: el }, null, 2),
+                    name: `interaction_${el.type === 'ask' ? 'ask_user' : el.type}`,
+                    uiElements: [el],
+                });
+                return copy;
+            });
+        });
+
+        es.addEventListener('waiting_for_input', () => {
+            setIsWaitingForInput(true);
         });
 
         for (const [evt, phase] of [['curator_token', 'curator'], ['scribe_token', 'scribe']] as const) {
@@ -590,6 +633,7 @@ const ChatPanel = ({
             );
             activeTaskRef.current = null;
             setIsLoading(false);
+            setIsWaitingForInput(false);
             onGraphExecutionEventRef.current?.('done', {});
             /* Defer close so a trailing ``audit_complete`` frame in the same chunk is still dispatched. */
             queueMicrotask(() => {
@@ -960,6 +1004,12 @@ const ChatPanel = ({
 
     handleSendRef.current = handleSend;
 
+    const handleInteractionReply = async (text: string) => {
+        if (!text || !convIdRef.current) return;
+        setMessages(prev => [...prev, { role: 'user', content: text }]);
+        await submitInteractionInput(convIdRef.current, text);
+    };
+
     const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
@@ -1008,6 +1058,7 @@ const ChatPanel = ({
                             const showResend = isLastMsg && msg.role === 'user' && !isLoading;
 
                             if (msg.role === 'tool_result') {
+                                if (INTERACTION_TOOLS.has(msg.name || '')) return null;
                                 const prev = messages.slice(0, i).reverse()
                                     .find(m => m.role === 'tool_call' && m.name === msg.name);
                                 if (prev) return null;
@@ -1142,6 +1193,153 @@ const ChatPanel = ({
                                             border="1px solid" borderColor="color-mix(in srgb, var(--accent) 20%, transparent)"
                                             color="var(--text-muted)" textAlign="center">
                                             {msg.content}
+                                        </Box>
+                                    </Box>
+                                );
+                            }
+
+                            if (msg.role === 'tool_call' && INTERACTION_TOOLS.has(msg.name || '')) {
+                                let question = '';
+                                let options: Array<{ id: string; label: string }> = [];
+                                let elType: 'ask' | 'confirm' | 'notify' = 'ask';
+                                let selectMode: 'single' | 'multiple' = 'single';
+                                let allowFreeText = true;
+                                try {
+                                    const parsed = JSON.parse(msg.content);
+                                    const args = parsed.args || {};
+                                    if (msg.name === 'interaction_ask_user') {
+                                        question = args.question || '';
+                                        const raw = args.options || '[]';
+                                        options = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                                        selectMode = args.select_mode === 'multiple' ? 'multiple' : 'single';
+                                        allowFreeText = args.allow_free_text !== false;
+                                    } else if (msg.name === 'interaction_confirm') {
+                                        elType = 'confirm';
+                                        question = args.message || '';
+                                        options = [
+                                            { id: 'yes', label: args.confirm_label || 'Yes' },
+                                            { id: 'no', label: args.deny_label || 'No' },
+                                        ];
+                                    } else if (msg.name === 'interaction_notify') {
+                                        elType = 'notify';
+                                        question = args.message || '';
+                                    }
+                                } catch { /* parse error — fall through */ }
+
+                                if (elType === 'notify') {
+                                    return (
+                                        <Box key={i} w="100%" bg="var(--bg-card)" py={compact ? 2 : 3} px={compact ? 3 : 4}>
+                                            <Box maxW={maxW} mx={mx} p={3} borderRadius="md"
+                                                borderLeft="3px solid" borderColor="blue.400"
+                                                bg="var(--bg-elevated)">
+                                                <Text fontSize="sm" color="var(--text-secondary)">{question}</Text>
+                                            </Box>
+                                        </Box>
+                                    );
+                                }
+
+                                const resultMsg = messages.slice(i + 1).find(m =>
+                                    m.role === 'tool_result' && m.name === msg.name
+                                );
+                                const answered = !!resultMsg;
+                                const userAnswer = resultMsg?.content || '';
+
+                                return (
+                                    <Box key={i} w="100%" bg="var(--bg-card)" py={compact ? 2 : 3} px={compact ? 3 : 4}>
+                                        <Box maxW={maxW} mx={mx} p={3} borderRadius="lg"
+                                            border="1px solid" borderColor="var(--border-secondary)"
+                                            bg="var(--bg-elevated)">
+                                            {question && (
+                                                <Text fontSize="sm" fontWeight="medium" mb={2} color="var(--text-primary)">
+                                                    {question}
+                                                </Text>
+                                            )}
+                                            <VStack gap={1} align="stretch">
+                                                {options.map(opt => {
+                                                    const isSelected = answered && userAnswer.includes(opt.label);
+                                                    return (
+                                                        <Box key={opt.id}
+                                                            as="button"
+                                                            textAlign="left"
+                                                            px={3} py={1.5}
+                                                            borderRadius="md"
+                                                            cursor={answered ? 'default' : 'pointer'}
+                                                            color={isSelected ? 'var(--accent)' : 'var(--text-secondary)'}
+                                                            fontWeight={isSelected ? 'semibold' : 'normal'}
+                                                            bg={isSelected ? 'var(--bg-hover)' : 'transparent'}
+                                                            opacity={answered && !isSelected ? 0.5 : 1}
+                                                            _hover={!answered ? { bg: 'var(--bg-hover)', color: 'var(--accent)' } : {}}
+                                                            onClick={() => {
+                                                                if (answered) return;
+                                                                if (isLoading) handleInteractionReply(opt.label);
+                                                                else handleSend(opt.label);
+                                                            }}
+                                                            fontSize="sm">
+                                                            <HStack gap={2}>
+                                                                <Text color="var(--accent)" fontSize="xs">
+                                                                    {answered
+                                                                        ? (isSelected ? (selectMode === 'multiple' ? '☑' : '◉') : (selectMode === 'multiple' ? '☐' : '○'))
+                                                                        : (selectMode === 'multiple' ? '☐' : '○')}
+                                                                </Text>
+                                                                <Text>{opt.label}</Text>
+                                                            </HStack>
+                                                        </Box>
+                                                    );
+                                                })}
+                                                {allowFreeText && (
+                                                    <Box px={3} py={1.5}>
+                                                        <HStack gap={2} align="flex-start">
+                                                            <Text color="var(--accent)" fontSize="xs" mt="6px">
+                                                                {selectMode === 'multiple' ? '☐' : '○'}
+                                                            </Text>
+                                                            {!answered ? (
+                                                                <HStack gap={2} flex={1}>
+                                                                    <Textarea
+                                                                        placeholder="Other..."
+                                                                        size="sm"
+                                                                        rows={1}
+                                                                        flex={1}
+                                                                        borderRadius="md"
+                                                                        bg="var(--bg-page)"
+                                                                        borderColor="var(--border-secondary)"
+                                                                        _focus={{ borderColor: 'var(--accent)' }}
+                                                                        onKeyDown={(e) => {
+                                                                            if (e.key === 'Enter' && !e.shiftKey) {
+                                                                                e.preventDefault();
+                                                                                const val = (e.target as HTMLTextAreaElement).value.trim();
+                                                                                if (!val) return;
+                                                                                if (isLoading) handleInteractionReply(val);
+                                                                                else handleSend(val);
+                                                                            }
+                                                                        }}
+                                                                    />
+                                                                    <IconButton
+                                                                        aria-label="Send"
+                                                                        size="sm"
+                                                                        borderRadius="md"
+                                                                        colorScheme="green"
+                                                                        onClick={(e) => {
+                                                                            const textarea = (e.currentTarget as HTMLElement)
+                                                                                .parentElement?.querySelector('textarea');
+                                                                            const val = textarea?.value.trim();
+                                                                            if (!val) return;
+                                                                            if (isLoading) handleInteractionReply(val);
+                                                                            else handleSend(val);
+                                                                        }}>
+                                                                        <SendIcon size={16} />
+                                                                    </IconButton>
+                                                                </HStack>
+                                                            ) : (
+                                                                !options.some(o => userAnswer.includes(o.label)) && (
+                                                                    <Text fontSize="sm" color="var(--accent)" fontWeight="semibold">
+                                                                        {userAnswer}
+                                                                    </Text>
+                                                                )
+                                                            )}
+                                                        </HStack>
+                                                    </Box>
+                                                )}
+                                            </VStack>
                                         </Box>
                                     </Box>
                                 );
@@ -1338,7 +1536,7 @@ const ChatPanel = ({
                                 </Box>
                             );
                         })}
-                        {isLoading && !messages.some(m => m.isStreaming) && (
+                        {isLoading && !isWaitingForInput && !messages.some(m => m.isStreaming) && (
                             <Box w="100%" bg="var(--bg-card)" py={compact ? 3 : 6} px={compact ? 3 : 4}>
                                 <HStack maxW={maxW} mx={mx} align="flex-start" gap={compact ? 2 : 4}>
                                     <AssistantIcon />
