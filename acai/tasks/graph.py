@@ -919,6 +919,123 @@ class TaskGraph:
         })
 
     # ------------------------------------------------------------------
+    # Checkpoint resume
+    # ------------------------------------------------------------------
+
+    def _has_checkpoint(self) -> bool:
+        """Return True if a pending checkpoint exists for this conversation."""
+        if not self.conversation or not self.chat:
+            return False
+        return self.chat.load_checkpoint(self.conversation) is not None
+
+    async def _resume_from_checkpoint(self) -> AsyncIterator[dict]:
+        """Resume the tool loop from a checkpoint, handling pending interactions.
+
+        Yields SSE events.  After iteration, ``self._last_acc`` is set.
+        If there's a pending_interaction, re-emits the widget, waits for
+        the user's answer, appends the tool_result, then continues the loop.
+        """
+        if not self.conversation or not self.chat:
+            return
+        cp = self.chat.load_checkpoint(self.conversation)
+        if not cp or not isinstance(cp, dict) or "payload" not in cp:
+            return
+
+        log.info(
+            "Resuming tool loop from checkpoint (round %d) for %s",
+            cp.get("tool_round", 0), self.conversation,
+        )
+
+        payload = cp["payload"]
+        pending = cp.get("pending_interaction")
+
+        if pending and self.input_queue:
+            tool_name = pending["tool_name"]
+            tool_args = pending["tool_args"]
+            call_id = pending.get("call_id", "")
+
+            # Reconstruct the UI element from saved tool_args (no need to re-call the tool)
+            try:
+                options_raw = tool_args.get("options", "[]")
+                parsed_options = json.loads(options_raw) if isinstance(options_raw, str) else options_raw
+            except (json.JSONDecodeError, TypeError):
+                parsed_options = []
+
+            ui_element = {
+                "type": "ask",
+                "question": tool_args.get("question", ""),
+                "options": parsed_options,
+                "allow_free_text": tool_args.get("allow_free_text", True),
+                "select_mode": tool_args.get("select_mode", "single"),
+                "context": tool_args.get("context", ""),
+            }
+            if tool_args.get("question_id"):
+                ui_element["id"] = tool_args["question_id"]
+
+            # Re-emit the widget so the frontend shows the question
+            interaction_ev = {
+                "event_type": "interaction",
+                "data": {"ui_element": ui_element},
+            }
+            if self.tracker and self.stream_id:
+                self.tracker.push(self.stream_id, interaction_ev)
+            yield interaction_ev
+
+            wait_ev = {
+                "event_type": "waiting_for_input",
+                "data": {"conversation": self.conversation},
+            }
+            if self.tracker and self.stream_id:
+                self.tracker.push(self.stream_id, wait_ev)
+            yield wait_ev
+
+            # Block until user answers
+            from acai.orchestrator.input_queue import InputRequest
+            request = InputRequest(
+                conversation_id=self.conversation,
+                request_id=ui_element.get("id", tool_name),
+                question=ui_element.get("question", ""),
+                options=ui_element.get("options", []),
+            )
+            try:
+                response = await self.input_queue.wait_for_input(
+                    self.conversation, request,
+                )
+                result_text = response.get("text", "")
+            except TimeoutError:
+                result_text = "[No response — timed out]"
+
+            # Persist the tool_result now that we have the answer
+            self.chat.append(self.conversation, {
+                "role": "tool_result",
+                "content": result_text,
+                "name": tool_name,
+            })
+
+            # Append to payload messages so the LLM sees the complete round
+            payload["messages"].append({
+                "role": "tool",
+                "tool_call_id": call_id,
+                "content": result_text,
+            })
+
+            end_ev = {
+                "event_type": "tool_end",
+                "data": {
+                    "conversation": self.conversation,
+                    "tool_name": tool_name,
+                    "result_preview": result_text[:2000],
+                },
+            }
+            if self.tracker and self.stream_id:
+                self.tracker.push(self.stream_id, end_ev)
+            yield end_ev
+
+        # Continue the tool loop with the (now-complete) payload
+        async for event in self._run_with_tools(payload):
+            yield event
+
+    # ------------------------------------------------------------------
     # Interaction tool handling (UI element collection)
     # ------------------------------------------------------------------
 
@@ -1228,6 +1345,14 @@ class TaskGraph:
                     "content": acc.text,
                 })
 
+            # Save checkpoint at start of tool round (before executing tools)
+            # so we can resume even if a tool crashes in round 0.
+            if self.conversation and self.chat:
+                self.chat.save_checkpoint(self.conversation, {
+                    "tool_round": _tool_round,
+                    "payload": {**payload, "messages": followup},
+                })
+
             for call in acc.tool_calls:
                 fn = call.get("function", {})
                 tool_name = fn.get("name", "")
@@ -1296,6 +1421,27 @@ class TaskGraph:
                         pass
 
                     if ui_element:
+                        # Persist tool_call NOW (before blocking) so refresh shows the question
+                        self.chat.append(self.conversation, {
+                            "role": "tool_call",
+                            "content": json.dumps(
+                                {"tool": tool_name, "args": tool_args},
+                                ensure_ascii=False,
+                            ),
+                            "name": tool_name,
+                        })
+
+                        # Save checkpoint before blocking so a crash can resume
+                        self.chat.save_checkpoint(self.conversation, {
+                            "tool_round": _tool_round,
+                            "payload": {**payload, "messages": followup},
+                            "pending_interaction": {
+                                "tool_name": tool_name,
+                                "tool_args": tool_args,
+                                "call_id": call.get("id", ""),
+                            },
+                        })
+
                         # Emit SSE so the frontend renders the widget
                         interaction_ev = {
                             "event_type": "interaction",
@@ -1329,6 +1475,32 @@ class TaskGraph:
                             result_text = response.get("text", "")
                         except TimeoutError:
                             result_text = "[No response — timed out]"
+
+                        # Now persist the tool_result with the user's answer
+                        self.chat.append(self.conversation, {
+                            "role": "tool_result",
+                            "content": result_text,
+                            "name": tool_name,
+                        })
+
+                        followup.append({
+                            "role": "tool",
+                            "tool_call_id": call.get("id", ""),
+                            "content": result_text,
+                        })
+
+                        end_ev = {
+                            "event_type": "tool_end",
+                            "data": {
+                                "conversation": self.conversation,
+                                "tool_name": tool_name,
+                                "result_preview": result_text[:2000],
+                            },
+                        }
+                        if self.tracker and self.stream_id:
+                            self.tracker.push(self.stream_id, end_ev)
+                        yield end_ev
+                        continue
 
                 followup.append({
                     "role": "tool",
@@ -1404,13 +1576,25 @@ class TaskGraph:
             payload = followup_payload
             _tool_round += 1
 
+            # Checkpoint: save state so the loop can resume after a crash
+            if self.conversation and self.chat:
+                self.chat.save_checkpoint(self.conversation, {
+                    "tool_round": _tool_round,
+                    "payload": followup_payload,
+                })
+
             acc = Acc(self.dispatch(followup_payload))
             async for event in acc:
                 yield event
                 if event.get("event_type") == "error":
                     self._last_acc = acc
+                    if self.conversation and self.chat:
+                        self.chat.clear_checkpoint(self.conversation)
                     return
 
+        # Tool loop finished normally — clear checkpoint
+        if self.conversation and self.chat:
+            self.chat.clear_checkpoint(self.conversation)
         self._last_acc = acc
 
     # ------------------------------------------------------------------

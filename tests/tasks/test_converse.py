@@ -290,10 +290,11 @@ class TestToolStreamHandling:
 
         assert roles.count("tool_call") == 1
         assert roles.count("tool_result") == 1
-        assert roles.count("assistant") == 1
+        assert roles.count("assistant") == 2  # intermediate text + follow-up
 
-        assistant = next(m for m in messages if m["role"] == "assistant")
-        assert "word0" in assistant["content"], "follow-up tokens should be in assistant content"
+        assistants = [m for m in messages if m["role"] == "assistant"]
+        final = assistants[-1]
+        assert "word0" in final["content"], "follow-up tokens should be in assistant content"
 
     async def test_tracker_sees_full_tool_sequence(
         self, load_balancer, chat_store, graph_deps, stream_tracker,

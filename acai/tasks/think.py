@@ -34,6 +34,17 @@ class ThinkGraph(TaskGraph):
         return super().from_work(worker, work, **kwargs)
 
     async def run(self, work: dict) -> AsyncIterator[dict]:
+        # Resume from checkpoint if the tool loop was interrupted
+        if self._has_checkpoint():
+            async for event in self._resume_from_checkpoint():
+                yield event
+                if event.get("event_type") == "error":
+                    return
+            self._save_response(self._last_acc)
+            git = await self._finalize_git(work)
+            yield self._done_event(git)
+            return
+
         # Proactively compress the conversation if approaching context limit
         compress_ev = await self._try_compress_conversation(work)
         if compress_ev:

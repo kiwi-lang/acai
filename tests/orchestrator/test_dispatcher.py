@@ -77,12 +77,14 @@ async def tool_call(request: Request):
 # Fixture: start the server once per test session
 # ======================================================================
 
-_PORT = 18933
-
-
 @pytest.fixture(scope="session")
 def worker_server():
-    cfg = uvicorn.Config(_app, host="127.0.0.1", port=_PORT, log_level="error")
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    cfg = uvicorn.Config(_app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(cfg)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -95,7 +97,7 @@ def worker_server():
     else:
         raise RuntimeError("Worker test server failed to start")
 
-    yield f"http://127.0.0.1:{_PORT}/worker"
+    yield f"http://127.0.0.1:{port}/worker"
     server.should_exit = True
     thread.join(timeout=3)
 

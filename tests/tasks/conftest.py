@@ -122,13 +122,16 @@ async def tool_call(request: Request):
 # Fixtures
 # ======================================================================
 
-_PORT = 18977
-
-
 @pytest.fixture(scope="session")
 def worker_base_url():
-    """Start the mock worker server and yield its base URL."""
-    cfg = uvicorn.Config(_worker_app, host="127.0.0.1", port=_PORT, log_level="error")
+    """Start the mock worker server on a free port and yield its base URL."""
+    import socket
+    # Let the OS pick a free port to avoid conflicts with parallel workers
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    cfg = uvicorn.Config(_worker_app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(cfg)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -141,7 +144,7 @@ def worker_base_url():
     else:
         raise RuntimeError("Mock worker server failed to start")
 
-    yield f"http://127.0.0.1:{_PORT}"
+    yield f"http://127.0.0.1:{port}"
     server.should_exit = True
     thread.join(timeout=3)
 

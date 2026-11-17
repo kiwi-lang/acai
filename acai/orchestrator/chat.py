@@ -381,6 +381,39 @@ class ChatStore:
                 os.remove(path)
 
     # ------------------------------------------------------------------
+    # Checkpoints (tool-loop resume)
+    # ------------------------------------------------------------------
+
+    def _checkpoint_path(self, conv_id: str) -> str:
+        return os.path.join(self._dir(conv_id), "checkpoint.json")
+
+    def save_checkpoint(self, conv_id: str, data: dict) -> None:
+        """Persist a tool-loop checkpoint so the loop can resume on restart."""
+        path = self._checkpoint_path(conv_id)
+        with self._lock:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            self._write_json(path, data)
+
+    def load_checkpoint(self, conv_id: str) -> dict | None:
+        """Load a pending checkpoint, or None if none exists."""
+        path = self._checkpoint_path(conv_id)
+        if not os.path.isfile(path):
+            return None
+        with self._lock:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, ValueError, OSError):
+                return None
+
+    def clear_checkpoint(self, conv_id: str) -> None:
+        """Delete the checkpoint file (loop completed or stale)."""
+        path = self._checkpoint_path(conv_id)
+        with self._lock:
+            if os.path.isfile(path):
+                os.remove(path)
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 

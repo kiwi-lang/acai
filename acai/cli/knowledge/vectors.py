@@ -154,5 +154,9 @@ class Vectors(ParentCommand):
         import acai.cli.knowledge.vectors
         return acai.cli.knowledge.vectors
 
+    @classmethod
+    def fetch_commands(cls):
+        return [Sync, VectorSearch, Stats]
+
 
 COMMANDS = Vectors

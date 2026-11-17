@@ -91,12 +91,14 @@ async def sse_with_id(request: Request):
 # Fixture: start the server once per test session
 # ======================================================================
 
-_PORT = 18932
-
-
 @pytest.fixture(scope="session")
 def sse_server():
-    cfg = uvicorn.Config(_app, host="127.0.0.1", port=_PORT, log_level="error")
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+
+    cfg = uvicorn.Config(_app, host="127.0.0.1", port=port, log_level="error")
     server = uvicorn.Server(cfg)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -109,7 +111,7 @@ def sse_server():
     else:
         raise RuntimeError("SSE test server failed to start")
 
-    yield f"http://127.0.0.1:{_PORT}"
+    yield f"http://127.0.0.1:{port}"
     server.should_exit = True
     thread.join(timeout=3)
 

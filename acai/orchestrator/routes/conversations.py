@@ -185,7 +185,32 @@ def create_conversations_router(
             )
             conversation = meta.id
 
-        chat.append(conversation, {"role": "user", "content": message})
+        # Check if there's a pending interaction checkpoint.
+        # If so, the user's message is the answer to the pending question —
+        # feed it into the checkpoint so the graph resumes correctly.
+        _resolved_interaction = None
+        _cp = chat.load_checkpoint(conversation)
+        if isinstance(_cp, dict) and _cp.get("pending_interaction"):
+            _pending = _cp["pending_interaction"]
+            # Append tool result to the checkpoint payload
+            _cp["payload"]["messages"].append({
+                "role": "tool",
+                "tool_call_id": _pending.get("call_id", ""),
+                "content": message,
+            })
+            del _cp["pending_interaction"]
+            chat.save_checkpoint(conversation, _cp)
+            # Persist the tool_result to conversation history
+            chat.append(conversation, {
+                "role": "tool_result",
+                "content": message,
+                "name": _pending.get("tool_name", ""),
+            })
+            _resolved_interaction = _pending.get("tool_name", "")
+        else:
+            # No pending interaction — clear any stale checkpoint and start fresh.
+            chat.clear_checkpoint(conversation)
+            chat.append(conversation, {"role": "user", "content": message})
 
         model_slug = data.get("model", "")
 
@@ -252,6 +277,14 @@ def create_conversations_router(
 
         async def generate():
             yield _sse("meta", {"conversation": conversation})
+            # If we just resolved a pending interaction, tell the frontend
+            # so it can mark the question widget as answered.
+            if _resolved_interaction:
+                yield _sse("tool_end", {
+                    "conversation": conversation,
+                    "tool_name": _resolved_interaction,
+                    "result_preview": message[:2000],
+                })
             try:
                 async with lb.acquire() as worker:
                     audit.record("worker.acquired", phase="server", worker=worker.url)
